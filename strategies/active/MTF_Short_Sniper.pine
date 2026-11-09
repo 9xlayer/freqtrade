@@ -72,32 +72,46 @@ show_labels           = input.bool(true, "Hiện thẻ nhãn Entry & Exit trên 
 // ============================================================================
 // --- Khung 1D (Vĩ mô Ngày - Lớp 1 Phòng thủ Chủ động) ---
 f_calc_1d() =>
+    e21       = ta.ema(close, 21)
     e50       = ta.ema(close, 50)
+    e100      = ta.ema(close, 100)
     e200      = ta.ema(close, 200)
     rsi14     = ta.rsi(close, 14)
     [m, s, h] = ta.macd(close, 12, 26, 9)
     low_20d   = ta.lowest(low, 20)
-    [close, e50, e200, rsi14, h, h[1], low_20d]
+    [bb_m, bb_u, bb_l] = ta.bb(close, 20, 2.0)
+    bb_w_1d   = (bb_u - bb_l) / bb_m
+    [diplus, diminus, adx_val] = ta.dmi(14, 14)
+    [close, e21, e50, e100, e200, rsi14, h, h[1], low_20d, bb_w_1d, diplus, diminus, adx_val]
 
-[c_1d, ema50_1d, ema200_1d, rsi_1d, hist_1d, hist_1d_prev, low_20d_1d] = request.security(
+[c_1d, ema21_1d, ema50_1d, ema100_1d, ema200_1d, rsi_1d, hist_1d, hist_1d_prev, low_20d_1d, bb_width_1d, diplus_1d, diminus_1d, adx_1d] = request.security(
      syminfo.tickerid, "D", f_calc_1d(), 
      barmerge.gaps_off, barmerge.lookahead_off
  )
 // 1. Nhận diện Sóng Hồi Bò bùng nổ khung Ngày (1D): MACD 1D đang nở xanh dốc lên
 bool is_1d_bull_wave = (hist_1d > 0) and (hist_1d > hist_1d_prev)
 
-// 2. Nhận diện Siêu Chu kỳ Bull Run Vĩ mô: Giá > EMA 50 VÀ EMA 50 > EMA 200 Ngày (Golden Cross) VÀ RSI 1D > 60
-bool is_macro_bull_run = (c_1d > ema50_1d) and (ema50_1d > ema200_1d) and (rsi_1d > 60)
+// 2. Nhận diện Siêu Chu kỳ Bull Run Vĩ mô:
+// Nhánh a: Golden Cross Bull Run: Giá > EMA 50 & EMA 50 > EMA 200 & RSI 1D > 60
+// Nhánh b: Xếp chồng Bull Stack hoàn hảo (Close > EMA 21 > 50 > 100 > 200) kèm xu hướng xác nhận (ADX 1D > 20)
+// Nhánh c: Siêu sóng bơm Parabolic vĩ mô cản tàu (ADX 1D > 50 & +DI 1D > -DI 1D & Close > EMA 200)
+bool is_golden_bull_1d     = (c_1d > ema50_1d) and (ema50_1d > ema200_1d) and (rsi_1d > 60)
+bool is_bull_stack_1d      = (c_1d > ema21_1d) and (ema21_1d > ema50_1d) and (ema50_1d > ema100_1d) and (ema100_1d > ema200_1d) and (adx_1d > 20.0)
+bool is_parabolic_surge_1d = (adx_1d > 50.0) and (diplus_1d > diminus_1d) and (c_1d > ema200_1d)
+bool is_macro_bull_run     = is_golden_bull_1d or is_bull_stack_1d or is_parabolic_surge_1d
 
 // 3. Nhận diện Vùng Đáy Kiệt sức Chu kỳ (Deep Capitulation Floor): Giá quá cách xa EMA 200 Ngày (< -28%)
 bool is_deep_capitulation = ((c_1d - ema200_1d) / ema200_1d) < -0.28
 
-// --- Khung 4H (Bắt sóng Hồi Long để chặn bẫy) ---
+// --- Khung 4H (Bắt sóng Hồi Long để chặn bẫy & Lọc Sideway Squeeze) ---
 f_calc_4h() =>
     [m, s, h] = ta.macd(close, 12, 26, 9)
-    [h, h[1]]
+    [bb_m, bb_u, bb_l] = ta.bb(close, 20, 2.0)
+    bb_w_4h   = (bb_u - bb_l) / bb_m
+    [diplus, diminus, adx_val] = ta.dmi(14, 14)
+    [h, h[1], bb_w_4h, adx_val]
 
-[hist_4h, hist_4h_prev] = request.security(
+[hist_4h, hist_4h_prev, bb_width_4h, adx_4h] = request.security(
      syminfo.tickerid, "240", f_calc_4h(), 
      barmerge.gaps_off, barmerge.lookahead_off
  )
@@ -138,6 +152,9 @@ ema_200 = ta.ema(close, 200)
 atr_val = ta.atr(14)
 rsi_15m = ta.rsi(close, 14)
 
+// Biên độ dao động High - Low trong 24 giờ gần nhất (96 nến 15M) phục vụ lọc Sideway nén
+range_24h_15m = (ta.highest(high, 96) - ta.lowest(low, 96)) / close
+
 candle_total = math.max(0.00001, high - low)
 candle_body  = math.abs(close - open)
 is_red       = close < open
@@ -168,10 +185,18 @@ bool cond_floor_safe    = ((close - low_20d_1d) / low_20d_1d) >= 0.035
 // [ENTRY 4d] Chống Short đè sàn Vùng Đáy Kiệt sức Chu kỳ (Deep Capitulation Protection): Cấm Short khi giá cách EMA 200 Ngày < -28%
 bool cond_capitulation_safe = not is_deep_capitulation
 
+// [ENTRY 4e] Chống Short bẫy Sideway / Nén cạn kiệt thanh khoản (Chop Squeeze Defense)
+// Cấm Short khi:
+// - BB Width 4H < 2.0% (biên độ nén nghẹt thở trên 4H)
+// - ADX 4H < 15 (thị trường 4H hoàn toàn mất xu hướng, sideway giằng co)
+// - BB Width 1D < 10.0% kèm biên độ 24H (15M) < 2.2% (sideway cạn kiệt thanh khoản khung ngày)
+bool is_chop_squeeze = (bb_width_4h < 0.02) or (adx_4h < 15.0) or ((bb_width_1d < 0.10) and (range_24h_15m < 0.022))
+bool cond_sideway_safe = not is_chop_squeeze
+
 // [ENTRY 5] Chống Short đuổi đáy: Giá không được rơi quá xa EMA 21 và RSI không được rơi vào vùng vét đáy
 bool cond_not_chasing   = ((ema_21 - close) / close <= (max_dist_ema21 / 100.0)) and (rsi_15m >= min_rsi_entry)
 
-bool raw_entry = is_decisive_red and is_breakdown_major and is_below_emas and cond_1h_pos and cond_1h_macd and cond_1h_exhaustion and cond_4h_aligned and cond_1d_aligned and cond_macro_safe and cond_floor_safe and cond_capitulation_safe and cond_not_chasing
+bool raw_entry = is_decisive_red and is_breakdown_major and is_below_emas and cond_1h_pos and cond_1h_macd and cond_1h_exhaustion and cond_4h_aligned and cond_1d_aligned and cond_macro_safe and cond_floor_safe and cond_capitulation_safe and cond_sideway_safe and cond_not_chasing
 
 // Cooldown 24H
 current_tf_minutes = timeframe.isminutes ? timeframe.multiplier : 15
@@ -379,8 +404,8 @@ if is_exit_now and show_labels
 // 5. Đường bám đuôi Stop Loss / Trailing Stop linh hoạt
 plot(is_in_short ? active_sl_price : na, "Dynamic Stop Loss / Trailing", color=color.new(color.orange, 20), style=plot.style_circles, linewidth=1)
 
-// 6. Bảng hiển thị trạng thái Bộ lọc Vĩ mô 1D (Corner Dashboard)
-var table status_tbl = table.new(position.top_right, 2, 6, bgcolor=color.new(#1E222D, 15), border_color=color.gray, border_width=1)
+// 6. Bảng hiển thị trạng thái Bộ lọc Vĩ mô 1D & Sideway Chop (Corner Dashboard)
+var table status_tbl = table.new(position.top_right, 2, 7, bgcolor=color.new(#1E222D, 15), border_color=color.gray, border_width=1)
 if barstate.islast
     table.cell(status_tbl, 0, 0, "HỆ THỐNG MTF SNIPER", bgcolor=color.new(#26A69A, 20), text_color=color.white, text_size=size.small)
     table.cell(status_tbl, 1, 0, "TRẠNG THÁI HIỆN TẠI", bgcolor=color.new(#26A69A, 20), text_color=color.white, text_size=size.small)
@@ -410,10 +435,16 @@ if barstate.islast
     color bg_floor   = cond_floor_safe ? color.new(color.green, 40) : color.new(color.red, 30)
     table.cell(status_tbl, 0, 4, "Sàn Hỗ trợ 20D", text_color=color.white, text_size=size.small)
     table.cell(status_tbl, 1, 4, txt_floor, bgcolor=bg_floor, text_color=color.white, text_size=size.small)
+
+    // Bộ lọc Bẫy Sideway Chop Squeeze (4H BBW, 4H ADX, 1D BBW + 24H Range)
+    string txt_chop = is_chop_squeeze ? "⛔ Sideway Squeeze (CẤM SHORT)" : "✅ Biên độ tốt (CHO PHÉP SHORT)"
+    color bg_chop   = is_chop_squeeze ? color.new(color.red, 20) : color.new(color.green, 40)
+    table.cell(status_tbl, 0, 5, "Bẫy Sideway Chop", text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 1, 5, txt_chop, bgcolor=bg_chop, text_color=color.white, text_size=size.small)
     
     // Chế độ Vị thế
-    table.cell(status_tbl, 0, 5, "Chế độ Chốt lời", text_color=color.white, text_size=size.small)
-    table.cell(status_tbl, 1, 5, exit_mode, bgcolor=color.new(color.blue, 40), text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 0, 6, "Chế độ Chốt lời", text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 1, 6, exit_mode, bgcolor=color.new(color.blue, 40), text_color=color.white, text_size=size.small)
 
 // ============================================================================
 // 8. CẢNH BÁO TỰ ĐỘNG (TRADINGVIEW ALERTS)
