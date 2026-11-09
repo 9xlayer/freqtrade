@@ -1,0 +1,210 @@
+//@version=6
+indicator("MTF Macro Structural Short [Ultra Clean & Low-Noise]", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// 1. CẤU HÌNH HỆ THỐNG VĨ MÔ (HƯỚNG 1: PURE STRUCTURE & LOW-NOISE)
+// ============================================================================
+grp_config = "1. CẤU HÌNH VĨ MÔ & BỘ LỌC CHỌN LỌC"
+strategy_preset       = input.string("Tiêu chuẩn (Balanced ~50-60 lệnh/năm)", "Chế độ chọn lọc tín hiệu", 
+                        options=["Tiêu chuẩn (Balanced ~50-60 lệnh/năm)", "Siêu chọn lọc (Ultra-Selective ~20-30 lệnh/năm)"], 
+                        tooltip="Chọn mức độ khắt khe của bộ lọc cấu trúc. Chế độ Siêu chọn lọc chỉ bắt các cú sập cực đại.", group=grp_config)
+
+cooldown_hours        = input.int(24, "Thời gian giãn cách tối thiểu giữa 2 lệnh (Giờ / Hours)", minval=12, maxval=72, 
+                        tooltip="Ngăn chặn tuyệt đối việc bắn nhiều lệnh dính chùm trong cùng 1 đợt xả", group=grp_config)
+
+enable_bos            = input.bool(true, "Kích hoạt: Gãy Vùng Hỗ Trợ Đa Phiên (Major Support BOS)", 
+                        tooltip="Bắt trọn các con sóng sập lớn khi giá đâm thủng nền tích lũy nhiều ngày", group=grp_config)
+enable_divergence     = input.bool(true, "Kích hoạt: Bắt Đỉnh Phân Kỳ Vĩ Mô 4H (4H Macro Divergence)", 
+                        tooltip="Bắt đỉnh phân phối khi khung 4H tạo phân kỳ âm RSI tại vùng đỉnh", group=grp_config)
+
+// Tự động điều chỉnh độ sâu lookback theo preset
+int lookback_support = (strategy_preset == "Siêu chọn lọc (Ultra-Selective ~20-30 lệnh/năm)") ? 45 : 30
+
+// ============================================================================
+// 2. CẤU HÌNH HIỂN THỊ TRÊN BIỂU ĐỒ (TUYỆT ĐỐI KHÔNG VẼ EMA LÊN CHART)
+// ============================================================================
+grp_display = "2. CẤU HÌNH HIỂN THỊ"
+display_mode          = input.string("Cả hai (Both)", "Chế độ hiển thị", 
+                        options=["Đường kẻ dọc (Vertical Line)", "Mũi tên trên đầu nến (Arrow Down)", "Cả hai (Both)"], group=grp_display)
+v_line_width          = input.int(1, "Độ dày đường kẻ dọc (Width)", minval=1, maxval=4, group=grp_display)
+show_sl_level         = input.bool(true, "Vẽ mốc Cắt lỗ (Entry & Stop Loss)", group=grp_display)
+level_duration_bars   = input.int(16, "Độ dài đường mốc giá (Số nến)", minval=5, maxval=48, group=grp_display)
+sl_lookback_bars      = input.int(12, "Số nến quét đỉnh đặt SL (Lookback Bars)", minval=5, maxval=30, group=grp_display)
+
+// ============================================================================
+// 3. TÍNH TOÁN DỮ LIỆU ĐA KHUNG VĨ MÔ 4H (HTF SECURITY)
+// ============================================================================
+f_calc_4h() =>
+    r4  = ta.rsi(close, 14)
+    e10 = ta.ema(close, 10)
+    e21 = ta.ema(close, 21)
+    e50 = ta.ema(close, 50)
+    [m, s, h] = ta.macd(close, 12, 26, 9)
+    ph = ta.pivothigh(high, 4, 2)
+    [open, high, low, close, r4, e10, e21, e50, m, s, h, ph]
+
+[o4, h4, l4, c4, rsi_4h, ema10_4h, ema21_4h, ema50_4h, macd_4h, sig_4h, hist_4h, ph_4h] = request.security(syminfo.tickerid, "240", f_calc_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// 1. Nhận diện Phân kỳ đỉnh trên khung 4H (Macro Bearish Divergence):
+var float last_ph_price = na
+var float last_ph_rsi   = na
+var int   last_ph_bar   = na
+var bool  div_active_4h = false
+
+// Cập nhật đỉnh Pivot 4H
+if not na(ph_4h)
+    float prev_p = last_ph_price
+    float prev_r = last_ph_rsi
+    
+    last_ph_price := ph_4h
+    last_ph_rsi   := rsi_4h[2]
+    
+    // Nếu đỉnh sau cao hơn đỉnh trước nhưng RSI đỉnh sau thấp hơn đỉnh trước (Phân kỳ âm)
+    if not na(prev_p) and (ph_4h > prev_p) and (rsi_4h[2] < prev_r) and (prev_r >= 60.0)
+        div_active_4h := true
+        last_ph_bar   := bar_index
+
+// Hết hiệu lực phân kỳ sau 36 nến 1H (1.5 ngày)
+if not na(last_ph_bar) and (bar_index - last_ph_bar > 36)
+    div_active_4h := false
+
+// 2. Bộ lọc Xu Hướng Vĩ Mô 4H (CẤM SHORT khi 4H đang bùng nổ Tăng):
+bool is_4h_raging_bull = (c4 > ema21_4h) and (ema10_4h > ema21_4h) and (ema21_4h > ema50_4h) and (hist_4h > 0)
+bool cond_4h_macro_bear = (c4 < ema50_4h) and (hist_4h < 0)
+
+// ============================================================================
+// 4. TÍNH TOÁN CẤU TRÚC GIÁ TRÊN KHUNG HIỆN TẠI (1H/15M)
+// ============================================================================
+ema_10  = ta.ema(close, 10)
+ema_21  = ta.ema(close, 21)
+ema_50  = ta.ema(close, 50)
+vol_ma  = ta.sma(volume, 20)
+atr_val = ta.atr(14)
+
+candle_total = math.max(0.00001, high - low)
+candle_body  = math.abs(close - open)
+is_bearish   = close < open
+
+// Gãy Vùng Hỗ Trợ Đa Phiên (Major Support BOS):
+float swing_low_major = ta.lowest(low, lookback_support)[1]
+bool is_breakdown_major = (close < swing_low_major) and (close[1] >= swing_low_major)
+bool is_volume_surge = (volume >= vol_ma * 1.25) or ((candle_body / candle_total >= 0.65) and is_bearish)
+bool is_below_all_emas = (close < ema_10) and (close < ema_21) and (close < ema_50)
+
+// KỊCH BẢN 1: GÃY CẤU TRÚC ĐA PHIÊN (MAJOR BOS)
+// Bắt buộc: Gãy đáy đa phiên + Volume xả lớn + Đóng dưới cả 3 EMA + Khung 4H nằm dưới EMA50 và MACD âm
+bool setup_bos_triggered = enable_bos and is_breakdown_major and is_volume_surge and is_below_all_emas and cond_4h_macro_bear and (not is_4h_raging_bull)
+
+// KỊCH BẢN 2: BẮN TỈA ĐỈNH PHÂN KỲ VĨ MÔ 4H (4H DIVERGENCE SNIPER)
+// Bắt buộc: 4H có phân kỳ đỉnh + Giá quét đỉnh gần nhất rồi xả đỏ gãy EMA10 + EMA10 < EMA21
+float swing_high_major = ta.highest(high, lookback_support)[1]
+bool tested_swing_high = ta.highest(high, 4) >= swing_high_major
+bool setup_div_triggered = enable_divergence and div_active_4h and tested_swing_high and is_bearish and (close < ema_10) and (ema_10 < ema_21) and (not is_4h_raging_bull)
+
+// ============================================================================
+// 5. TỔNG HỢP TÍN HIỆU & BỘ QUẢN LÝ COOLDOWN CHỐNG NHIỄU
+// ============================================================================
+bool raw_signal = setup_bos_triggered or setup_div_triggered
+
+current_tf_minutes = timeframe.isminutes ? timeframe.multiplier : (timeframe.isdaily ? 1440 : 60)
+int cooldown_bars  = math.max(1, math.round((cooldown_hours * 60) / current_tf_minutes))
+
+var int last_signal_bar = -9999
+bool is_cooldown_passed = (bar_index - last_signal_bar) >= cooldown_bars
+
+bool entry_signal = false
+var string signal_type = ""
+
+if raw_signal and is_cooldown_passed
+    entry_signal := true
+    signal_type := setup_div_triggered ? "ĐỈNH PHÂN KỲ 4H" : "GÃY CẤU TRÚC ĐA PHIÊN (BOS)"
+    last_signal_bar := bar_index
+
+// ============================================================================
+// 6. HIỂN THỊ BIỂU ĐỒ (SẠCH SẼ, RÕ RÀNG, KHÔNG VẼ EMA)
+// ============================================================================
+plot(close, "Price Anchor", color=color.new(color.white, 100), display=display.none)
+
+color signal_color = setup_div_triggered ? color.new(#FF0055, 0) : color.new(#FF1744, 0)
+
+// 1. Đường kẻ dọc mờ khi có tín hiệu
+if entry_signal and (display_mode == "Đường kẻ dọc (Vertical Line)" or display_mode == "Cả hai (Both)")
+    line.new(
+         x1=bar_index, y1=low, 
+         x2=bar_index, y2=high, 
+         extend=extend.both, 
+         color=color.new(signal_color, 25), 
+         width=v_line_width, 
+         style=line.style_dashed
+     )
+
+// 2. Mũi tên chỉ điểm Short
+show_shape = entry_signal and (display_mode == "Mũi tên trên đầu nến (Arrow Down)" or display_mode == "Cả hai (Both)")
+plotshape(
+     show_shape, 
+     title="Short Arrow", 
+     style=shape.triangledown, 
+     location=location.abovebar, 
+     color=signal_color, 
+     size=size.small
+ )
+
+// 3. Mốc Cắt lỗ (Stop Loss) và Điểm vào (Entry)
+if entry_signal and show_sl_level
+    float entry_p    = close
+    float swing_high = math.max(high, ta.highest(high, sl_lookback_bars))
+    float sl_p       = swing_high + atr_val * 0.3
+    int end_bar      = bar_index + level_duration_bars
+    
+    // Đường SL (Đỏ) và Entry (Vàng)
+    line.new(bar_index, sl_p, end_bar, sl_p, color=color.red, style=line.style_solid, width=2)
+    line.new(bar_index, entry_p, end_bar, entry_p, color=color.yellow, style=line.style_dashed, width=1)
+    
+    float sl_pct = ((sl_p - entry_p) / entry_p) * 100.0
+    float tp_p   = entry_p - ((sl_p - entry_p) * 1.5)
+    float tp_pct = sl_pct * 1.5
+    
+    string card_txt = "🎯 SHORT [" + signal_type + "]\n" + 
+                      "Entry: " + str.tostring(entry_p, "#.##") + "\n" + 
+                      "SL: " + str.tostring(sl_p, "#.##") + " (+" + str.tostring(sl_pct, "#.#") + "%)\n" + 
+                      "TP (1:1.5): " + str.tostring(tp_p, "#.##") + " (-" + str.tostring(tp_pct, "#.#") + "%)"
+    label.new(bar_index, sl_p, text=card_txt, color=color.new(color.maroon, 15), textcolor=color.white, 
+              style=label.style_label_lower_left, size=size.small)
+
+// ============================================================================
+// 7. BẢNG HUD THEO DÕI VĨ MÔ REALTIME (TOP RIGHT HUD)
+// ============================================================================
+var table hud = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(hud, 0, 0, "HỆ THỐNG SHORT VĨ MÔ", bgcolor=color.maroon, text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 0, "TRẠNG THÁI REALTIME", bgcolor=color.maroon, text_color=color.white, text_size=size.small)
+    
+    // 1. Trạng thái 4H
+    string txt_4h = is_4h_raging_bull ? "CẤM: 4H BÙNG NỔ TĂNG" : (cond_4h_macro_bear ? "ĐỒNG PHA GIẢM (DƯỚI EMA50)" : "TRUNG LẬP")
+    color col_4h = is_4h_raging_bull ? color.red : (cond_4h_macro_bear ? color.green : color.gray)
+    table.cell(hud, 0, 1, "Vĩ mô 4H (Macro Regime)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, txt_4h, bgcolor=col_4h, text_color=color.white, text_size=size.small)
+    
+    // 2. Phân kỳ 4H
+    string txt_div = div_active_4h ? "PHÁT HIỆN PHÂN KỲ ĐỈNH 4H!" : "CHƯA CÓ PHÂN KỲ"
+    color col_div = div_active_4h ? color.orange : color.gray
+    table.cell(hud, 0, 2, "Phân kỳ đỉnh 4H", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, txt_div, bgcolor=col_div, text_color=color.white, text_size=size.small)
+
+    // 3. Cấu trúc nền giá
+    string txt_bos = is_below_all_emas ? "GIÁ DƯỚI CỤM EMA (CHUẨN)" : "GIÁ NẰM TRÊN EMA (CHẶN)"
+    color col_bos = is_below_all_emas ? color.green : color.red
+    table.cell(hud, 0, 3, "Vị thế EMA 1H", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, txt_bos, bgcolor=col_bos, text_color=color.white, text_size=size.small)
+
+    // 4. Tín hiệu tổng hợp
+    table.cell(hud, 0, 4, "TỔNG HỢP LỆNH", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    string entry_txt = entry_signal ? ("KÍCH HOẠT: " + signal_type) : "ĐANG RÌNH MỒI (KIÊN NHẪN)..."
+    color entry_bg = entry_signal ? color.red : color.black
+    table.cell(hud, 1, 4, entry_txt, bgcolor=entry_bg, text_color=color.white, text_size=size.small)
+
+// ============================================================================
+// 8. CẢNH BÁO (ALERTS)
+// ============================================================================
+alertcondition(entry_signal, title="ALERT: Macro Short Triggered", 
+               message="[MACRO SHORT ENTRY] Tín hiệu kích hoạt lệnh Short cấu trúc vĩ mô chuẩn xác!")

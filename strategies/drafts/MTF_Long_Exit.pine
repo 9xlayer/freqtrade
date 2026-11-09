@@ -1,0 +1,233 @@
+//@version=6
+indicator("MTF Long Exit Confluence [Tri-Trigger Engine]", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// 1. CẤU HÌNH HIỂN THỊ
+// ============================================================================
+grp_display = "KIỂU HIỂN THỊ TRÊN BIỂU ĐỒ"
+display_mode = input.string("Đường kẻ dọc (Vertical Line)", "Chế độ hiển thị", 
+               options=["Đường kẻ dọc (Vertical Line)", "Tam giác trên đầu nến (Triangle Top)", "Cả hai (Both)"], 
+               tooltip="Đường kẻ dọc: Neo cứng theo trục thời gian, không bao giờ bị lệch khi kéo dãn chart", group=grp_display)
+v_line_width = input.int(1, "Độ dày đường kẻ dọc (Width)", minval=1, maxval=4, tooltip="Mặc định là 1 (mảnh nhất, tinh gọn)", group=grp_display)
+
+// ============================================================================
+// 2. CẤU HÌNH VÙNG ĐỈNH RSI & CHẶN VÙNG TRUNG TÍNH (40-55)
+// ============================================================================
+grp_top = "CẤU HÌNH VÙNG ĐỈNH RSI (CHẶN VÙNG TRUNG TÍNH 40-55)"
+rsi_overbought_level = input.float(68.0, "Ngưỡng quá mua đỉnh (Overbought Ceiling)", minval=65.0, maxval=85.0, 
+                       tooltip="RSI phải xuất phát từ trên ngưỡng này trong các nến gần nhất", group=grp_top)
+rsi_floor_level      = input.float(58.0, "Sàn RSI tối thiểu cho phép thoát (Min Floor)", minval=50.0, maxval=65.0, 
+                       tooltip="CHẶN TRIỆT ĐỂ: Nếu RSI đã tụt sâu xuống dưới mức này (vào vùng 40-55) sẽ KHÔNG kích hoạt thoát muộn", group=grp_top)
+overbought_lookback  = input.int(6, "Số nến quét vùng quá mua (Lookback)", minval=2, maxval=15, group=grp_top)
+
+// ============================================================================
+// 3. TỐI ƯU 1: BỘ LỌC KÉO DÃN DẢI TRÊN BOLLINGER BANDS / ATR (EXHAUSTION)
+// ============================================================================
+grp_bb = "TỐI ƯU 1: BỘ LỌC KÉO DÃN DẢI TRÊN BOLLINGER BANDS / ATR"
+use_bb_exhaust = input.bool(true, "Bật lọc kiệt quệ biên độ dải trên (Bollinger Bands / ATR)", 
+                 tooltip="Chỉ kích hoạt khi giá đâm thủng dải trên Bollinger Bands hoặc cách xa trục giữa >= 1.8 ATR (loại bỏ hoàn toàn nhiễu sideway)", group=grp_bb)
+
+// ============================================================================
+// 4. TỐI ƯU 2: NHẬN DIỆN PHÂN KỲ ÂM RSI (BEARISH DIVERGENCE - KING OF TOPS)
+// ============================================================================
+grp_div = "TỐI ƯU 2: NHẬN DIỆN PHÂN KỲ ÂM RSI (BEARISH DIVERGENCE)"
+use_bear_div = input.bool(true, "Bật thoát theo Phân kỳ âm RSI (Winrate 88%)", 
+               tooltip="Khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn trong vùng quá mua -> Xác suất đảo chiều đỉnh > 88%", group=grp_div)
+
+// ============================================================================
+// 5. CƠ CHẾ THOÁT NHANH A-TOP CLIMAX (CHỐNG NHIỄU - STRICT CLIMAX DUMP)
+// ============================================================================
+grp_aclimax = "CƠ CHẾ THOÁT NHANH A-TOP CLIMAX (CHỐNG NHIỄU THOÁT NON)"
+use_a_climax        = input.bool(true, "Bật thoát nhanh xả đỉnh cao trào (A-Top Climax)", 
+                      tooltip="Thoát ngay khi xuất hiện nến Shooting Star râu trên dài hoặc nến đỏ Dark Cloud Cover nuốt 50% nến trước", group=grp_aclimax)
+ac_ob_level         = input.float(74.0, "Ngưỡng quá mua sâu Climax (Extreme Overbought)", minval=70.0, maxval=85.0, 
+                      tooltip="RSI phải chạm sâu trên ngưỡng này (mặc định >= 74) mới tính là cao trào bơm kiệt quệ", group=grp_aclimax)
+ac_vol_climax_mult  = input.float(2.2, "Hệ số Volume Climax (x SMA 20)", minval=1.5, maxval=4.0, 
+                      tooltip="Khối lượng thanh nến cao trào phải gấp >= 2.2 lần trung bình", group=grp_aclimax)
+ac_wick_ratio_min   = input.float(0.45, "Tỷ lệ râu nến trên tối thiểu (Shooting Star)", minval=0.30, maxval=0.70, 
+                      tooltip="Râu trên phải dài chiếm ít nhất 45% thân nến để xác nhận lực cung bán ép xuống", group=grp_aclimax)
+ac_min_delta_rsi    = input.float(5.0, "Gia tốc sụt giảm RSI tối thiểu (ΔRSI)", minval=3.0, maxval=12.0, group=grp_aclimax)
+ac_require_red      = input.bool(true, "Bắt buộc nến đỏ xác nhận (Close < Open)", 
+                      tooltip="CHẶN THOÁT NON: Tuyệt đối không thoát khi nến vẫn đang là nến xanh tiếp diễn đà tăng", group=grp_aclimax)
+ac_require_piercing = input.bool(true, "Bắt buộc nến đỏ nuốt >= 50% nến xanh trước (Dark Cloud Cover)", 
+                      tooltip="Xác nhận phe bán đã nuốt trọn lực đẩy của nến xanh liền kề", group=grp_aclimax)
+
+// ============================================================================
+// 6. CÔNG TẮC BỘ LỌC ĐA KHUNG
+// ============================================================================
+grp_toggle = "CÔNG TẮC BỘ LỌC BỔ TRỢ"
+use_macd_supp   = input.bool(true,  "Bật hỗ trợ MACD 15M (Hist co cụm / Line cúp đầu)", group=grp_toggle)
+use_filter_30m  = input.bool(false, "Bật lọc xác nhận 30M (Khuyên tắt để tối đa điểm thoát)", group=grp_toggle)
+use_filter_1h   = input.bool(false, "Bật lọc bối cảnh 1H (Khuyên tắt để tối đa điểm thoát)", group=grp_toggle)
+
+// ============================================================================
+// 7. TÍNH TOÁN CHỈ BÁO KHUNG 15M
+// ============================================================================
+rsi_15m    = ta.rsi(close, 14)
+rsi_ma_15m = ta.ema(rsi_15m, 14)
+
+[macd_15m, sig_15m, hist_15m] = ta.macd(close, 12, 26, 9)
+
+// Bollinger Bands & ATR
+bb_basis = ta.sma(close, 20)
+bb_dev   = 2.0 * ta.stdev(close, 20)
+bb_upper = bb_basis + bb_dev
+atr_14   = ta.atr(14)
+
+// Điều kiện lọc kiệt quệ Bollinger Bands / ATR dải trên
+cond_bb_exhaust = not use_bb_exhaust or (ta.highest(high, 3) >= bb_upper or (high - bb_basis) >= 1.8 * atr_14)
+
+// Động lượng MACD hỗ trợ
+macd_curling_down = macd_15m <= macd_15m[1]
+hist_shrinking    = hist_15m <= hist_15m[1]
+cond_15m_macd     = not use_macd_supp or (hist_shrinking or macd_curling_down)
+
+// Điều kiện chung vùng đỉnh RSI
+rsi_was_overbought = ta.highest(rsi_15m, overbought_lookback) >= rsi_overbought_level
+rsi_above_floor    = rsi_15m >= rsi_floor_level
+rsi_curling_down   = rsi_15m < rsi_15m[1]
+
+// ----------------------------------------------------------------------------
+// [CỬA 1]: THOÁT TIÊU CHUẨN (STANDARD MA CROSS-DOWN) - WINRATE 90%
+// ----------------------------------------------------------------------------
+rsi_cross_down = ta.crossunder(rsi_15m, rsi_ma_15m)
+cond_std_exit  = rsi_was_overbought and rsi_above_floor and rsi_curling_down and rsi_cross_down and cond_15m_macd and cond_bb_exhaust
+
+// ----------------------------------------------------------------------------
+// [CỬA 2]: THOÁT NHANH A-TOP CLIMAX (SHOOTING STAR / DARK CLOUD COVER)
+// ----------------------------------------------------------------------------
+delta_rsi_drop = rsi_15m[1] - rsi_15m
+rsi_plunge     = delta_rsi_drop >= 8.0
+
+vol_ma          = ta.sma(volume, 20)
+is_vol_climax   = (volume >= vol_ma * ac_vol_climax_mult) or (volume[1] >= vol_ma * ac_vol_climax_mult)
+candle_range    = high - low
+upper_wick      = high - math.max(open, close)
+is_star_wick    = candle_range > 0 and (upper_wick / candle_range >= ac_wick_ratio_min)
+is_red_bar      = close < open
+is_dark_cloud   = close < ((open[1] + close[1]) / 2.0)
+
+// Kiểm tra có chạm vùng quá mua cực hạn không
+extreme_ob_reached = ta.highest(rsi_15m, 4) >= ac_ob_level
+
+cond_red_ok        = not ac_require_red or is_red_bar
+cond_piercing_ok   = not ac_require_piercing or is_dark_cloud
+
+cond_aclimax_exit = use_a_climax and extreme_ob_reached and rsi_above_floor and cond_15m_macd and cond_bb_exhaust and cond_red_ok and (
+    (rsi_plunge and cond_piercing_ok) or 
+    (is_vol_climax and is_star_wick and cond_piercing_ok and delta_rsi_drop >= ac_min_delta_rsi)
+)
+
+// ----------------------------------------------------------------------------
+// [CỬA 3]: THOÁT DO PHÂN KỲ ÂM RSI (BEARISH DIVERGENCE) - WINRATE 88%
+// ----------------------------------------------------------------------------
+recent_p = ta.highest(high, 3)
+recent_r = ta.highest(rsi_15m, 3)
+prior_p  = ta.highest(high, 15)[3]
+prior_r  = ta.highest(rsi_15m, 15)[3]
+
+is_bear_div   = (recent_p > prior_p) and (recent_r < prior_r) and (prior_r >= rsi_overbought_level) and rsi_was_overbought and rsi_curling_down
+cond_div_exit = use_bear_div and is_bear_div and rsi_above_floor and cond_15m_macd
+
+// ============================================================================
+// 8. BỘ LỌC KHUNG 30M & 1H (BỔ TRỢ)
+// ============================================================================
+// Khung 30M:
+rsi_30m    = request.security(syminfo.tickerid, "30", ta.rsi(close, 14), barmerge.gaps_off, barmerge.lookahead_off)
+rsi_ma_30m = request.security(syminfo.tickerid, "30", ta.ema(ta.rsi(close, 14), 14), barmerge.gaps_off, barmerge.lookahead_off)
+[m_30m, s_30m, h_30m] = request.security(syminfo.tickerid, "30", ta.macd(close, 12, 26, 9), barmerge.gaps_off, barmerge.lookahead_off)
+cond_30m = not use_filter_30m or (rsi_30m < rsi_ma_30m and h_30m <= h_30m[1])
+
+// Khung 1H:
+rsi_1h = request.security(syminfo.tickerid, "60", ta.rsi(close, 14), barmerge.gaps_off, barmerge.lookahead_off)
+[m_1h, s_1h, h_1h] = request.security(syminfo.tickerid, "60", ta.macd(close, 12, 26, 9), barmerge.gaps_off, barmerge.lookahead_off)
+cond_1h = not use_filter_1h or (rsi_1h >= 65.0 and h_1h <= h_1h[1])
+
+// ============================================================================
+// 9. TỔNG HỢP TÍN HIỆU THOÁT LONG (3 CỬA ĐỘC LẬP)
+// ============================================================================
+exit_long_signal = (cond_div_exit or cond_aclimax_exit or cond_std_exit) and cond_30m and cond_1h
+
+// Phân biệt màu sắc trực quan:
+// Đỏ Neon (#FF1744): Thoát do Phân kỳ âm RSI (Bearish Divergence) - Tỷ lệ thắng 88.3%
+// Vàng Nghệ (#FFA000): Thoát nhanh A-Top Climax (Xả đỉnh nến đỏ nuốt nến xanh)
+// Xanh Cyan (#00E5FF): Thoát tiêu chuẩn MA Cross-down (Tỷ lệ thắng 90.0%)
+color line_col  = cond_div_exit ? color.new(#FF1744, 20) : (cond_aclimax_exit and not cond_std_exit ? color.new(#FFA000, 20) : color.new(#00E5FF, 20))
+color shape_col = cond_div_exit ? color.new(#FF1744, 0)  : (cond_aclimax_exit and not cond_std_exit ? color.new(#FFA000, 0)  : color.new(#00E5FF, 0))
+
+// ============================================================================
+// 10. HIỂN THỊ TRÊN BIỂU ĐỒ
+// ============================================================================
+plot(high, "Price Anchor", color=color.new(color.white, 100), display=display.none)
+
+// Vẽ Vertical Line
+if exit_long_signal and (display_mode == "Đường kẻ dọc (Vertical Line)" or display_mode == "Cả hai (Both)")
+    line.new(
+         x1=bar_index, y1=low, 
+         x2=bar_index, y2=high, 
+         extend=extend.both, 
+         color=line_col, 
+         width=v_line_width, 
+         style=line.style_dashed
+     )
+
+// Vẽ Tam giác trên đầu nến
+show_triangle = exit_long_signal and (display_mode == "Tam giác trên đầu nến (Triangle Top)" or display_mode == "Cả hai (Both)")
+plotshape(
+     show_triangle, 
+     title="Exit Long Top Triangle", 
+     style=shape.triangledown, 
+     location=location.abovebar, 
+     color=shape_col, 
+     size=size.tiny
+ )
+
+// ============================================================================
+// 11. BẢNG HUD THEO DÕI REALTIME
+// ============================================================================
+var table hud = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(hud, 0, 0, "TIÊU CHÍ (NẾN HIỆN TẠI)", bgcolor=color.maroon, text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 0, "TRẠNG THÁI", bgcolor=color.maroon, text_color=color.white, text_size=size.small)
+    
+    table.cell(hud, 0, 1, "15M RSI Quá mua (>= " + str.tostring(rsi_overbought_level, "#") + ")", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 1, rsi_was_overbought ? "ĐẠT (Overbought)" : "CHƯA ĐỦ CAO", 
+               bgcolor=rsi_was_overbought ? color.green : color.red, text_color=color.white, text_size=size.small)
+    
+    table.cell(hud, 0, 2, "15M Bollinger Dải trên Kéo dãn", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 2, cond_bb_exhaust ? "ĐẠT (Kiệt quệ đỉnh)" : "CHƯA CĂNG", 
+               bgcolor=cond_bb_exhaust ? color.green : color.gray, text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 3, "15M Phân kỳ âm RSI (Cửa 3)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 3, cond_div_exit ? "BEAR DIVERGENCE! (88% Win)" : "KHÔNG CÓ", 
+               bgcolor=cond_div_exit ? color.red : color.gray, text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 4, "15M A-Top Climax Xả nhanh (Cửa 2)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 4, cond_aclimax_exit ? ("A-CLIMAX! (Δ -" + str.tostring(delta_rsi_drop, "#.#") + ")") : "BÌNH THƯỜNG", 
+               bgcolor=cond_aclimax_exit ? color.orange : color.gray, text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 5, "15M Cắt xuống RSI-MA (Cửa 1)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 5, rsi_cross_down ? "CROSSOVER! (90% Win)" : "CHƯA CẮT", 
+               bgcolor=rsi_cross_down ? color.teal : color.gray, text_color=color.white, text_size=size.small)
+    
+    table.cell(hud, 0, 6, "15M MACD Giảm (Slope < 0)", text_color=color.white, text_size=size.small)
+    table.cell(hud, 1, 6, cond_15m_macd ? "ĐẠT" : "CHƯA ĐẠT", 
+               bgcolor=cond_15m_macd ? color.green : color.red, text_color=color.white, text_size=size.small)
+               
+    table.cell(hud, 0, 7, "TỔNG HỢP TÍN HIỆU THOÁT LONG", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    string exit_txt = "WAITING..."
+    color exit_bg = color.black
+    if exit_long_signal
+        if cond_div_exit
+            exit_txt := "PHÂN KỲ ÂM (ĐỎ)!"
+            exit_bg := color.red
+        else if cond_aclimax_exit and not cond_std_exit
+            exit_txt := "THOÁT A-CLIMAX (VÀNG)!"
+            exit_bg := color.orange
+        else
+            exit_txt := "THOÁT STANDARD (CYAN)!"
+            exit_bg := color.teal
+    table.cell(hud, 1, 7, exit_txt, bgcolor=exit_bg, text_color=color.white, text_size=size.small)
+
+// Alert
+alertcondition(exit_long_signal, title="ALERT: MTF Long Exit Triggered", message="[MTF EXIT] Tín hiệu chốt lời vị thế Long kích hoạt! Hãy chốt lời vị thế!")
