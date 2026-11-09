@@ -47,6 +47,9 @@ class StrategyMTFShortSniper(IStrategy):
     # Cho phép mở vị thế Short (Futures)
     can_short: bool = True
 
+    # Số lượng nến khởi động để nạp dữ liệu quá khứ cho các chỉ báo đa khung (15m, 1h, 4h, 1d)
+    startup_candle_count: int = 2400
+
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
                  side: str, **kwargs) -> float:
@@ -109,18 +112,32 @@ class StrategyMTFShortSniper(IStrategy):
     # =========================================================================
     @informative("1d")
     def populate_indicators_1d(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # EMA 50 1D & MACD 1D
+        dataframe["ema_21"] = ta.EMA(dataframe, timeperiod=21)
         dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
+        dataframe["ema_200"] = ta.EMA(dataframe, timeperiod=200)
+        dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
+        dataframe["rsi_prev"] = dataframe["rsi"].shift(1)
         macd_1d = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
         dataframe["macdhist"] = macd_1d["macdhist"]
         dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
-        
-        # Nhận diện sóng Siêu Uptrend bùng nổ trên khung Ngày (Close > EMA 50 và MACD nở xanh)
-        # Nhận diện sóng Siêu Uptrend bùng nổ trên khung Ngày (Close > EMA 50 và MACD nở xanh)
+        dataframe["swing_low_20d"] = dataframe["low"].rolling(20).min()
+
+        # 1. Nhận diện Sóng Hồi Bò bùng nổ khung Ngày (1D): MACD 1D đang nở xanh dốc lên
         dataframe["is_bull_wave"] = (
-            (dataframe["close"] > dataframe["ema_50"]) & 
             (dataframe["macdhist"] > 0) & 
             (dataframe["macdhist"] > dataframe["macdhist_prev"])
+        )
+
+        # 2. Nhận diện Siêu Chu kỳ Bull Run Vĩ mô: Giá > EMA 50 & EMA 50 > EMA 200 & RSI 1D > 60
+        dataframe["is_macro_bull_run"] = (
+            (dataframe["close"] > dataframe["ema_50"]) &
+            (dataframe["ema_50"] > dataframe["ema_200"]) &
+            (dataframe["rsi"] > 60)
+        )
+
+        # 3. Nhận diện Vùng Đáy Kiệt sức Chu kỳ (Deep Capitulation Floor): Giá quá cách xa EMA 200 Ngày (< -28%)
+        dataframe["is_deep_capitulation"] = (
+            ((dataframe["close"] - dataframe["ema_200"]) / dataframe["ema_200"]) < -0.28
         )
         return dataframe
 
@@ -249,12 +266,32 @@ class StrategyMTFShortSniper(IStrategy):
         else:
             cond_4h_aligned = pd.Series(True, index=dataframe.index)
 
+        # [ĐIỀU KIỆN 5a - LỚP BẢO VỆ CHU KỲ VĨ MÔ: CHỐNG SHORT CẢN TÀU BULL RUN]
+        # Tuyệt đối CẤM Short khi thị trường đang trong Siêu Chu kỳ Bull Run (Golden Cross EMA50 > EMA200 1D & Close > EMA50 1D & RSI 1D > 60)
+        if "is_macro_bull_run_1d" in dataframe.columns:
+            cond_macro_safe = dataframe["is_macro_bull_run_1d"].fillna(0) == 0
+        else:
+            cond_macro_safe = pd.Series(True, index=dataframe.index)
+
         # [ĐIỀU KIỆN 5b - LỚP 1: BỘ LỌC VĨ MÔ KHUNG NGÀY 1D]
-        # Tuyệt đối CẤM Short khi khung Ngày (1D) đang trong Siêu Uptrend bùng nổ
+        # Tuyệt đối CẤM Short khi khung Ngày (1D) đang trong Sóng Hồi Bò bùng nổ
         if self.block_1d_bull_wave.value and "is_bull_wave_1d" in dataframe.columns:
             cond_1d_aligned = dataframe["is_bull_wave_1d"].fillna(0) == 0
         else:
             cond_1d_aligned = pd.Series(True, index=dataframe.index)
+
+        # [ĐIỀU KIỆN 5c - CHỐNG SHORT ĐÈ SÀN HỖ TRỢ VĨ MÔ 1D (FLOOR PROTECTION)]
+        # Nếu giá đang nằm quá sát đáy thấp nhất 20 ngày qua (< 3.5% cách đáy) -> CẤM SHORT (tránh đè sàn hỗ trợ tổ chức)
+        if "swing_low_20d_1d" in dataframe.columns:
+            cond_floor_safe = ((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035
+        else:
+            cond_floor_safe = pd.Series(True, index=dataframe.index)
+
+        # [ĐIỀU KIỆN 5d - CHỐNG SHORT ĐÈ SÀN VÙNG ĐÁY KIỆT SỨC CHU KỲ (DEEP CAPITULATION)]
+        if "is_deep_capitulation_1d" in dataframe.columns:
+            cond_capitulation_safe = dataframe["is_deep_capitulation_1d"].fillna(0) == 0
+        else:
+            cond_capitulation_safe = pd.Series(True, index=dataframe.index)
 
         # [ĐIỀU KIỆN 6 - CHỐNG SHORT ĐUỔI ĐÁY]
         cond_not_chasing = (
@@ -269,7 +306,10 @@ class StrategyMTFShortSniper(IStrategy):
             is_below_emas &
             cond_1h_aligned &
             cond_4h_aligned &
+            cond_macro_safe &
             cond_1d_aligned &
+            cond_floor_safe &
+            cond_capitulation_safe &
             cond_not_chasing &
             (dataframe["volume"] > 0)
         )
@@ -412,9 +452,10 @@ class StrategyMTFShortSniper(IStrategy):
         if current_profit >= 0.35:
             return -0.20
 
-        # 2. Khi có lãi >= +20% ký quỹ (+2.0% chart): Kéo Stop Loss về Breakeven (+2% ký quỹ = +0.2% chart)
+        # 2. Khi có lãi >= +20% ký quỹ (+2.0% chart): Kéo Stop Loss về +10% ký quỹ (+1.0% chart = +15 USDT)
+        # Giữ trọn 100% vị thế Runner, nhưng bảo đảm bỏ túi tối thiểu +15 USDT nếu giá quay đầu
         if current_profit >= 0.20:
-            return -stoploss_from_open(0.02, current_profit, is_short=trade.is_short, leverage=10.0)
+            return -stoploss_from_open(0.10, current_profit, is_short=trade.is_short, leverage=10.0)
 
         # 3. Sau 24h nếu vị thế đang lỗ (profit < 0): Thắt chặt SL về -5% ký quỹ (-0.5% chart)
         duration_hours = (current_time - trade.open_date_utc).total_seconds() / 3600
