@@ -1,0 +1,380 @@
+//@version=5
+indicator("MTF Short Sniper [Entry & Exit]", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// 1. THÔNG SỐ VÀO LỆNH (ENTRY POINT CONFIG)
+// ============================================================================
+grp_entry = "1. THÔNG SỐ VÀO LỆNH (ENTRY POINT)"
+cooldown_hours        = input.int(24, "Giãn cách tối thiểu giữa 2 Entry (Giờ)", minval=12, maxval=72, 
+                         tooltip="Chống bắn nhiều lệnh liên tiếp khi thị trường sập sâu", group=grp_entry)
+lookback_support      = input.int(17, "Số nến nền tích luỹ 15M (4.25 tiếng)", minval=8, maxval=30, 
+                         tooltip="Quét nền tích luỹ 17 nến để bắt điểm phá vỡ chuẩn xác", group=grp_entry)
+max_dist_ema21        = input.float(0.9, "Khoảng cách tối đa tới EMA 21 (%)", minval=0.5, maxval=3.0, step=0.1, 
+                         tooltip="Chống Short đuổi: Nếu giá đã rơi xa EMA 21 quá 0.9% thì CẤM vào lệnh", group=grp_entry)
+min_rsi_entry         = input.float(27.8, "Ngưỡng sàn RSI 15M (Chống vét đáy)", minval=20.0, maxval=40.0, step=0.1, 
+                         tooltip="Nếu RSI 15M < 27.8 thì đã xả vét đáy cạn kiệt, cấm Short", group=grp_entry)
+loc_tolerance_1h      = input.float(0.991, "Ngưỡng cản 1H EMA 50 (Chống Short đáy)", minval=0.98, maxval=1.02, step=0.001, 
+                         tooltip="Nến 1H không được đóng thấp hơn EMA 50 quá 0.9%", group=grp_entry)
+min_1h_rsi_exhaustion = input.float(55.1, "Ngưỡng RSI 1H Kiệt sức phe Bò (Peak 24h)", minval=50.0, maxval=80.0, step=0.1, 
+                         tooltip="Trong 24h qua RSI 1H phải từng vượt 55.1 để xác nhận có nhịp pump rướn kiệt sức", group=grp_entry)
+block_4h_long_wave    = input.bool(true, "Cấm Short khi khung 4H đang có sóng Hồi Long", 
+                         tooltip="Chặn vào lệnh khi 4H MACD Histogram đang dương và tiếp tục tăng mạnh", group=grp_entry)
+block_1d_bull_wave    = input.bool(true, "Bộ lọc Vĩ mô: Cấm Short khi Khung Ngày (1D) đang Siêu Uptrend", 
+                         tooltip="Chặn cản đầu xe tăng khi nến 1D nằm trên EMA 50 và MACD 1D đang nở xanh", group=grp_entry)
+
+// ============================================================================
+// 2. THÔNG SỐ QUẢN LÝ VỐN & TỶ LỆ R:R (CHỐNG LỖ SÂU & ĂN NON)
+// ============================================================================
+grp_rr = "2. QUẢN LÝ VỐN & TỶ LỆ R:R CHUẨN 1:2"
+exit_mode             = input.string("Runner (Nuôi sóng lớn)", "Chế độ Chốt lời Vị thế", 
+                         options=["Runner (Nuôi sóng lớn)", "Scalp (Thoát sớm râu đáy)"], group=grp_rr,
+                         tooltip="Runner: Bỏ qua nhịp hồi nhỏ RSI 15M, để Trailing Stop bám đuôi ăn trọn sóng sập 5% - 10% như lệnh 22/10.\nScalp: Thoát sớm ngay khi RSI 15M hồi từ vùng quá bán.")
+max_sl_pct            = input.float(2.5, "Cắt lỗ tối đa SL (%)", minval=1.0, maxval=3.5, step=0.1, 
+                         tooltip="Chặn đứng mức lỗ tối đa -2.5%, tuyệt đối không gồng quá ngưỡng này", group=grp_rr)
+target_tp_pct         = input.float(7.0, "Mục tiêu Chốt lời Cố định TP (%)", minval=2.0, maxval=15.0, step=0.5, 
+                         tooltip="Mục tiêu chốt lời thả ga (mặc định 7.0%, có thể nâng lên 10% để ăn trọn sóng sập lớn)", group=grp_rr)
+be_trigger_pct        = input.float(2.0, "Ngưỡng kéo Breakeven Hòa vốn (%)", minval=1.0, maxval=2.5, step=0.1, 
+                         tooltip="Khi lãi đạt +2.0%, tự động dời SL về giá vào để bảo toàn 100% gốc (+0.2%)", group=grp_rr)
+min_profit_exit       = input.float(2.5, "Lãi tối thiểu mới cho phép Exit Đáy (%)", minval=1.5, maxval=4.0, step=0.5, 
+                         tooltip="Chặn bot thoát non ở các râu nến li ti khi chưa đủ lợi nhuận", group=grp_rr)
+trailing_start_pct    = input.float(3.5, "Ngưỡng kích hoạt Trailing Stop (%)", minval=2.0, maxval=5.0, step=0.5, 
+                         tooltip="Khi lãi đạt +3.5% mới bắt đầu kích hoạt Trailing bám sát giá", group=grp_rr)
+trailing_offset_pct   = input.float(2.0, "Khoảng cách đệm Trailing (%)", minval=1.0, maxval=3.5, step=0.1, 
+                         tooltip="Khoảng cách bám sát theo sau đáy thấp nhất", group=grp_rr)
+use_trend_invalid     = input.bool(true, "Cắt sớm khi Xu hướng Đảo chiều (Trend Invalidation)", 
+                         tooltip="Thoát ngay khi nến vượt lên EMA 200 hoặc nến đóng trên EMA 21 kèm MACD xanh", group=grp_rr)
+timeout_hours         = input.int(24, "Thời hạn tối đa giữ lệnh (Giờ)", minval=12, maxval=48, 
+                         tooltip="Sau 24h nếu lệnh đang âm thì đóng lệnh giải phóng vốn", group=grp_rr)
+
+grp_exit = "3. THÔNG SỐ TÍN HIỆU CHỐT LỜI ĐÁY"
+exit_rsi_os           = input.float(23.0, "Ngưỡng quá bán 15M (Oversold Floor)", minval=20.0, maxval=38.0, 
+                         tooltip="RSI 15M phải từng rơi sâu xuống dưới mức này", group=grp_exit)
+exit_rsi_ceil         = input.float(44.3, "Trần RSI 15M tối đa cho phép thoát", minval=30.0, maxval=50.0, 
+                         tooltip="Chặn thoát non khi RSI đã ngóc quá cao", group=grp_exit)
+exit_os_lookback      = input.int(9, "Số nến quét vùng quá bán (Lookback)", minval=2, maxval=15, group=grp_exit)
+
+grp_vbounce = "4. CƠ CHẾ THOÁT NHANH V-BOUNCE (CLIMAX REVERSAL)"
+use_vbounce           = input.bool(true, "Kích hoạt thoát nhanh V-Bounce", 
+                         tooltip="Thoát lệnh ngay khi nến xanh rút chân mạnh có volume đột biến", group=grp_vbounce)
+vb_vol_mult           = input.float(2.7, "Bội số Volume Climax (so với SMA 20)", minval=1.5, maxval=3.5, step=0.1, group=grp_vbounce)
+vb_wick_min           = input.float(0.52, "Tỷ lệ râu nến dưới tối thiểu (Lower Wick)", minval=0.30, maxval=0.60, step=0.01, group=grp_vbounce)
+
+grp_visual = "5. HIỂN THỊ TRỰC QUAN TRÊN BIỂU ĐỒ"
+show_v_lines          = input.bool(true, "Hiện đường kẻ dọc (Đỏ: Entry, Xanh: Exit)", group=grp_visual)
+show_shapes           = input.bool(true, "Hiện mũi tên tín hiệu Entry & Exit", group=grp_visual)
+show_barcolors        = input.bool(true, "Tô màu nến Entry (Vàng) & Exit (Xanh lơ)", group=grp_visual)
+show_labels           = input.bool(true, "Hiện thẻ nhãn Entry & Exit trên chart", group=grp_visual)
+
+// ============================================================================
+// 3. DỮ LIỆU ĐỒNG THUẬN ĐA KHUNG THỜI GIAN (1D, 4H, 1H, 30M - CHỐNG REPAINT)
+// ============================================================================
+// --- Khung 1D (Vĩ mô Ngày - Lớp 1 Phòng thủ Chủ động) ---
+f_calc_1d() =>
+    e50       = ta.ema(close, 50)
+    [m, s, h] = ta.macd(close, 12, 26, 9)
+    [close, e50, h, h[1]]
+
+[c_1d, ema50_1d, hist_1d, hist_1d_prev] = request.security(
+     syminfo.tickerid, "D", f_calc_1d(), 
+     barmerge.gaps_off, barmerge.lookahead_off
+ )
+bool is_1d_bull_wave = (c_1d > ema50_1d) and (hist_1d > 0) and (hist_1d > hist_1d_prev)
+
+// --- Khung 4H (Bắt sóng Hồi Long để chặn bẫy) ---
+f_calc_4h() =>
+    [m, s, h] = ta.macd(close, 12, 26, 9)
+    [h, h[1]]
+
+[hist_4h, hist_4h_prev] = request.security(
+     syminfo.tickerid, "240", f_calc_4h(), 
+     barmerge.gaps_off, barmerge.lookahead_off
+ )
+bool is_4h_bull_wave = (hist_4h > 0) and (hist_4h - hist_4h_prev > 0)
+
+// --- Khung 1H (Vị thế cản EMA 50 & Kiệt sức phe Bò) ---
+f_calc_1h() =>
+    e50        = ta.ema(close, 50)
+    rsi14      = ta.rsi(close, 14)
+    rsi_max_24 = ta.highest(rsi14, 24)
+    [m, s, h]  = ta.macd(close, 12, 26, 9)
+    vol_sma    = ta.sma(volume, 20)
+    [close, e50, h, h[1], rsi14, rsi_max_24, volume, vol_sma]
+
+[c_1h, ema50_1h, hist_1h, hist_1h_prev, rsi_1h, rsi_max_1h, vol_1h, vol_sma_1h] = request.security(
+     syminfo.tickerid, "60", f_calc_1h(), 
+     barmerge.gaps_off, barmerge.lookahead_off
+ )
+
+// --- Khung 30M (Xác nhận chuyển pha phục vụ Exit) ---
+f_calc_30m() =>
+    rsi14     = ta.rsi(close, 14)
+    rsi_ma    = ta.sma(rsi14, 14)
+    [m, s, h] = ta.macd(close, 12, 26, 9)
+    [rsi14, rsi_ma, h, h[1]]
+
+[rsi_30m, rsi_ma_30m, hist_30m, hist_30m_prev] = request.security(
+     syminfo.tickerid, "30", f_calc_30m(), 
+     barmerge.gaps_off, barmerge.lookahead_off
+ )
+
+// ============================================================================
+// 4. CHỈ BÁO TRÊN KHUNG 15M (TRIGGER ENTRY & EXIT)
+// ============================================================================
+ema_10  = ta.ema(close, 10)
+ema_21  = ta.ema(close, 21)
+ema_200 = ta.ema(close, 200)
+atr_val = ta.atr(14)
+rsi_15m = ta.rsi(close, 14)
+
+candle_total = math.max(0.00001, high - low)
+candle_body  = math.abs(close - open)
+is_red       = close < open
+
+// [ENTRY 1] Nến đỏ xả áp đảo
+bool is_decisive_red = is_red and ((candle_body / candle_total) >= 0.64) and (candle_body >= atr_val * 0.5)
+
+// [ENTRY 2] Phá thủng đáy cụm nền ngắn hạn trước đó (Rút ngắn 12 nến để bắt sớm)
+float swing_low_major   = ta.lowest(low, lookback_support)[1]
+bool is_breakdown_major = (close < swing_low_major) and (close[1] >= swing_low_major)
+
+// [ENTRY 3] Đóng nến dưới EMA 10 & 21
+bool is_below_emas = (close < ema_10) and (close < ema_21)
+
+// [ENTRY 4] Đồng pha 1H, 4H & 1D
+bool cond_1h_pos        = c_1h >= (ema50_1h * loc_tolerance_1h)
+bool cond_1h_macd       = (hist_1h - hist_1h_prev < 0) or (hist_1h < 0)
+bool cond_1h_exhaustion = rsi_max_1h >= min_1h_rsi_exhaustion
+bool cond_4h_aligned    = not block_4h_long_wave or not is_4h_bull_wave
+bool cond_1d_aligned    = not block_1d_bull_wave or not is_1d_bull_wave
+
+// [ENTRY 5] Chống Short đuổi đáy: Giá không được rơi quá xa EMA 21 và RSI không được rơi vào vùng vét đáy
+bool cond_not_chasing = ((ema_21 - close) / close <= (max_dist_ema21 / 100.0)) and (rsi_15m >= min_rsi_entry)
+
+bool raw_entry = is_decisive_red and is_breakdown_major and is_below_emas and cond_1h_pos and cond_1h_macd and cond_1h_exhaustion and cond_4h_aligned and cond_1d_aligned and cond_not_chasing
+
+// Cooldown 24H
+current_tf_minutes = timeframe.isminutes ? timeframe.multiplier : 15
+int cooldown_bars   = math.max(1, math.round((cooldown_hours * 60) / current_tf_minutes))
+
+var int last_entry_bar = -9999
+bool is_cooldown_passed = (bar_index - last_entry_bar) >= cooldown_bars
+
+bool entry_trigger = raw_entry and is_cooldown_passed
+
+// ============================================================================
+// 5. LOGIC CHỐT LỜI RÂU ĐÁY (EXIT POINT)
+// ============================================================================
+rsi_ma_15m = ta.sma(rsi_15m, 14)
+[m_15m, s_15m, h_15m] = ta.macd(close, 12, 26, 9)
+
+[bb_mid, bb_upper, bb_lower] = ta.bb(close, 20, 2.0)
+
+vol_sma_15m      = ta.sma(volume, 20)
+vol_ratio_15m    = volume / math.max(0.00001, vol_sma_15m)
+lower_wick_size  = math.min(open, close) - low
+lower_wick_ratio = lower_wick_size / candle_total
+delta_rsi        = rsi_15m - rsi_15m[1]
+
+// [CỬA 1] Thoát tiêu chuẩn: RSI 15M cắt lên RSI-MA từ vùng quá bán
+bool cond_from_os      = ta.lowest(rsi_15m, exit_os_lookback) <= exit_rsi_os
+bool cond_at_bottom    = rsi_15m <= exit_rsi_ceil
+bool cond_rsi_cross_ma = ta.crossover(rsi_15m, rsi_ma_15m)
+bool cond_macd_supp    = (m_15m >= m_15m[1]) and (h_15m > h_15m[1])
+bool cond_bb_stretched = (ta.lowest(low, 3) <= bb_lower) or ((bb_mid - low) >= 1.5 * atr_val)
+bool cond_30m_ok       = (rsi_30m > rsi_ma_30m) or (hist_30m > hist_30m_prev)
+
+bool exit_standard = cond_from_os and cond_at_bottom and cond_rsi_cross_ma and cond_macd_supp and cond_bb_stretched and cond_30m_ok
+
+// [CỬA 2] Thoát nhanh V-Bounce (Rút chân mạnh đột biến chữ V)
+bool candle_green     = close > open
+bool vol_climax       = (vol_ratio_15m >= vb_vol_mult) or (vol_ratio_15m[1] >= vb_vol_mult)
+bool wick_rejection   = lower_wick_ratio >= vb_wick_min
+bool rsi_fast_rebound = delta_rsi >= 5.0
+
+bool exit_v_bounce = use_vbounce and cond_from_os and candle_green and wick_rejection and (vol_climax or rsi_fast_rebound)
+
+bool raw_exit_trigger = exit_standard or exit_v_bounce
+
+// ============================================================================
+// 6. QUẢN LÝ TRẠNG THÁI VỊ THẾ & ĐIỂM RA VÀO (STATE TRACKER)
+// ============================================================================
+float swing_high_12 = ta.highest(high, 12)
+
+var bool  is_in_short        = false
+var float active_entry_price = na
+var float active_sl_price    = na
+var float lowest_since_entry = na
+
+bool is_entry_now = false
+bool is_exit_now  = false
+string exit_reason = ""
+
+// Xử lý Entry
+if entry_trigger and not is_in_short
+    is_in_short        := true
+    active_entry_price := close
+    lowest_since_entry := low
+    float tech_sl      = swing_high_12 + atr_val * 0.3
+    float max_sl_cap   = close * (1.0 + max_sl_pct / 100.0)
+    active_sl_price    := math.min(tech_sl, max_sl_cap)
+    last_entry_bar     := bar_index
+    is_entry_now       := true
+
+// Xử lý Quản lý lệnh & Exit
+if is_in_short
+    lowest_since_entry := math.min(lowest_since_entry, low)
+    float max_profit_pct = (active_entry_price - lowest_since_entry) / active_entry_price
+    float current_profit_pct = (active_entry_price - close) / active_entry_price
+    int bars_held = bar_index - last_entry_bar
+    int timeout_bars = math.max(1, math.round((timeout_hours * 60) / current_tf_minutes))
+    
+    // 1. Kéo Breakeven khi lãi chạm ngưỡng be_trigger_pct (+2.0%)
+    if max_profit_pct >= (be_trigger_pct / 100.0) and active_sl_price > active_entry_price
+        active_sl_price := active_entry_price * 0.998  // Khóa lãi +0.2% bảo toàn vốn
+        
+    // 2. Trailing Stop Loss khi lãi >= trailing_start_pct (+3.5%)
+    if max_profit_pct >= (trailing_start_pct / 100.0)
+        float trailing_candidate = lowest_since_entry * (1.0 + trailing_offset_pct / 100.0)
+        if trailing_candidate < active_sl_price
+            active_sl_price := trailing_candidate
+
+    // Kiểm tra Xu hướng Đảo chiều (Trend Invalidation - Đồng bộ chuẩn Freqtrade)
+    // Chỉ cắt sớm khi giá thực sự phá vỡ cấu trúc đỉnh Swing High (12 nến) hoặc 1H đảo chiều tăng mạnh
+    // Tuyệt đối không cắt non khi giá chỉ đi ngang retest nhẹ EMA 200 vài giá!
+    float prev_swing_high_12 = ta.highest(high[1], 12)
+    bool cond_structure_broken = (close > prev_swing_high_12)
+    bool cond_htf_reversal     = (c_1h > ema50_1h) and (hist_1h > 0) and (h_15m > 0)
+    bool is_trend_broken       = use_trend_invalid and (bars_held >= 8) and (current_profit_pct < -0.003) and (cond_structure_broken or cond_htf_reversal)
+    bool is_timed_out          = (bars_held >= timeout_bars) and (current_profit_pct < 0.0)
+
+    // 3. Chốt lời Mục tiêu Cố định TP (+7.0% hoặc cấu hình)
+    if (active_entry_price - low) / active_entry_price >= (target_tp_pct / 100.0)
+        is_in_short  := false
+        is_exit_now  := true
+        exit_reason  := "Take Profit 🎯 (+" + str.tostring(target_tp_pct, "#.#") + "%)"
+        active_entry_price := na
+        active_sl_price    := na
+        lowest_since_entry := na
+
+    // 4. Chốt lời theo tín hiệu Exit Point
+    // Runner: CHỈ chốt nếu gặp V-Bounce rút chân cực mạnh kèm Volume đột biến (đảo chiều V). Bỏ qua nhịp hồi nhỏ RSI để nuôi sóng sập sâu!
+    // Scalp: Cho phép thoát sớm bằng RSI 15M hồi (MTF Exit hoặc V-Bounce).
+    else if ((exit_mode == "Scalp (Thoát sớm râu đáy)" and raw_exit_trigger) or (exit_mode == "Runner (Nuôi sóng lớn)" and exit_v_bounce)) and (current_profit_pct >= (min_profit_exit / 100.0))
+        is_in_short  := false
+        is_exit_now  := true
+        float exit_pnl = current_profit_pct * 100.0
+        exit_reason  := (exit_v_bounce ? "V-Bounce ⚡ (+" : "MTF Exit 🎯 (+") + str.tostring(exit_pnl, "#.#") + "%)"
+        active_entry_price := na
+        active_sl_price    := na
+        lowest_since_entry := na
+
+    // 5. CẮT SỚM KHI XU HƯỚNG ĐẢO CHIỀU (TREND INVALIDATION) - Không đợi quét SL!
+    else if is_trend_broken
+        is_in_short  := false
+        is_exit_now  := true
+        float exit_pnl = current_profit_pct * 100.0
+        string pnl_sign = exit_pnl >= 0 ? "+" : ""
+        exit_reason  := "Trend Inval ⚠️ (" + pnl_sign + str.tostring(exit_pnl, "#.#") + "%)"
+        active_entry_price := na
+        active_sl_price    := na
+        lowest_since_entry := na
+
+    // 6. THOÁT HẾT HẠN THỜI GIAN (24H TIMEOUT) - Giải phóng vốn khi sideway
+    else if is_timed_out
+        is_in_short  := false
+        is_exit_now  := true
+        float exit_pnl = current_profit_pct * 100.0
+        string pnl_sign = exit_pnl >= 0 ? "+" : ""
+        exit_reason  := "Timeout ⏳ (" + pnl_sign + str.tostring(exit_pnl, "#.#") + "%)"
+        active_entry_price := na
+        active_sl_price    := na
+        lowest_since_entry := na
+        
+    // 7. Chạm Cắt lỗ / Khóa lãi Trailing / Breakeven
+    else if high >= active_sl_price
+        is_in_short  := false
+        is_exit_now  := true
+        float exit_pnl = (active_entry_price - active_sl_price) / active_entry_price * 100.0
+        if exit_pnl >= 1.0
+            exit_reason := "Trailing Lock 🔒 (+" + str.tostring(exit_pnl, "#.#") + "%)"
+        else if exit_pnl >= 0.0
+            exit_reason := "Breakeven 🛡️ (+" + str.tostring(exit_pnl, "#.#") + "%)"
+        else
+            exit_reason := "Stop Loss 🛑 (" + str.tostring(exit_pnl, "#.#") + "%)"
+        active_entry_price := na
+        active_sl_price    := na
+        lowest_since_entry := na
+
+// ============================================================================
+// 7. TRỰC QUAN HOÁ TRÊN BIỂU ĐỒ (HIỂN THỊ CHUẨN XÁC)
+// ============================================================================
+color col_entry      = color.new(#FF1744, 0)
+color col_tp         = color.new(#00E676, 0)
+color col_trailing   = color.new(#FFB300, 0)
+color col_be         = color.new(#78909C, 0)
+color col_inval      = color.new(#AB47BC, 0)
+color col_sl         = color.new(#FF5252, 0)
+
+bool is_sl_loss  = str.contains(exit_reason, "Stop Loss")
+bool is_trail    = str.contains(exit_reason, "Trailing")
+bool is_be       = str.contains(exit_reason, "Breakeven")
+bool is_inval    = str.contains(exit_reason, "Trend Inval") or str.contains(exit_reason, "Timeout")
+bool is_tp_win   = str.contains(exit_reason, "Take Profit") or str.contains(exit_reason, "Exit") or str.contains(exit_reason, "Bounce")
+
+color col_exit_active = is_sl_loss ? col_sl : (is_tp_win ? col_tp : (is_trail ? col_trailing : (is_inval ? col_inval : col_be)))
+
+// 1. Đường kẻ dọc Entry (Đỏ) và Exit
+if is_entry_now and show_v_lines
+    line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(col_entry, 25), width=1, style=line.style_dashed)
+
+if is_exit_now and show_v_lines
+    line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(col_exit_active, 25), width=1, style=line.style_dashed)
+
+// 2. Mũi tên tín hiệu
+plotshape(is_entry_now and show_shapes, title="Entry Arrow Down", style=shape.triangledown, 
+          location=location.abovebar, color=col_entry, size=size.small)
+
+plotshape(is_exit_now and show_shapes, title="Exit Arrow Up", style=shape.triangleup, 
+          location=location.belowbar, color=col_exit_active, size=size.small)
+
+// 3. Tô màu nến kích hoạt
+color bar_c = is_entry_now and show_barcolors ? color.yellow : 
+             (is_exit_now and show_barcolors ? (is_sl_loss ? color.maroon : (is_trail ? color.orange : (is_inval ? color.purple : (is_be ? color.gray : color.aqua)))) : na)
+barcolor(bar_c)
+
+// 4. Nhãn thẻ hiển thị giá và lý do trên đầu/đáy nến
+if is_entry_now and show_labels
+    label.new(bar_index, high, text="🎯 SHORT ENTRY\n" + str.tostring(close, "#.##"), 
+              color=color.new(#B71C1C, 15), textcolor=color.white, style=label.style_label_lower_left, size=size.small)
+
+if is_exit_now and show_labels
+    color lbl_c = is_sl_loss ? color.maroon : (is_tp_win ? color.new(#1B5E20, 10) : (is_trail ? color.new(#F57F17, 10) : (is_inval ? color.new(#4A148C, 10) : color.new(#455A64, 15))))
+    string icon_prefix = is_sl_loss ? "🛑 " : (is_inval ? "⚠️ " : "💰 ")
+    string txt  = icon_prefix + exit_reason + "\n" + str.tostring(close, "#.##")
+    label.new(bar_index, low, text=txt, 
+              color=lbl_c, textcolor=color.white, style=label.style_label_upper_left, size=size.small)
+
+// 5. Đường bám đuôi Stop Loss / Trailing Stop linh hoạt
+plot(is_in_short ? active_sl_price : na, "Dynamic Stop Loss / Trailing", color=color.new(color.orange, 20), style=plot.style_circles, linewidth=1)
+
+// 6. Bảng hiển thị trạng thái Bộ lọc Vĩ mô 1D (Corner Dashboard)
+var table status_tbl = table.new(position.top_right, 2, 3, bgcolor=color.new(#1E222D, 15), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(status_tbl, 0, 0, "HỆ THỐNG MTF SNIPER", bgcolor=color.new(#26A69A, 20), text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 1, 0, "TRẠNG THÁI HIỆN TẠI", bgcolor=color.new(#26A69A, 20), text_color=color.white, text_size=size.small)
+    
+    // Khung Ngày 1D
+    string txt_1d = is_1d_bull_wave ? "⚠️ Siêu Uptrend (CẤM SHORT)" : "✅ An toàn (CHO PHÉP SHORT)"
+    color bg_1d   = is_1d_bull_wave ? color.new(color.red, 30) : color.new(color.green, 40)
+    table.cell(status_tbl, 0, 1, "Bộ lọc Vĩ mô 1D", text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 1, 1, txt_1d, bgcolor=bg_1d, text_color=color.white, text_size=size.small)
+    
+    // Chế độ Vị thế
+    table.cell(status_tbl, 0, 2, "Chế độ Chốt lời", text_color=color.white, text_size=size.small)
+    table.cell(status_tbl, 1, 2, exit_mode, bgcolor=color.new(color.blue, 40), text_color=color.white, text_size=size.small)
+
+// ============================================================================
+// 8. CẢNH BÁO TỰ ĐỘNG (TRADINGVIEW ALERTS)
+// ============================================================================
+alertcondition(is_entry_now, title="[Sniper] Short Entry Alert", message="🎯 [MTF Short Entry] Kích hoạt Short tại {{close}}!")
+alertcondition(is_exit_now, title="[Sniper] Short Exit Alert", message="💰 [MTF Short Exit] Kích hoạt Chốt lời tại {{close}}!")
