@@ -114,6 +114,7 @@ class StrategyMTFShortSniper(IStrategy):
     def populate_indicators_1d(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["ema_21"] = ta.EMA(dataframe, timeperiod=21)
         dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
+        dataframe["ema_100"] = ta.EMA(dataframe, timeperiod=100)
         dataframe["ema_200"] = ta.EMA(dataframe, timeperiod=200)
         dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
         dataframe["rsi_prev"] = dataframe["rsi"].shift(1)
@@ -121,6 +122,9 @@ class StrategyMTFShortSniper(IStrategy):
         dataframe["macdhist"] = macd_1d["macdhist"]
         dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
         dataframe["swing_low_20d"] = dataframe["low"].rolling(20).min()
+        dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+        dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
+        dataframe["minus_di"] = ta.MINUS_DI(dataframe, timeperiod=14)
 
         # 1. Nhận diện Sóng Hồi Bò bùng nổ khung Ngày (1D): MACD 1D đang nở xanh dốc lên
         dataframe["is_bull_wave"] = (
@@ -128,17 +132,37 @@ class StrategyMTFShortSniper(IStrategy):
             (dataframe["macdhist"] > dataframe["macdhist_prev"])
         )
 
-        # 2. Nhận diện Siêu Chu kỳ Bull Run Vĩ mô: Giá > EMA 50 & EMA 50 > EMA 200 & RSI 1D > 60
-        dataframe["is_macro_bull_run"] = (
+        # 2. Nhận diện Siêu Chu kỳ Bull Run Vĩ mô:
+        # Nhánh a: Golden Cross Bull Run: Giá > EMA 50 & EMA 50 > EMA 200 & RSI 1D > 60
+        # Nhánh b: Xếp chồng Bull Stack hoàn hảo (Close > EMA 21 > 50 > 100 > 200) kèm xu hướng xác nhận (ADX 1D > 20)
+        # Nhánh c: Siêu sóng bơm Parabolic vĩ mô cản tàu (ADX 1D > 50 & +DI 1D > -DI 1D & Close > EMA 200)
+        is_golden_bull = (
             (dataframe["close"] > dataframe["ema_50"]) &
             (dataframe["ema_50"] > dataframe["ema_200"]) &
             (dataframe["rsi"] > 60)
         )
+        is_bull_stack = (
+            (dataframe["close"] > dataframe["ema_21"]) &
+            (dataframe["ema_21"] > dataframe["ema_50"]) &
+            (dataframe["ema_50"] > dataframe["ema_100"]) &
+            (dataframe["ema_100"] > dataframe["ema_200"]) &
+            (dataframe["adx"] > 20)
+        )
+        is_parabolic_surge = (
+            (dataframe["adx"] > 50) &
+            (dataframe["plus_di"] > dataframe["minus_di"]) &
+            (dataframe["close"] > dataframe["ema_200"])
+        )
+        dataframe["is_macro_bull_run"] = is_golden_bull | is_bull_stack | is_parabolic_surge
 
         # 3. Nhận diện Vùng Đáy Kiệt sức Chu kỳ (Deep Capitulation Floor): Giá quá cách xa EMA 200 Ngày (< -28%)
         dataframe["is_deep_capitulation"] = (
             ((dataframe["close"] - dataframe["ema_200"]) / dataframe["ema_200"]) < -0.28
         )
+
+        # 4. Độ rộng dải Bollinger Bands khung Ngày (1D BB Width) phục vụ lọc Sideway nén cạn kiệt
+        bb_1d = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe["bb_width"] = (bb_1d["upperband"] - bb_1d["lowerband"]) / bb_1d["middleband"]
         return dataframe
 
     # =========================================================================
@@ -154,6 +178,11 @@ class StrategyMTFShortSniper(IStrategy):
         # Nhận diện sóng Hồi Long bùng nổ trên 4H (MACD dương và đang tăng mạnh)
         dataframe["is_bull_wave"] = (dataframe["macdhist"] > 0) & (dataframe["macdhist"] > dataframe["macdhist_prev"])
         dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
+
+        # Độ rộng dải Bollinger Bands khung 4H (4H BB Width) & ADX 4H phục vụ lọc Sideway nén cạn kiệt
+        bb_4h = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe["bb_width"] = (bb_4h["upperband"] - bb_4h["lowerband"]) / bb_4h["middleband"]
+        dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
         return dataframe
 
     # =========================================================================
@@ -204,6 +233,9 @@ class StrategyMTFShortSniper(IStrategy):
         # Đáy thấp nhất của lookback_support nến trước đó (Nền tích luỹ bị gãy)
         dataframe["swing_low"] = dataframe["low"].shift(1).rolling(self.lookback_support.value).min()
         dataframe["swing_high_12"] = dataframe["high"].shift(1).rolling(12).max()
+
+        # Biên độ dao động High - Low trong 24 giờ gần nhất (96 nến 15M) phục vụ lọc Sideway nén
+        dataframe["range_24h"] = (dataframe["high"].rolling(96).max() - dataframe["low"].rolling(96).min()) / dataframe["close"]
 
         # 2. Các chỉ báo Exit
         dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
@@ -293,6 +325,20 @@ class StrategyMTFShortSniper(IStrategy):
         else:
             cond_capitulation_safe = pd.Series(True, index=dataframe.index)
 
+        # [ĐIỀU KIỆN 5e - BỘ LỌC CHỐNG SHORT BẪY SIDEWAY / NÉN CẠN KIỆT THANH KHOẢN (CHOP SQUEEZE DEFENSE)]
+        # Cấm Short khi thị trường đang rơi vào trạng thái nén nghẽn biên độ cực hẹp:
+        # Nhánh 1: BB Width 4H < 2.0% (biên độ nén nghẹt thở trên 4H)
+        # Nhánh 2: ADX 4H < 15 (thị trường 4H hoàn toàn mất xu hướng, sideway giằng co)
+        # Nhánh 3: BB Width 1D < 10.0% kèm biên độ 24H (15M) < 2.2% (sideway cạn kiệt thanh khoản khung ngày)
+        is_chop_squeeze = pd.Series(False, index=dataframe.index)
+        if "bb_width_4h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | (dataframe["bb_width_4h"] < 0.02)
+        if "adx_4h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < 15)
+        if "bb_width_1d" in dataframe.columns and "range_24h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
+        cond_sideway_safe = ~is_chop_squeeze
+
         # [ĐIỀU KIỆN 6 - CHỐNG SHORT ĐUỔI ĐÁY]
         cond_not_chasing = (
             ((dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (self.max_dist_ema21.value / 100.0)) &
@@ -310,6 +356,7 @@ class StrategyMTFShortSniper(IStrategy):
             cond_1d_aligned &
             cond_floor_safe &
             cond_capitulation_safe &
+            cond_sideway_safe &
             cond_not_chasing &
             (dataframe["volume"] > 0)
         )
