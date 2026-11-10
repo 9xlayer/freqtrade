@@ -22,7 +22,7 @@ services:
     container_name: freqtrade
     volumes:
       - "/data/freqtrade/user_data:/freqtrade/user_data"
-      - "./strategies:/freqtrade/strategies:ro"
+      - "/data/freqtrade/strategies:/freqtrade/strategies:ro"
     # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
     ports:
       - "8088:8080"
