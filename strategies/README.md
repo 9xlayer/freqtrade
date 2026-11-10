@@ -149,6 +149,7 @@ flowchart TD
       "short_max_dist_ema21": 1.0,
       "short_min_1h_rsi_exhaustion": 55.1,
       "short_min_rsi_entry": 27.8,
+      "min_adx_4h": 18.0,
       "long_candle_body_ratio_min": 0.7,
       "long_cooldown_candles": 42,
       "long_loc_tolerance_1h": 0.989,
