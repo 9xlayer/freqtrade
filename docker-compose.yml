@@ -21,11 +21,11 @@ services:
     restart: unless-stopped
     container_name: freqtrade
     volumes:
-      - "./user_data:/freqtrade/user_data"
+      - "/data/freqtrade/user_data:/freqtrade/user_data"
       - "./strategies:/freqtrade/strategies:ro"
-    # Expose api on port 8080 (Coolify Traefik reverse proxy sẽ định tuyến domain vào cổng này)
+    # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
     ports:
-      - "8080:8080"
+      - "8088:8080"
     # Lệnh khởi chạy bot tự động tải StrategyMTFSniper
     command: >
       trade
