@@ -1,0 +1,42 @@
+{
+  "strategy_name": "StrategyMTFShortSniper",
+  "params": {
+    "roi": {
+      "0": 1.0,
+      "720": 0.7
+    },
+    "stoploss": {
+      "stoploss": -0.28
+    },
+    "trailing": {
+      "trailing_stop": false,
+      "trailing_stop_positive": null,
+      "trailing_stop_positive_offset": 0.0,
+      "trailing_only_offset_is_reached": false
+    },
+    "max_open_trades": {
+      "max_open_trades": 3
+    },
+    "buy": {
+      "block_1d_bull_wave": true,
+      "block_4h_long_wave": true,
+      "candle_body_ratio_min": 0.62,
+      "cooldown_candles": 96,
+      "loc_tolerance_1h": 0.991,
+      "lookback_support": 17,
+      "max_dist_ema21": 1.0,
+      "min_1h_rsi_exhaustion": 55.1,
+      "min_rsi_entry": 27.8
+    },
+    "sell": {
+      "exit_oversold_lookback": 9,
+      "exit_rsi_ceiling": 44.3,
+      "exit_rsi_oversold": 23.0,
+      "use_v_bounce_exit": true,
+      "vb_min_lower_wick": 0.52,
+      "vb_min_vol_mult": 2.7
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-11-09 10:38:50.000000+00:00"
+}
