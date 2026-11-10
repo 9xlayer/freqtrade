@@ -87,12 +87,12 @@ class StrategyMTFShortSniper(IStrategy):
 
     # 15M Price Action
     lookback_support = IntParameter(12, 30, default=17, space="buy", optimize=True)
-    candle_body_ratio_min = DecimalParameter(0.45, 0.70, default=0.64, decimals=2, space="buy", optimize=True)
-    max_dist_ema21 = DecimalParameter(0.5, 2.5, default=0.9, decimals=1, space="buy", optimize=True)
+    candle_body_ratio_min = DecimalParameter(0.45, 0.70, default=0.62, decimals=2, space="buy", optimize=True)
+    max_dist_ema21 = DecimalParameter(0.5, 2.5, default=1.0, decimals=1, space="buy", optimize=True)
     min_rsi_entry = DecimalParameter(20.0, 35.0, default=27.8, decimals=1, space="buy", optimize=True)
 
     # Cooldown giữa các lần kích hoạt Entry (Số nến 15M)
-    cooldown_candles = IntParameter(48, 120, default=99, space="buy", optimize=True)  # 99 nến 15M ~ 24.75 Giờ
+    cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=True)  # 96 nến 15M = tròn 24.0 Giờ (chu kỳ Daily)
 
     # =========================================================================
     # 2. THAM SỐ CẤU HÌNH EXIT (CHỐT LỜI ĐÁY)

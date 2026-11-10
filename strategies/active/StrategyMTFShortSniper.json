@@ -20,11 +20,11 @@
     "buy": {
       "block_1d_bull_wave": true,
       "block_4h_long_wave": true,
-      "candle_body_ratio_min": 0.64,
-      "cooldown_candles": 99,
+      "candle_body_ratio_min": 0.62,
+      "cooldown_candles": 96,
       "loc_tolerance_1h": 0.991,
       "lookback_support": 17,
-      "max_dist_ema21": 0.9,
+      "max_dist_ema21": 1.0,
       "min_1h_rsi_exhaustion": 55.1,
       "min_rsi_entry": 27.8
     },
