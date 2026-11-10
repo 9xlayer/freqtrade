@@ -11,8 +11,12 @@ lookback_support      = input.int(17, "Số nến nền tích luỹ 15M (4.25 ti
                          tooltip="Quét nền tích luỹ 17 nến để bắt điểm phá vỡ chuẩn xác", group=grp_entry)
 candle_body_ratio_min = input.float(0.62, "Tỷ lệ thân nến tối thiểu (Candle Body Ratio)", minval=0.45, maxval=0.80, step=0.01, 
                          tooltip="Tỷ lệ thân nến tối thiểu so với toàn bộ chiều dài nến để xác nhận động lượng xả dứt khoát", group=grp_entry)
-max_dist_ema21        = input.float(1.0, "Khoảng cách tối đa tới EMA 21 (%)", minval=0.5, maxval=3.0, step=0.1, 
-                         tooltip="Chống Short đuổi: Nếu giá đã rơi xa EMA 21 quá 1.0% thì CẤM vào lệnh", group=grp_entry)
+auto_preset           = input.bool(true, "Tự động nhận diện cặp tiền (BTC / ETH)", group=grp_entry,
+                         tooltip="Tự động áp dụng: BTC (max_dist 1.0%, SL 2.5%) | ETH (max_dist 1.2%, SL 2.8%)")
+manual_max_dist       = input.float(1.0, "Khoảng cách tối đa tới EMA 21 (%) [Thủ công]", minval=0.5, maxval=3.0, step=0.1, 
+                         tooltip="Chống Short đuổi (dùng khi tắt tự động nhận diện)", group=grp_entry)
+is_eth_symbol         = str.contains(syminfo.ticker, "ETH")
+max_dist_ema21        = auto_preset ? (is_eth_symbol ? 1.2 : 1.0) : manual_max_dist
 min_rsi_entry         = input.float(27.8, "Ngưỡng sàn RSI 15M (Chống vét đáy)", minval=20.0, maxval=40.0, step=0.1, 
                          tooltip="Nếu RSI 15M < 27.8 thì đã xả vét đáy cạn kiệt, cấm Short", group=grp_entry)
 loc_tolerance_1h      = input.float(0.991, "Ngưỡng cản 1H EMA 50 (Chống Short đáy)", minval=0.98, maxval=1.02, step=0.001, 
@@ -33,8 +37,9 @@ grp_rr = "2. QUẢN LÝ VỐN & TỶ LỆ R:R CHUẨN 1:2"
 exit_mode             = input.string("Runner (Nuôi sóng lớn)", "Chế độ Chốt lời Vị thế", 
                          options=["Runner (Nuôi sóng lớn)", "Scalp (Thoát sớm râu đáy)"], group=grp_rr,
                          tooltip="Runner: Bỏ qua nhịp hồi nhỏ RSI 15M, để Trailing Stop bám đuôi ăn trọn sóng sập 5% - 10% như lệnh 22/10.\nScalp: Thoát sớm ngay khi RSI 15M hồi từ vùng quá bán.")
-max_sl_pct            = input.float(2.5, "Cắt lỗ tối đa SL (%)", minval=1.0, maxval=3.5, step=0.1, 
-                         tooltip="Chặn đứng mức lỗ tối đa -2.5%, tuyệt đối không gồng quá ngưỡng này", group=grp_rr)
+manual_max_sl         = input.float(2.5, "Cắt lỗ tối đa SL (%) [Thủ công]", minval=1.0, maxval=3.5, step=0.1, 
+                         tooltip="Chặn đứng mức lỗ tối đa (dùng khi tắt tự động nhận diện)", group=grp_rr)
+max_sl_pct            = auto_preset ? (is_eth_symbol ? 2.8 : 2.5) : manual_max_sl
 target_tp_pct         = input.float(7.0, "Mục tiêu Chốt lời Cố định TP (%)", minval=2.0, maxval=15.0, step=0.5, 
                          tooltip="Mục tiêu chốt lời thả ga (mặc định 7.0%, có thể nâng lên 10% để ăn trọn sóng sập lớn)", group=grp_rr)
 be_trigger_pct        = input.float(2.0, "Ngưỡng kéo Breakeven Hòa vốn (%)", minval=1.0, maxval=2.5, step=0.1, 
