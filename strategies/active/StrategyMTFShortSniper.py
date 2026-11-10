@@ -463,6 +463,57 @@ class StrategyMTFShortSniper(IStrategy):
 
         return dataframe
 
+    # =========================================================================
+    # 8b. CONFIRM TRADE ENTRY (CIRCUIT BREAKER & PORTFOLIO CORRELATION)
+    # =========================================================================
+    def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
+                            time_in_force: str, current_time: datetime, entry_tag: str | None,
+                            side: str, **kwargs) -> bool:
+        """
+        Quản trị rủi ro cấp cao (Institutional Risk Controls):
+        1. Streak Circuit Breaker: Nếu 3 lệnh gần nhất đều dính Stoploss thực sự (<-10% ROE),
+           tạm ngừng mở lệnh mới trong 3 ngày (72 giờ) để ngắt mạch thua theo chu kỳ thị trường xấu.
+        2. Portfolio Correlation Guard: Nếu đang có 1 vị thế mở của cặp tiền khác và vị thế đó
+           đang âm (> 0.8% trên chart / > -8% ROE với x10), cấm mở vị thế thứ 2 để chặn đứng rủi ro kép (dual-loss).
+        """
+        # --- LỚP 1: STREAK CIRCUIT BREAKER ---
+        closed_trades = Trade.get_trades_proxy(is_open=False)
+        if len(closed_trades) >= 3:
+            recent_trades = sorted(
+                closed_trades,
+                key=lambda t: t.close_date.timestamp() if t.close_date else 0.0,
+                reverse=True
+            )
+            consecutive_losses = 0
+            for t in recent_trades:
+                profit = t.close_profit if t.close_profit is not None else 0.0
+                if profit < -0.10:
+                    consecutive_losses += 1
+                elif profit > 0.0:
+                    break
+            
+            if consecutive_losses >= 3:
+                last_loss_date = recent_trades[0].close_date
+                if last_loss_date:
+                    # Ngừng giao dịch trong vòng 3 ngày (72 giờ) kể từ lệnh thua thứ 3
+                    if (current_time.timestamp() - last_loss_date.timestamp()) < (3 * 86400):
+                        return False
+
+        # --- LỚP 2: PORTFOLIO CORRELATION GUARD ---
+        open_trades = Trade.get_trades_proxy(is_open=True)
+        for ot in open_trades:
+            if ot.pair != pair:
+                df_other, _ = self.dp.get_analyzed_dataframe(ot.pair, self.timeframe)
+                if df_other is not None and not df_other.empty:
+                    curr_row = df_other.loc[df_other["date"] <= current_time]
+                    if not curr_row.empty:
+                        curr_price = curr_row.iloc[-1]["close"]
+                        profit_ratio = ot.calc_profit_ratio(curr_price)
+                        if profit_ratio < -0.08:  # Đang âm > 0.8% trên chart (-8% ROE với x10)
+                            return False
+
+        return True
+
 
     # =========================================================================
     # 9. CUSTOM EXIT (TREND INVALIDATION, TIMEOUT & PROFIT EXITS)
