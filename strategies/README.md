@@ -75,7 +75,7 @@ flowchart TD
 ### A. Nhánh SHORT Sniper (Bán Khống)
 1. **Khung 1D (Vĩ mô):** Không nằm trong sóng Siêu Bull Run (`close > ema_50 > ema_200 & rsi > 60`).
 2. **Khung 4H (Xác nhận):** Không có sóng hồi tăng ngược chiều (`is_bull_wave_4h == 0`).
-3. **Khung 1H (Vị thế):** Giá tiệm cận hoặc dưới EMA 50 1H (`loc_tolerance = 0.991`), RSI 1H trong 24h qua từng chạm vùng kiệt sức Bò ($\ge 55.1$).
+3. **Khung 1H (Vị thế):** Giá thỏa mãn `close_1h >= ema_50_1h * 0.991` (chỉ cấm Short khi giá đã thủng sâu hơn 0.9% dưới EMA 50 1H để tránh short đuổi đáy; giá tiệm cận hoặc nằm cao hơn EMA 50 1H vẫn được Short nếu nến 15M gãy hỗ trợ), RSI 1H trong 24h qua từng chạm vùng kiệt sức Bò ($\ge 55.1$).
 4. **Khung 15M (Kích hoạt):** Nến đỏ thân đặc ($\ge 62\%$ thân), đâm thủng Swing Low 17 nến, đóng dưới EMA 10 & EMA 21, cách EMA 21 không quá $1.0\%$.
 
 ### B. Nhánh LONG Sniper (Mua Bứt Phá)
@@ -97,13 +97,17 @@ flowchart TD
    * BTC: $-2.5\%$ chart (tương đương $-25\%$ ROE với đòn bẩy 10x).
    * ETH: $-2.8\%$ chart (tương đương $-28\%$ ROE với đòn bẩy 10x).
 2. **Khóa hòa vốn sớm (Breakeven Lock):**
-   * Khi lãi chưa thực hiện đạt **$+2.0\%$ chart** ($+20\%$ ROE), hệ thống tự động dời Stoploss về **$+0.2\%$ chart** ($+2\%$ ROE) để bảo vệ tuyệt đối vốn gốc.
+   * Khi lãi chưa thực hiện đạt **$+2.0\%$ chart** ($+20\%$ ROE), hệ thống tự động kích hoạt dời Stoploss về khóa hòa vốn bảo toàn vốn gốc theo từng chiều:
+     * **Nhánh SHORT:** Kéo Stoploss về **$+1.0\%$ chart (+10% ROE)** (`be_target = 0.10`).
+     * **Nhánh LONG:** Kéo Stoploss về **$+0.2\%$ chart (+2% ROE)** (`be_target = 0.02`).
 3. **Trailing Stop bám sát đỉnh/đáy:**
-   * Khi lãi đạt **$+3.5\%$ chart** ($+35\%$ ROE), hệ thống kích hoạt Trailing Stop bám sát khoảng cách **$2.0\%$ chart** từ mức giá cao nhất.
+   * Khi lãi đạt **$+3.5\%$ chart** ($+35\%$ ROE), hệ thống kích hoạt Trailing Stop bám sát khoảng cách **$2.0\%$ chart** từ mức giá cao nhất/thấp nhất (`return -0.20`).
 4. **Thắt chặt sau 24 giờ:**
-   * Nếu sau 24 giờ vị thế vẫn đang âm vốn, Stoploss được tự động siết về $-0.5\%$ chart để giảm thiểu thiệt hại kẹt vốn.
-5. **Chốt lời mục tiêu cố định (Take Profit):**
-   * Theo bảng ROI: Chốt $+10.0\%$ chart trong 12 giờ đầu, $+8.0\%$ sau 12 giờ, và $+7.0\%$ sau 24 giờ ($+70\%$ đến $+100\%$ ROE).
+   * Nếu sau 24 giờ vị thế vẫn đang âm vốn (`current_profit < 0`), Stoploss được tự động siết về $-0.5\%$ chart ($-5\%$ ROE) để giảm thiểu thiệt hại kẹt vốn.
+5. **Chốt lời mục tiêu cố định (Minimal ROI):**
+   * Bảng ROI thực tế trong code gồm 2 mức:
+     * **$0$ phút (từ đầu):** Chốt lời mục tiêu **$+10.0\%$ chart (+100% ROE)** (`"0": 1.0`).
+     * **$720$ phút (sau 12 giờ):** Hạ mục tiêu chốt lời xuống **$+7.0\%$ chart (+70% ROE)** (`"720": 0.7`).
 
 ---
 
@@ -164,7 +168,7 @@ flowchart TD
 ## 8. BÁO CÁO KIỂM TOÁN HIỆU NĂNG THỰC TẾ (2022 – 2026)
 
 * **Dữ liệu:** Toàn diện 5 năm lịch sử (01/01/2022 – 09/11/2026 = 1,773 ngày)
-* **Dữ liệu làm ấm:** Bổ sung nến từ 2020 để EMA 200D chuẩn xác 100%
+* **Dữ liệu làm ấm:** Dữ liệu Binance Futures được tải bù từ 01/01/2020. Cấu hình `startup_candle_count = 400` lùi 400 nến cho từng khung thời gian (khung 1D lùi 400 ngày đủ để làm ấm EMA 200 ngày, khung 15M lùi 400 nến ~ 4.16 ngày).
 * **Thiết lập:** Vốn 1,000 USDT | Kích thước lệnh 150 USDT | Đòn bẩy 10x
 
 ### Bảng Chỉ Số Thực Tế
@@ -199,10 +203,13 @@ flowchart TD
    * Với vốn $1,000\text{ USDT}$, nên đặt kích thước lệnh từ **$50 - 75\text{ USDT}$** (thay vì $150\text{ USDT}$) để nén Max Drawdown thực tế xuống dưới ngưỡng an toàn $10\% - 12\%$.
 
 ### Các Lệnh CLI Chuẩn
-```bash
-# 1. Chạy Backtest chuẩn với config đã đồng bộ:
-.venv/bin/freqtrade backtesting --config user_data/config.json --strategy StrategyMTFSniper --timerange 20220101-20261109
+> [!NOTE]
+> `user_data/config.json` đã được bổ sung `"strategy_path": "strategies/active"` để Freqtrade tự động tải chiến lược và thông số JSON. Bạn có thể chạy lệnh trực tiếp hoặc truyền tham số `--strategy-path` tường minh:
 
-# 2. Chạy Dry-Run (Paper Trading) thử nghiệm:
-.venv/bin/freqtrade trade --config user_data/config.json --strategy StrategyMTFSniper
+```bash
+# 1. Chạy Backtest chuẩn với đường dẫn chiến lược tường minh:
+.venv/bin/freqtrade backtesting --config user_data/config.json --strategy-path strategies/active --strategy StrategyMTFSniper --timerange 20220101-20261109
+
+# 2. Chạy Dry-Run (Paper Trading) trên sàn:
+.venv/bin/freqtrade trade --config user_data/config.json --strategy-path strategies/active --strategy StrategyMTFSniper
 ```

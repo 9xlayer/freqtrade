@@ -12,7 +12,7 @@
 | **Thời Điểm Backtest** | **2026-11-10 11:04:02 (+07:00)** / `2026-11-10 04:04:02 UTC` |
 | **Run ID Freqtrade** | `backtest-result-2026-11-10_04-04-02.zip` |
 | **Giai Đoạn Kiểm Thử** | **01/01/2022 00:00:00 – 09/11/2026 00:00:00** (Tổng cộng **1,773 ngày** ~ 4.85 năm) |
-| **Dữ Liệu Làm Ấm (Warmup)** | Bổ sung đầy đủ nến 1D, 4H, 1H từ **01/01/2020** (730 ngày làm ấm trước chu kỳ kiểm thử) |
+| **Dữ Liệu Làm Ấm (Warmup)** | Tải bù nến từ **01/01/2020**. Chiến lược cấu hình `startup_candle_count = 400` nến (lùi 400 ngày trên 1D giúp EMA 200D tính chuẩn xác từ ngày đầu 2022, lùi 400 nến 15M ~ 4.16 ngày) |
 | **Sàn Giao Dịch** | Binance Futures (`trading_mode: futures`, `margin_mode: isolated`) |
 | **Cặp Tiền Giao Dịch** | `BTC/USDT:USDT`, `ETH/USDT:USDT` (Cố định whitelist chuẩn) |
 | **Khung Thời Gian (Timeframes)** | `15m` (Thực thi vào lệnh) \| `1h` (Xác nhận cấu trúc) \| `1d` (Lọc xu hướng vĩ mô) |
