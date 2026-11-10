@@ -107,6 +107,7 @@ class StrategyMTFSniper(IStrategy):
 
     block_4h_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     block_1d_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
+    min_adx_4h = DecimalParameter(12.0, 25.0, default=18.0, decimals=1, space="buy", optimize=False)
 
     # =========================================================================
     # 2. KHUNG SIÊU VĨ MÔ NGÀY (INFORMATIVE 1D)
@@ -260,7 +261,7 @@ class StrategyMTFSniper(IStrategy):
         if "bb_width_4h" in dataframe.columns:
             is_chop_squeeze = is_chop_squeeze | (dataframe["bb_width_4h"] < 0.02)
         if "adx_4h" in dataframe.columns:
-            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < 15)
+            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < self.min_adx_4h.value)
         if "bb_width_1d" in dataframe.columns and "range_24h" in dataframe.columns:
             is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
         cond_sideway_safe = ~is_chop_squeeze

@@ -113,6 +113,7 @@ class StrategyMTFShortSniper(IStrategy):
 
     # Cooldown giữa các lần kích hoạt Entry (Số nến 15M)
     cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=True)  # 96 nến 15M = tròn 24.0 Giờ (chu kỳ Daily)
+    min_adx_4h = DecimalParameter(12.0, 25.0, default=18.0, decimals=1, space="buy", optimize=False)
 
     # =========================================================================
     # 2. THAM SỐ CẤU HÌNH EXIT (CHỐT LỜI ĐÁY)
@@ -358,7 +359,7 @@ class StrategyMTFShortSniper(IStrategy):
         if "bb_width_4h" in dataframe.columns:
             is_chop_squeeze = is_chop_squeeze | (dataframe["bb_width_4h"] < 0.02)
         if "adx_4h" in dataframe.columns:
-            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < 15)
+            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < self.min_adx_4h.value)
         if "bb_width_1d" in dataframe.columns and "range_24h" in dataframe.columns:
             is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
         cond_sideway_safe = ~is_chop_squeeze

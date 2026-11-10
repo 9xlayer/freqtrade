@@ -26,7 +26,8 @@
       "lookback_support": 17,
       "max_dist_ema21": 1.0,
       "min_1h_rsi_exhaustion": 55.1,
-      "min_rsi_entry": 27.8
+      "min_rsi_entry": 27.8,
+      "min_adx_4h": 18.0
     },
     "sell": {
       "exit_oversold_lookback": 9,
