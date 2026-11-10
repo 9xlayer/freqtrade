@@ -22,15 +22,15 @@ services:
     container_name: freqtrade
     volumes:
       - "./user_data:/freqtrade/user_data"
-    # Expose api on port 8080 (localhost only)
-    # Please read the https://www.freqtrade.io/en/stable/rest-api/ documentation
-    # for more information.
+      - "./strategies:/freqtrade/strategies:ro"
+    # Expose api on port 8080 (Coolify Traefik reverse proxy sẽ định tuyến domain vào cổng này)
     ports:
-      - "127.0.0.1:8080:8080"
-    # Default command used when running `docker compose up`
+      - "8080:8080"
+    # Lệnh khởi chạy bot tự động tải StrategyMTFSniper
     command: >
       trade
       --logfile /freqtrade/user_data/logs/freqtrade.log
       --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
       --config /freqtrade/user_data/config.json
-      --strategy SampleStrategy
+      --strategy-path /freqtrade/strategies/active
+      --strategy StrategyMTFSniper
