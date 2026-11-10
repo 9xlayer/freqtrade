@@ -48,7 +48,7 @@ class StrategyMTFShortSniper(IStrategy):
     can_short: bool = True
 
     # Số lượng nến khởi động để nạp dữ liệu quá khứ cho các chỉ báo đa khung (15m, 1h, 4h, 1d)
-    startup_candle_count: int = 2400
+    startup_candle_count: int = 400
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
@@ -277,7 +277,6 @@ class StrategyMTFShortSniper(IStrategy):
         dataframe["lower_wick"] = (dataframe[["open", "close"]].min(axis=1) - dataframe["low"]) / dataframe["total_range"]
         dataframe["delta_rsi"] = dataframe["rsi"] - dataframe["rsi"].shift(1)
 
-        self.custom_df = dataframe
         return dataframe
 
     # =========================================================================
@@ -520,16 +519,21 @@ class StrategyMTFShortSniper(IStrategy):
     # =========================================================================
     def custom_exit(self, pair: str, trade: Trade, current_time: datetime, current_rate: float,
                     current_profit: float, **kwargs):
-        df = getattr(self, "custom_df", None)
-        if df is None:
-            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if not self.dp:
+            return None
+        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if df is None or df.empty:
             return None
 
+        # Khớp nến chính xác theo thời gian hoặc lấy nến gần nhất phía trước
         row = df.loc[df["date"] == current_time]
         if row.empty:
-            return None
-        r = row.iloc[0]
+            past_rows = df.loc[df["date"] <= current_time]
+            if past_rows.empty:
+                return None
+            r = past_rows.iloc[-1]
+        else:
+            r = row.iloc[0]
 
         duration_minutes = (current_time - trade.open_date_utc).total_seconds() / 60
 
