@@ -172,6 +172,9 @@ class StrategyMTFSniper(IStrategy):
         bb_4h = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         dataframe["bb_width"] = (bb_4h["upperband"] - bb_4h["lowerband"]) / bb_4h["middleband"]
         dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+        # Direction of the 4h trend. ETH shorts need -DI > +DI; BTC does not.
+        dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
+        dataframe["minus_di"] = ta.MINUS_DI(dataframe, timeperiod=14)
         return dataframe
 
     # =========================================================================
@@ -247,6 +250,12 @@ class StrategyMTFSniper(IStrategy):
         cond_1h_short = cond_1h_short_pos & cond_1h_short_macd & cond_1h_short_exhaustion
 
         cond_4h_short = (dataframe["is_bull_wave_4h"].fillna(0) == 0) if self.block_4h_counter_wave.value else pd.Series(True, index=dataframe.index)
+        # ETH shorts taken while 4h +DI leads -DI lost in 4 of 5 years (2022-2026).
+        # The same gate removes profitable BTC shorts, so it stays ETH-only.
+        if pair.startswith("ETH") and "minus_di_4h" in dataframe.columns and "plus_di_4h" in dataframe.columns:
+            cond_4h_di_short = dataframe["minus_di_4h"] > dataframe["plus_di_4h"]
+        else:
+            cond_4h_di_short = pd.Series(True, index=dataframe.index)
         cond_macro_safe_short = (dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
         cond_1d_short = (dataframe["is_bull_wave_1d"].fillna(0) == 0) if (self.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns) else pd.Series(True, index=dataframe.index)
         cond_floor_safe = (((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035) if "swing_low_20d_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
@@ -268,7 +277,7 @@ class StrategyMTFSniper(IStrategy):
 
         raw_signal_short = (
             is_decisive_red & is_breakdown_major & is_below_emas &
-            cond_1h_short & cond_4h_short & cond_macro_safe_short & cond_1d_short &
+            cond_1h_short & cond_4h_short & cond_4h_di_short & cond_macro_safe_short & cond_1d_short &
             cond_floor_safe & cond_capitulation_safe & cond_sideway_safe &
             cond_not_chasing_short & (dataframe["volume"] > 0)
         )
