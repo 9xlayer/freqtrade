@@ -59,12 +59,32 @@ class StrategyMTFShortSniper(IStrategy):
         return 10.0
 
     # Cấu hình lệnh
-    stoploss = -0.25  # Cắt lỗ -25% ký quỹ (= -2.5% trên chart khi đòn bẩy x10)
+    stoploss = -0.28  # Trần cắt lỗ tối đa -28% ký quỹ (= -2.8% chart), Custom Stoploss sẽ siết về -25% (-2.5%) cho BTC
     use_custom_stoploss = True
     use_exit_signal = False  # Để lệnh có đủ không gian dao động hốt trọn +3.5% đến +4.5%
     exit_profit_only = False
     ignore_roi_if_entry_signal = False
     process_only_new_candles = True
+
+    # Bảng thông số đo ni đóng giày theo từng cặp tiền (Pair-specific Optimization)
+    custom_pair_params = {
+        "BTC/USDT:USDT": {
+            "stoploss": -0.25,          # SL -2.5% trên chart (-25% ký quỹ x10)
+            "max_dist_ema21": 1.0,      # Retest nến 1.0%
+            "candle_body_ratio_min": 0.62,
+        },
+        "ETH/USDT:USDT": {
+            "stoploss": -0.28,          # SL -2.8% trên chart (-28% ký quỹ x10)
+            "max_dist_ema21": 1.2,      # Co giãn 1.2% theo hệ số biến động của ETH
+            "candle_body_ratio_min": 0.62,
+        },
+    }
+
+    def _get_pair_params(self, pair: str) -> dict:
+        for k, v in self.custom_pair_params.items():
+            if k == pair or k.split(":")[0] == pair.split(":")[0]:
+                return v
+        return self.custom_pair_params.get("BTC/USDT:USDT", {})
 
     # ROI mục tiêu: Thả trần để nuôi lệnh ăn sóng lớn (Chỉ chốt cố định khi lãi cực lớn +100% ký quỹ = 10% chart)
     minimal_roi = {
@@ -264,11 +284,16 @@ class StrategyMTFShortSniper(IStrategy):
     # 7. QUY TRÌNH BẮT ĐIỂM VÀO LỆNH (POPULATE ENTRY TREND)
     # =========================================================================
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        pair = metadata.get("pair", "")
+        pair_cfg = self._get_pair_params(pair)
+        max_dist_val = pair_cfg.get("max_dist_ema21", self.max_dist_ema21.value)
+        body_ratio_val = pair_cfg.get("candle_body_ratio_min", self.candle_body_ratio_min.value)
+
         # [ĐIỀU KIỆN 1 - NẾN ĐỎ XẢ ÁP ĐẢO 15M]
         is_red = dataframe["close"] < dataframe["open"]
         is_decisive_red = (
             is_red &
-            ((dataframe["body"] / dataframe["total_range"]) >= self.candle_body_ratio_min.value) &
+            ((dataframe["body"] / dataframe["total_range"]) >= body_ratio_val) &
             (dataframe["body"] >= dataframe["atr"] * 0.5)
         )
 
@@ -341,7 +366,7 @@ class StrategyMTFShortSniper(IStrategy):
 
         # [ĐIỀU KIỆN 6 - CHỐNG SHORT ĐUỔI ĐÁY]
         cond_not_chasing = (
-            ((dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (self.max_dist_ema21.value / 100.0)) &
+            ((dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (max_dist_val / 100.0)) &
             (dataframe["rsi"] >= self.min_rsi_entry.value)
         )
 
@@ -510,5 +535,12 @@ class StrategyMTFShortSniper(IStrategy):
             sl_rel = stoploss_from_open(-0.05, current_profit, is_short=trade.is_short, leverage=10.0)
             return -max(sl_rel, 0.01)
 
-        # 4. Mặc định giữ mức Stoploss kỹ thuật (-25% ký quỹ = -2.5% chart)
+        # 4. Mặc định: Giữ mức Stoploss kỹ thuật theo từng cặp tiền
+        # BTC: -0.25 (-2.5% chart), ETH: -0.28 (-2.8% chart)
+        pair_cfg = self._get_pair_params(pair)
+        base_sl = pair_cfg.get("stoploss", self.stoploss)
+        if base_sl > self.stoploss:
+            sl_rel = stoploss_from_open(base_sl, current_profit, is_short=trade.is_short, leverage=10.0)
+            return -max(sl_rel, 0.01)
+
         return self.stoploss
