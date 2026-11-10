@@ -9,8 +9,10 @@ cooldown_hours        = input.int(24, "Giãn cách tối thiểu giữa 2 Entry 
                          tooltip="Chống bắn nhiều lệnh liên tiếp khi thị trường sập sâu", group=grp_entry)
 lookback_support      = input.int(17, "Số nến nền tích luỹ 15M (4.25 tiếng)", minval=8, maxval=30, 
                          tooltip="Quét nền tích luỹ 17 nến để bắt điểm phá vỡ chuẩn xác", group=grp_entry)
-max_dist_ema21        = input.float(0.9, "Khoảng cách tối đa tới EMA 21 (%)", minval=0.5, maxval=3.0, step=0.1, 
-                         tooltip="Chống Short đuổi: Nếu giá đã rơi xa EMA 21 quá 0.9% thì CẤM vào lệnh", group=grp_entry)
+candle_body_ratio_min = input.float(0.62, "Tỷ lệ thân nến tối thiểu (Candle Body Ratio)", minval=0.45, maxval=0.80, step=0.01, 
+                         tooltip="Tỷ lệ thân nến tối thiểu so với toàn bộ chiều dài nến để xác nhận động lượng xả dứt khoát", group=grp_entry)
+max_dist_ema21        = input.float(1.0, "Khoảng cách tối đa tới EMA 21 (%)", minval=0.5, maxval=3.0, step=0.1, 
+                         tooltip="Chống Short đuổi: Nếu giá đã rơi xa EMA 21 quá 1.0% thì CẤM vào lệnh", group=grp_entry)
 min_rsi_entry         = input.float(27.8, "Ngưỡng sàn RSI 15M (Chống vét đáy)", minval=20.0, maxval=40.0, step=0.1, 
                          tooltip="Nếu RSI 15M < 27.8 thì đã xả vét đáy cạn kiệt, cấm Short", group=grp_entry)
 loc_tolerance_1h      = input.float(0.991, "Ngưỡng cản 1H EMA 50 (Chống Short đáy)", minval=0.98, maxval=1.02, step=0.001, 
@@ -160,7 +162,7 @@ candle_body  = math.abs(close - open)
 is_red       = close < open
 
 // [ENTRY 1] Nến đỏ xả áp đảo
-bool is_decisive_red = is_red and ((candle_body / candle_total) >= 0.64) and (candle_body >= atr_val * 0.5)
+bool is_decisive_red = is_red and ((candle_body / candle_total) >= candle_body_ratio_min) and (candle_body >= atr_val * 0.5)
 
 // [ENTRY 2] Phá thủng đáy cụm nền ngắn hạn trước đó (Rút ngắn 12 nến để bắt sớm)
 float swing_low_major   = ta.lowest(low, lookback_support)[1]
