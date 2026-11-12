@@ -1,28 +1,14 @@
 ---
 services:
   freqtrade:
-    image: freqtradeorg/freqtrade:stable
-    # image: freqtradeorg/freqtrade:develop
-    # Use plotting image
-    # image: freqtradeorg/freqtrade:develop_plot
-    # # Enable GPU Image and GPU Resources (only relevant for freqAI)
-    # # Make sure to uncomment the whole deploy section
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    # Build step - only needed when additional dependencies are needed
-    # build:
-    #   context: .
-    #   dockerfile: "./docker/Dockerfile.custom"
+    build:
+      context: .
+      dockerfile: "./docker/Dockerfile.custom"
+    image: freqtradeorg/freqtrade:custom
     restart: unless-stopped
     container_name: freqtrade
     volumes:
       - "/data/freqtrade/user_data:/freqtrade/user_data"
-      - "/data/freqtrade/strategies:/freqtrade/strategies:ro"
     # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
     ports:
       - "8088:8080"
