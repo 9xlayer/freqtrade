@@ -4,6 +4,7 @@ Dockerfile
 .dockerignore
 .devcontainer/
 docker/
+!docker/Dockerfile.custom
 docs/
 # Needed by requirements-dev.txt (devcontainer build)
 !docs/requirements-docs.txt
