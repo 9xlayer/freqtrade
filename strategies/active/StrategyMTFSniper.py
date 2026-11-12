@@ -95,14 +95,14 @@ class StrategyMTFSniper(IStrategy):
     short_cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=False)
 
     # Long Confluence Parameters (Optimizable)
-    long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=0.989, decimals=3, space="buy", optimize=True)
-    long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=52.0, decimals=1, space="buy", optimize=True)
-    long_lookback_resistance = IntParameter(8, 25, default=15, space="buy", optimize=True)
-    long_candle_body_ratio_min = DecimalParameter(0.40, 0.70, default=0.55, decimals=2, space="buy", optimize=True)
-    long_max_dist_ema21 = DecimalParameter(1.0, 3.5, default=2.4, decimals=1, space="buy", optimize=True)
-    long_max_rsi_entry = DecimalParameter(65.0, 85.0, default=76.0, decimals=1, space="buy", optimize=True)
-    long_cooldown_candles = IntParameter(16, 96, default=32, space="buy", optimize=True)
-    long_overextended_dist_max = DecimalParameter(0.35, 1.00, default=0.65, decimals=2, space="buy", optimize=True)
+    long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=1.008, decimals=3, space="buy", optimize=True)
+    long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=62.4, decimals=1, space="buy", optimize=True)
+    long_lookback_resistance = IntParameter(8, 25, default=22, space="buy", optimize=True)
+    long_candle_body_ratio_min = DecimalParameter(0.40, 0.70, default=0.63, decimals=2, space="buy", optimize=True)
+    long_max_dist_ema21 = DecimalParameter(1.0, 3.5, default=3.3, decimals=1, space="buy", optimize=True)
+    long_max_rsi_entry = DecimalParameter(65.0, 85.0, default=67.6, decimals=1, space="buy", optimize=True)
+    long_cooldown_candles = IntParameter(16, 96, default=18, space="buy", optimize=True)
+    long_overextended_dist_max = DecimalParameter(0.35, 1.00, default=0.59, decimals=2, space="buy", optimize=True)
     long_block_1d_macd = BooleanParameter(default=True, space="buy", optimize=True)
 
     block_4h_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
@@ -294,7 +294,9 @@ class StrategyMTFSniper(IStrategy):
             ((dataframe["body"] / dataframe["total_range"]) >= l_body_ratio) &
             (dataframe["body"] >= dataframe["atr"] * 0.5)
         )
-        is_breakout_major = (dataframe["close"] > dataframe["swing_high"]) & (dataframe["close"].shift(1) <= dataframe["swing_high"])
+        l_lookback = self.long_lookback_resistance.value
+        swing_high = dataframe["high"].shift(1).rolling(l_lookback).max()
+        is_breakout_major = (dataframe["close"] > swing_high) & (dataframe["close"].shift(1) <= swing_high)
         is_above_emas = (dataframe["close"] > dataframe["ema_10"]) & (dataframe["close"] > dataframe["ema_21"])
 
         cond_1h_long_pos = dataframe["close_1h"] >= (dataframe["ema_50_1h"] * self.long_loc_tolerance_1h.value)
@@ -470,17 +472,34 @@ class StrategyMTFSniper(IStrategy):
                         current_rate: float, current_profit: float, **kwargs) -> float:
         """
         Quản trị Stoploss động:
-        1. Khi lãi >= +35% ROE: Kích hoạt Trailing Stop bám sát 20% ROE.
-        2. Khi lãi >= +20% ROE: Kéo Stoploss về Breakeven (+10% ROE cho Short, +2% ROE cho Long).
+        1. Nhánh Long: Áp dụng Trailing bậc thang mở rộng để gồng trend trong Bull Run:
+           - Lãi >= +20% ROE (+2% chart): Dời SL về Breakeven (+2% ROE / +0.2% chart).
+           - Lãi >= +35% ROE (+3.5% chart): Khóa chắc +10% ROE (+1.0% chart).
+           - Lãi >= +50% ROE (+5% chart): Khóa chắc +25% ROE (+2.5% chart).
+           - Lãi >= +80% ROE (+8% chart): Trailing bám cách đỉnh 30% ROE (3.0% chart).
+           - Lãi >= +120% ROE (+12% chart): Trailing siết chặt 20% ROE (2.0% chart).
+        2. Nhánh Short: Giữ nguyên logic bảo vệ gốc:
+           - Khi lãi >= +35% ROE: Kích hoạt Trailing Stop bám sát 20% ROE.
+           - Khi lãi >= +20% ROE: Kéo Stoploss về Breakeven (+10% ROE).
         3. Sau 24h nếu âm: Thắt chặt SL về -5% ROE (-0.5% chart).
         4. Mặc định: Giữ SL kỹ thuật theo cặp (BTC: -25% ROE, ETH: -28% ROE).
         """
-        if current_profit >= 0.35:
-            return -0.20
-
-        if current_profit >= 0.20:
-            be_target = 0.10 if trade.is_short else 0.02
-            return -stoploss_from_open(be_target, current_profit, is_short=trade.is_short, leverage=10.0)
+        if not trade.is_short:
+            if current_profit >= 1.20:
+                return -0.20
+            if current_profit >= 0.80:
+                return -0.30
+            if current_profit >= 0.50:
+                return -stoploss_from_open(0.25, current_profit, is_short=False, leverage=10.0)
+            if current_profit >= 0.35:
+                return -stoploss_from_open(0.10, current_profit, is_short=False, leverage=10.0)
+            if current_profit >= 0.20:
+                return -stoploss_from_open(0.02, current_profit, is_short=False, leverage=10.0)
+        else:
+            if current_profit >= 0.35:
+                return -0.20
+            if current_profit >= 0.20:
+                return -stoploss_from_open(0.10, current_profit, is_short=True, leverage=10.0)
 
         duration_hours = (current_time - trade.open_date_utc).total_seconds() / 3600
         if duration_hours >= 24 and current_profit < 0.0:
