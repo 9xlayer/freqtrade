@@ -39,23 +39,66 @@ class StrategyMTFSniper(IStrategy):
     INTERFACE_VERSION = 3
     strategy_version = "2.3.0"
 
-    def bot_start(self, **kwargs) -> None:
-        logger.info(f"StrategyMTFSniper v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition) started.")
-        api_key = os.environ.get("JEV_API_KEY", "")
-        if api_key:
-            masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-            logger.info(f"[JEV AI] Engine initialized successfully! API Key detected ({masked}). Target URL: https://api.typesafe.ai/v1/systemone")
-        else:
-            logger.warning("[JEV AI] WARNING: JEV_API_KEY is not set in environment! Please configure JEV_API_KEY in Coolify.")
-
-    def version(self) -> str | None:
-        return f"v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition)"
-
     timeframe = "15m"
     can_short: bool = True
     startup_candle_count: int = 400
+
+    # Default fallback flags (sẽ được ghi đè tự động bởi config.json hoặc biến môi trường)
     enable_jev_decision: bool = True
     enable_jev_hunter: bool = True
+    enable_dynamic_sizing: bool = True
+
+    def __init__(self, config: dict) -> None:
+        super().__init__(config)
+        self._load_external_config()
+
+    def _load_external_config(self) -> None:
+        """
+        Nạp cấu hình từ bên ngoài theo thứ tự ưu tiên:
+        1. Mục 'strategy_params' trong config.json
+        2. Biến môi trường (.env / Docker Compose / Coolify)
+        3. Giá trị mặc định (Fallback)
+        """
+        strat_cfg = self.config.get("strategy_params", {}) if hasattr(self, "config") and self.config else {}
+
+        # 1. JEV AI Trajectory Gatekeeper
+        if "enable_jev_decision" in strat_cfg:
+            self.enable_jev_decision = bool(strat_cfg["enable_jev_decision"])
+        else:
+            self.enable_jev_decision = os.environ.get("ENABLE_JEV_DECISION", "true").lower() in ("true", "1", "yes")
+
+        # 2. JEV AI Momentum & Waterfall Hunter
+        if "enable_jev_hunter" in strat_cfg:
+            self.enable_jev_hunter = bool(strat_cfg["enable_jev_hunter"])
+        else:
+            self.enable_jev_hunter = os.environ.get("ENABLE_JEV_HUNTER", "true").lower() in ("true", "1", "yes")
+
+        # 3. Dynamic Stake Sizing (Dao động vốn theo điểm tín hiệu A+, B+, C)
+        if "enable_dynamic_sizing" in strat_cfg:
+            self.enable_dynamic_sizing = bool(strat_cfg["enable_dynamic_sizing"])
+        else:
+            self.enable_dynamic_sizing = os.environ.get("ENABLE_DYNAMIC_SIZING", "true").lower() in ("true", "1", "yes")
+
+    def bot_start(self, **kwargs) -> None:
+        self._load_external_config()
+        logger.info(
+            f"StrategyMTFSniper v{self.strategy_version} started. "
+            f"Active Profile: JEV Decision={self.enable_jev_decision}, "
+            f"JEV Hunter={self.enable_jev_hunter}, "
+            f"Dynamic Sizing={self.enable_dynamic_sizing}"
+        )
+        api_key = os.environ.get("JEV_API_KEY", "")
+        if self.enable_jev_decision or self.enable_jev_hunter:
+            if api_key:
+                masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+                logger.info(f"[JEV AI] Engine initialized successfully! API Key detected ({masked}). Target URL: https://api.typesafe.ai/v1/systemone")
+            else:
+                logger.warning("[JEV AI] WARNING: JEV_API_KEY is not set in environment! Gatekeeper/Hunter will operate in mock/cached mode.")
+        else:
+            logger.info("[JEV AI] JEV AI features are DISABLED via configuration. Operating in pure quantitative technical mode.")
+
+    def version(self) -> str | None:
+        return f"v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition)"
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
@@ -67,24 +110,31 @@ class StrategyMTFSniper(IStrategy):
                             leverage: float, entry_tag: str | None, side: str,
                             **kwargs) -> float:
         """
-        AI Agent Lens Dynamic Sizing (Target Average ~100 USDT):
-        - Long A80plus: Kèo Long bứt phá A+, cấp vốn lớn 115 USDT.
-        - Short B65plus: Kèo Short nhịp ổn định nhất, cấp vốn 105 USDT.
-        - Short A80plus: Kèo Short bão volume cực đại, cấp vốn 90 USDT.
-        - Short C_sub65: Kèo Short điểm vừa, cấp 80 USDT.
+        AI Agent Lens Dynamic Sizing:
+        - Nếu enable_dynamic_sizing = True:
+            * Kèo A+ (Long A80+ / Jev Hunter): 1.15x (~400$ khi base 350$)
+            * Kèo B+ (Short B65+): 1.05x (~370$ khi base 350$)
+            * Kèo A  (Short A80+): 0.90x (~315$ khi base 350$)
+            * Kèo C  (Short C_sub65): 0.80x (~280$ khi base 350$)
+        - Nếu enable_dynamic_sizing = False:
+            * Cấp vốn cố định (Flat) theo đúng proposed_stake từ config.
         """
+        if not getattr(self, "enable_dynamic_sizing", True):
+            return min(proposed_stake, max_stake)
+
+        multiplier = 1.0
         if entry_tag:
-            if "jev_hunter" in entry_tag:
-                return min(115.0, max_stake)
-            elif "long_A80plus" in entry_tag:
-                return min(115.0, max_stake)
+            if "jev_hunter" in entry_tag or "long_A80plus" in entry_tag:
+                multiplier = 1.15
             elif "short_B65plus" in entry_tag:
-                return min(105.0, max_stake)
+                multiplier = 1.05
             elif "short_A80plus" in entry_tag:
-                return min(90.0, max_stake)
+                multiplier = 0.90
             elif "short_C_sub65" in entry_tag:
-                return min(80.0, max_stake)
-        return min(proposed_stake, max_stake)
+                multiplier = 0.80
+
+        target_stake = proposed_stake * multiplier
+        return min(target_stake, max_stake)
 
     stoploss = -0.28
     use_custom_stoploss = True

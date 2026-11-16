@@ -9,6 +9,9 @@ services:
     container_name: freqtrade
     environment:
       - JEV_API_KEY=${JEV_API_KEY}
+      - ENABLE_JEV_DECISION=${ENABLE_JEV_DECISION:-true}
+      - ENABLE_JEV_HUNTER=${ENABLE_JEV_HUNTER:-true}
+      - ENABLE_DYNAMIC_SIZING=${ENABLE_DYNAMIC_SIZING:-true}
       - HTTPS_PROXY=${HTTPS_PROXY:-http://192.168.68.100:40002}
       - HTTP_PROXY=${HTTP_PROXY:-http://192.168.68.100:40002}
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,binance.com,api.binance.com,fapi.binance.com,typesafe.ai,api.typesafe.ai}
