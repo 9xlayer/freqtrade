@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 from datetime import datetime
+import logging
 from typing import Optional
 from freqtrade.strategy import (
     IStrategy,
@@ -18,28 +19,27 @@ except ImportError:
     import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.persistence import Trade
 
+logger = logging.getLogger(__name__)
+
 
 class StrategyMTFSniper(IStrategy):
 
     """
-    CHIẾN LƯỢC TOÀN DIỆN ĐA CHIỀU: MTF SNIPER (LONG + SHORT)
-    =======================================================
-    Chiến lược giao dịch định lượng hai chiều (All-Weather Quant Strategy)
-    tích hợp cả Short Sniper và Long Sniper trên đa khung thời gian:
-    1. ĐIỂM VÀO LỆNH (15M / 1H / 4H / 1D Triad Confluence):
-       - Short: Thủng Hỗ trợ 17 nến, nến đỏ đặc áp đảo, 1H Bò kiệt sức, 4H & 1D Bearish.
-       - Long:  Vượt Kháng cự 17 nến, nến xanh đặc áp đảo, 1H Gấu kiệt sức, 4H & 1D Bullish.
-       - Retest EMA 21: Không Short/Long đuổi, vào lệnh tại điểm hồi quy an toàn.
-       - Cooldown 24h: Ngăn chặn giao dịch trả thù và bẫy rung lắc.
-    2. QUẢN TRỊ VỊ THẾ & RỦI RO (Institutional Risk Controls):
-       - Hard SL: BTC -2.5%, ETH -2.8% (x10 leverage = -25% to -28% ROE).
-       - Khóa hòa vốn Breakeven: Tại +2.0% kéo SL về bảo toàn vốn (+0.2% chart cho Long / +1.0% cho Short).
-       - Trailing Stop: Kích hoạt tại +3.5%, bám sát 2.0% từ đỉnh/đáy.
-       - Streak Circuit Breaker: 3 lệnh thua liên tiếp -> Tạm dừng 72 giờ.
-       - Portfolio Correlation Guard: Không mở vị thế thứ 2 nếu vị thế 1 đang âm > 0.8% chart.
+    CHIẾN LƯỢC TOÀN DIỆN ĐA CHIỀU: MTF SNIPER LENS (LONG + SHORT)
+    ============================================================
+    Chiến lược giao dịch định lượng hai chiều kết hợp giữa:
+    1. MTF Sniper Architecture (15M / 1H / 4H / 1D Confluence)
+    2. AI Agent Lens Feature Engineering:
+       - ATR Percentile Filter: Chặn mở lệnh khi ATR ở phân vị cực đại (>= 90%) để tránh quét râu thanh lý.
+       - Candle Anatomy Rejection Filter: Lọc bẫy nến từ chối giá (râu dài chống lại hướng bứt phá).
+       - PDH Ceiling Guard: Chặn mua khi áp sát trần đỉnh ngày hôm trước (tránh fakeout).
     """
 
     INTERFACE_VERSION = 3
+    strategy_version = "2.2.0"
+
+    def bot_start(self, **kwargs) -> None:
+        logger.info(f"StrategyMTFSniper v{self.strategy_version} (AI Agent Lens Edition) started.")
 
     timeframe = "15m"
     can_short: bool = True
@@ -49,6 +49,28 @@ class StrategyMTFSniper(IStrategy):
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
                  side: str, **kwargs) -> float:
         return 10.0
+
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                            proposed_stake: float, min_stake: float | None, max_stake: float,
+                            leverage: float, entry_tag: str | None, side: str,
+                            **kwargs) -> float:
+        """
+        AI Agent Lens Dynamic Sizing (Target Average ~100 USDT):
+        - Long A80plus: Kèo Long bứt phá A+, cấp vốn lớn 115 USDT.
+        - Short B65plus: Kèo Short nhịp ổn định nhất, cấp vốn 105 USDT.
+        - Short A80plus: Kèo Short bão volume cực đại, cấp vốn 90 USDT.
+        - Short C_sub65: Kèo Short điểm vừa, cấp 80 USDT.
+        """
+        if entry_tag:
+            if "long_A80plus" in entry_tag:
+                return min(115.0, max_stake)
+            elif "short_B65plus" in entry_tag:
+                return min(105.0, max_stake)
+            elif "short_A80plus" in entry_tag:
+                return min(90.0, max_stake)
+            elif "short_C_sub65" in entry_tag:
+                return min(80.0, max_stake)
+        return min(proposed_stake, max_stake)
 
     stoploss = -0.28
     use_custom_stoploss = True
@@ -85,7 +107,7 @@ class StrategyMTFSniper(IStrategy):
     # =========================================================================
     # 1. THAM SỐ CẤU HÌNH VÀO LỆNH (HYPEROPT SẴN SÀNG)
     # =========================================================================
-    # Short Confluence Parameters (Pristine Proven Values)
+    # Short Confluence Parameters
     short_loc_tolerance_1h = DecimalParameter(0.990, 1.005, default=0.991, decimals=3, space="buy", optimize=False)
     short_min_1h_rsi_exhaustion = DecimalParameter(52.0, 70.0, default=55.1, decimals=1, space="buy", optimize=False)
     short_lookback_support = IntParameter(12, 30, default=17, space="buy", optimize=False)
@@ -94,7 +116,7 @@ class StrategyMTFSniper(IStrategy):
     short_min_rsi_entry = DecimalParameter(20.0, 35.0, default=27.8, decimals=1, space="buy", optimize=False)
     short_cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=False)
 
-    # Long Confluence Parameters (Optimizable)
+    # Long Confluence Parameters
     long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=1.008, decimals=3, space="buy", optimize=True)
     long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=62.4, decimals=1, space="buy", optimize=True)
     long_lookback_resistance = IntParameter(8, 25, default=22, space="buy", optimize=True)
@@ -108,6 +130,15 @@ class StrategyMTFSniper(IStrategy):
     block_4h_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     block_1d_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     min_adx_4h = DecimalParameter(12.0, 25.0, default=18.0, decimals=1, space="buy", optimize=False)
+
+    # --- AI AGENT LENS ENHANCEMENTS ---
+    block_high_vol = BooleanParameter(default=False, space="buy", optimize=False)
+    high_vol_pct = DecimalParameter(85.0, 95.0, default=90.0, decimals=1, space="buy", optimize=False)
+    filter_wick_rejection = BooleanParameter(default=True, space="buy", optimize=False)
+    max_rejection_wick_ratio = DecimalParameter(0.20, 0.45, default=0.35, decimals=2, space="buy", optimize=False)
+    min_close_pos_ratio_long = DecimalParameter(0.55, 0.75, default=0.65, decimals=2, space="buy", optimize=False)
+    max_close_pos_ratio_short = DecimalParameter(0.25, 0.45, default=0.35, decimals=2, space="buy", optimize=False)
+    filter_pdh_ceiling = BooleanParameter(default=False, space="buy", optimize=False)
 
     # =========================================================================
     # 2. KHUNG SIÊU VĨ MÔ NGÀY (INFORMATIVE 1D)
@@ -148,13 +179,17 @@ class StrategyMTFSniper(IStrategy):
 
         # Vùng Đáy Kiệt sức Chu kỳ (< -28% so với EMA 200)
         dataframe["is_deep_capitulation"] = ((dataframe["close"] - dataframe["ema_200"]) / dataframe["ema_200"]) < -0.28
-        # Khoảng cách so với EMA 200 ngày (cho Long & Short đánh giá quá nhiệt)
+        # Khoảng cách so với EMA 200 ngày
         dataframe["dist_from_ema_200"] = (dataframe["close"] - dataframe["ema_200"]) / dataframe["ema_200"]
         dataframe["is_overextended_top"] = dataframe["dist_from_ema_200"] > 0.35
 
         # Bollinger Bands Width 1D
         bb_1d = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         dataframe["bb_width"] = (bb_1d["upperband"] - bb_1d["lowerband"]) / bb_1d["middleband"]
+
+        # AI Agent Lens: Previous Day High / Low
+        dataframe["pdh"] = dataframe["high"]
+        dataframe["pdl"] = dataframe["low"]
         return dataframe
 
     # =========================================================================
@@ -172,7 +207,6 @@ class StrategyMTFSniper(IStrategy):
         bb_4h = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         dataframe["bb_width"] = (bb_4h["upperband"] - bb_4h["lowerband"]) / bb_4h["middleband"]
         dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
-        # Direction of the 4h trend. ETH shorts need -DI > +DI; BTC does not.
         dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
         dataframe["minus_di"] = ta.MINUS_DI(dataframe, timeperiod=14)
         return dataframe
@@ -192,7 +226,7 @@ class StrategyMTFSniper(IStrategy):
         return dataframe
 
     # =========================================================================
-    # 5. KHUNG CƠ SỞ 15M (TRIGGER ENTRY)
+    # 5. KHUNG CƠ SỞ 15M (TRIGGER ENTRY & LENS ANATOMY)
     # =========================================================================
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["ema_10"] = ta.EMA(dataframe, timeperiod=10)
@@ -206,6 +240,85 @@ class StrategyMTFSniper(IStrategy):
 
         dataframe["body"] = (dataframe["close"] - dataframe["open"]).abs()
         dataframe["total_range"] = (dataframe["high"] - dataframe["low"]).clip(lower=0.0001)
+
+        # AI Agent Lens: Phân vị biến động ATR trong 100 nến
+        dataframe["atr_pct"] = dataframe["atr"].rolling(100).rank(pct=True) * 100
+
+        # AI Agent Lens: DMI & ADX trên khung 15m
+        dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+        dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
+        dataframe["minus_di"] = ta.MINUS_DI(dataframe, timeperiod=14)
+
+        # AI Agent Lens: Khối lượng tương đối (Relative Volume)
+        dataframe["vol_sma"] = ta.SMA(dataframe["volume"], timeperiod=20)
+        dataframe["rel_vol"] = dataframe["volume"] / dataframe["vol_sma"].replace(0, np.nan).fillna(1.0)
+
+        # AI Agent Lens: Giải phẫu nến vi mô (Candle Anatomy)
+        dataframe["upper_wick"] = dataframe["high"] - dataframe[["open", "close"]].max(axis=1)
+        dataframe["lower_wick"] = dataframe[["open", "close"]].min(axis=1) - dataframe["low"]
+        dataframe["upper_wick_ratio"] = dataframe["upper_wick"] / dataframe["total_range"]
+        dataframe["lower_wick_ratio"] = dataframe["lower_wick"] / dataframe["total_range"]
+        dataframe["close_pos_ratio"] = (dataframe["close"] - dataframe["low"]) / dataframe["total_range"]
+
+        # AI Agent Lens: Hệ thống chấm điểm hợp lưu (Confluence Score 0 - 100)
+        # 1. Trend (20 pts)
+        l_trend = (
+            (dataframe["ema_10"] > dataframe["ema_21"]).astype(int) * 7 +
+            (dataframe["ema_21"] > dataframe["ema_200"]).astype(int) * 7 +
+            (dataframe["close"] > dataframe["ema_10"]).astype(int) * 6
+        )
+        s_trend = (
+            (dataframe["ema_10"] < dataframe["ema_21"]).astype(int) * 7 +
+            (dataframe["ema_21"] < dataframe["ema_200"]).astype(int) * 7 +
+            (dataframe["close"] < dataframe["ema_10"]).astype(int) * 6
+        )
+
+        # 2. Momentum (20 pts)
+        l_mom = (
+            ((dataframe["rsi"] > 50) & (dataframe["rsi"] < 75)).astype(int) * 10 +
+            ((dataframe["rsi"] >= 75)).astype(int) * 4 +
+            (dataframe["macdhist"] > 0).astype(int) * 5 +
+            (dataframe["macdhist"] > dataframe["macdhist"].shift(1)).astype(int) * 5
+        )
+        s_mom = (
+            ((dataframe["rsi"] < 50) & (dataframe["rsi"] > 25)).astype(int) * 10 +
+            ((dataframe["rsi"] <= 25)).astype(int) * 4 +
+            (dataframe["macdhist"] < 0).astype(int) * 5 +
+            (dataframe["macdhist"] < dataframe["macdhist"].shift(1)).astype(int) * 5
+        )
+
+        # 3. Strength (20 pts)
+        l_str = (
+            (dataframe["plus_di"] > dataframe["minus_di"]).astype(int) * 10 +
+            ((dataframe["plus_di"] > dataframe["minus_di"]) & (dataframe["adx"] >= 20)).astype(int) * 10
+        )
+        s_str = (
+            (dataframe["minus_di"] > dataframe["plus_di"]).astype(int) * 10 +
+            ((dataframe["minus_di"] > dataframe["plus_di"]) & (dataframe["adx"] >= 20)).astype(int) * 10
+        )
+
+        # 4. Volume (20 pts)
+        is_green = dataframe["close"] > dataframe["open"]
+        is_red = dataframe["close"] < dataframe["open"]
+        l_vol = (
+            (is_green & (dataframe["rel_vol"] >= 1.5)).astype(int) * 20 +
+            (is_green & (dataframe["rel_vol"] >= 1.0) & (dataframe["rel_vol"] < 1.5)).astype(int) * 12 +
+            (is_green & (dataframe["rel_vol"] < 1.0)).astype(int) * 6
+        )
+        s_vol = (
+            (is_red & (dataframe["rel_vol"] >= 1.5)).astype(int) * 20 +
+            (is_red & (dataframe["rel_vol"] >= 1.0) & (dataframe["rel_vol"] < 1.5)).astype(int) * 12 +
+            (is_red & (dataframe["rel_vol"] < 1.0)).astype(int) * 6
+        )
+
+        # 5. HTF Bias (20 pts)
+        l_htf = ((dataframe.get("macdhist_4h", pd.Series(0, index=dataframe.index)) > 0).astype(int) * 10 +
+                 (dataframe["close"] > dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10)
+        s_htf = ((dataframe.get("is_bear_wave_4h", pd.Series(0, index=dataframe.index)) == 1).astype(int) * 10 +
+                 (dataframe["close"] < dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10)
+
+        dataframe["long_score"] = l_trend + l_mom + l_str + l_vol + l_htf
+        dataframe["short_score"] = s_trend + s_mom + s_str + s_vol + s_htf
 
         # Hỗ trợ cho Short
         s_lookback = self.short_lookback_support.value
@@ -230,6 +343,11 @@ class StrategyMTFSniper(IStrategy):
         pair_cfg = self._get_pair_params(pair)
 
         # ---------------------------------------------------------------------
+        # BỘ LỌC CHUNG TỪ AI AGENT LENS: HIGH VOLATILITY REGIME
+        # ---------------------------------------------------------------------
+        cond_volatility_safe = (dataframe["atr_pct"] < self.high_vol_pct.value) if self.block_high_vol.value else pd.Series(True, index=dataframe.index)
+
+        # ---------------------------------------------------------------------
         # A. NHÁNH SHORT SNIPER
         # ---------------------------------------------------------------------
         s_max_dist = pair_cfg.get("short_max_dist_ema21", self.short_max_dist_ema21.value)
@@ -250,8 +368,6 @@ class StrategyMTFSniper(IStrategy):
         cond_1h_short = cond_1h_short_pos & cond_1h_short_macd & cond_1h_short_exhaustion
 
         cond_4h_short = (dataframe["is_bull_wave_4h"].fillna(0) == 0) if self.block_4h_counter_wave.value else pd.Series(True, index=dataframe.index)
-        # ETH shorts taken while 4h +DI leads -DI lost in 4 of 5 years (2022-2026).
-        # The same gate removes profitable BTC shorts, so it stays ETH-only.
         if pair.startswith("ETH") and "minus_di_4h" in dataframe.columns and "plus_di_4h" in dataframe.columns:
             cond_4h_di_short = dataframe["minus_di_4h"] > dataframe["plus_di_4h"]
         else:
@@ -275,15 +391,28 @@ class StrategyMTFSniper(IStrategy):
             is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
         cond_sideway_safe = ~is_chop_squeeze
 
+        # AI Agent Lens: Wick & Close Position filter for Short
+        cond_candle_shape_short = (
+            (dataframe["lower_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
+            (dataframe["close_pos_ratio"] <= self.max_close_pos_ratio_short.value)
+        ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
+
+        # AI Agent Lens: Score Gating (Dựa trên bằng chứng định lượng)
+        # - Long cần sức mạnh bứt phá và hợp lưu tuyệt đối A+ (Score >= 80)
+        # - Short cho phép đầy đủ dải điểm để không bỏ lỡ các đợt sập mạnh năm 2026
+        cond_score_long = dataframe["long_score"] >= 80
+        cond_score_short = pd.Series(True, index=dataframe.index)
+
         raw_signal_short = (
             is_decisive_red & is_breakdown_major & is_below_emas &
             cond_1h_short & cond_4h_short & cond_4h_di_short & cond_macro_safe_short & cond_1d_short &
             cond_floor_safe & cond_capitulation_safe & cond_sideway_safe &
-            cond_not_chasing_short & (dataframe["volume"] > 0)
+            cond_not_chasing_short & cond_volatility_safe & cond_candle_shape_short &
+            cond_score_short & (dataframe["volume"] > 0)
         )
 
         # ---------------------------------------------------------------------
-        # B. NHÁNH LONG SNIPER (ĐẢO NGƯỢC CHUẨN XÁC)
+        # B. NHÁNH LONG SNIPER
         # ---------------------------------------------------------------------
         l_max_dist = pair_cfg.get("long_max_dist_ema21", self.long_max_dist_ema21.value)
         l_body_ratio = pair_cfg.get("long_candle_body_ratio_min", self.long_candle_body_ratio_min.value)
@@ -321,11 +450,25 @@ class StrategyMTFSniper(IStrategy):
             (dataframe["rsi"] <= self.long_max_rsi_entry.value)
         )
 
+        # AI Agent Lens: Wick & Close Position filter for Long
+        cond_candle_shape_long = (
+            (dataframe["upper_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
+            (dataframe["close_pos_ratio"] >= self.min_close_pos_ratio_long.value)
+        ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
+
+        # AI Agent Lens: PDH Trap Filter (Tránh mua ngay sát dưới cản đỉnh ngày hôm trước)
+        pdh_col = "pdh_1d" if "pdh_1d" in dataframe.columns else ("high_1d" if "high_1d" in dataframe.columns else None)
+        if pdh_col and self.filter_pdh_ceiling.value:
+            cond_pdh_safe_long = ~((dataframe["close"] < dataframe[pdh_col]) & (dataframe["close"] >= dataframe[pdh_col] * 0.997))
+        else:
+            cond_pdh_safe_long = pd.Series(True, index=dataframe.index)
+
         raw_signal_long = (
             is_decisive_green & is_breakout_major & is_above_emas &
             cond_1h_long & cond_4h_long & cond_1d_long & cond_macro_safe_long &
             cond_overextended_safe & cond_sideway_safe &
-            cond_not_chasing_long & (dataframe["volume"] > 0)
+            cond_not_chasing_long & cond_volatility_safe & cond_candle_shape_long & cond_pdh_safe_long &
+            cond_score_long & (dataframe["volume"] > 0)
         )
 
         # ---------------------------------------------------------------------
@@ -347,11 +490,17 @@ class StrategyMTFSniper(IStrategy):
                 entry_mask_long.loc[idx] = True
                 last_long_idx = idx
 
-        dataframe.loc[entry_mask_short, "enter_tag"] = "entry_short_mtf_sniper"
         dataframe.loc[entry_mask_short, "enter_short"] = 1
+        for idx in dataframe.index[entry_mask_short]:
+            sc = dataframe.loc[idx, "short_score"]
+            tier = "A80plus" if sc >= 80 else ("B65plus" if sc >= 65 else "C_sub65")
+            dataframe.loc[idx, "enter_tag"] = f"short_{tier}"
 
-        dataframe.loc[entry_mask_long, "enter_tag"] = "entry_long_mtf_sniper"
         dataframe.loc[entry_mask_long, "enter_long"] = 1
+        for idx in dataframe.index[entry_mask_long]:
+            sc = dataframe.loc[idx, "long_score"]
+            tier = "A80plus" if sc >= 80 else ("B65plus" if sc >= 65 else "C_sub65")
+            dataframe.loc[idx, "enter_tag"] = f"long_{tier}"
 
         return dataframe
 
@@ -394,12 +543,10 @@ class StrategyMTFSniper(IStrategy):
         # --- LỚP 2: PORTFOLIO CORRELATION GUARD ---
         open_trades = Trade.get_trades_proxy(is_open=True)
         for ot in open_trades:
-            # a. Không mở 2 lệnh ngược chiều nhau trên cùng danh mục (đang Long BTC thì không Short ETH)
             ot_side = "short" if ot.is_short else "long"
             if ot_side != side:
                 return False
 
-            # b. Nếu lệnh cặp khác đang âm > 0.8% trên chart (-8% ROE với x10), cấm mở lệnh thứ 2
             if ot.pair != pair:
                 df_other, _ = self.dp.get_analyzed_dataframe(ot.pair, self.timeframe)
                 if df_other is not None and not df_other.empty:
@@ -446,7 +593,6 @@ class StrategyMTFSniper(IStrategy):
                 if cond_structure_broken or cond_htf_reversal:
                     return "exit_short_trend_invalidated"
             else:
-                # Long: cắt nếu gãy đáy swing low 12 nến hoặc 1H đảo chiều sập sâu
                 cond_structure_broken = r.get("close", 0) < r.get("swing_low_12", 0)
                 cond_htf_reversal = (
                     (r.get("close_1h", 0) < r.get("ema_50_1h", 0)) and
@@ -470,20 +616,6 @@ class StrategyMTFSniper(IStrategy):
     # =========================================================================
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
                         current_rate: float, current_profit: float, **kwargs) -> float:
-        """
-        Quản trị Stoploss động:
-        1. Nhánh Long: Áp dụng Trailing bậc thang mở rộng để gồng trend trong Bull Run:
-           - Lãi >= +20% ROE (+2% chart): Dời SL về Breakeven (+2% ROE / +0.2% chart).
-           - Lãi >= +35% ROE (+3.5% chart): Khóa chắc +10% ROE (+1.0% chart).
-           - Lãi >= +50% ROE (+5% chart): Khóa chắc +25% ROE (+2.5% chart).
-           - Lãi >= +80% ROE (+8% chart): Trailing bám cách đỉnh 30% ROE (3.0% chart).
-           - Lãi >= +120% ROE (+12% chart): Trailing siết chặt 20% ROE (2.0% chart).
-        2. Nhánh Short: Giữ nguyên logic bảo vệ gốc:
-           - Khi lãi >= +35% ROE: Kích hoạt Trailing Stop bám sát 20% ROE.
-           - Khi lãi >= +20% ROE: Kéo Stoploss về Breakeven (+10% ROE).
-        3. Sau 24h nếu âm: Thắt chặt SL về -5% ROE (-0.5% chart).
-        4. Mặc định: Giữ SL kỹ thuật theo cặp (BTC: -25% ROE, ETH: -28% ROE).
-        """
         if not trade.is_short:
             if current_profit >= 1.20:
                 return -0.20
