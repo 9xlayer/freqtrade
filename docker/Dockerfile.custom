@@ -1,5 +1,8 @@
 FROM freqtradeorg/freqtrade:stable
 
+# Cài đặt socksio hỗ trợ httpx SOCKS5 proxy
+RUN pip install --no-cache-dir socksio
+
 # Đóng gói toàn bộ chiến lược từ git repository trực tiếp vào image
 # Đảm bảo mỗi khi git push -> Coolify build image -> bot tự động có strategy mới nhất
 COPY --chown=ftuser:ftuser strategies/ /freqtrade/strategies/
