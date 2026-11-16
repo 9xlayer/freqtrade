@@ -9,6 +9,9 @@ services:
     container_name: freqtrade
     environment:
       - JEV_API_KEY=${JEV_API_KEY}
+      - HTTPS_PROXY=${HTTPS_PROXY:-http://192.168.68.100:40002}
+      - HTTP_PROXY=${HTTP_PROXY:-http://192.168.68.100:40002}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,binance.com,api.binance.com,fapi.binance.com,typesafe.ai,api.typesafe.ai}
     volumes:
       - "/data/freqtrade/user_data:/freqtrade/user_data"
     # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
