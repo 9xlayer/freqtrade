@@ -41,6 +41,9 @@ class StrategyMTFSniper(IStrategy):
     def bot_start(self, **kwargs) -> None:
         logger.info(f"StrategyMTFSniper v{self.strategy_version} (AI Agent Lens Edition) started.")
 
+    def version(self) -> str | None:
+        return f"v{self.strategy_version} (AI Agent Lens Edition)"
+
     timeframe = "15m"
     can_short: bool = True
     startup_candle_count: int = 400
