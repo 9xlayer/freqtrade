@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
@@ -36,17 +37,25 @@ class StrategyMTFSniper(IStrategy):
     """
 
     INTERFACE_VERSION = 3
-    strategy_version = "2.2.0"
+    strategy_version = "2.3.0"
 
     def bot_start(self, **kwargs) -> None:
-        logger.info(f"StrategyMTFSniper v{self.strategy_version} (AI Agent Lens Edition) started.")
+        logger.info(f"StrategyMTFSniper v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition) started.")
+        api_key = os.environ.get("JEV_API_KEY", "")
+        if api_key:
+            masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+            logger.info(f"[JEV AI] Engine initialized successfully! API Key detected ({masked}). Target URL: https://api.typesafe.ai/v1/systemone")
+        else:
+            logger.warning("[JEV AI] WARNING: JEV_API_KEY is not set in environment! Please configure JEV_API_KEY in Coolify.")
 
     def version(self) -> str | None:
-        return f"v{self.strategy_version} (AI Agent Lens Edition)"
+        return f"v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition)"
 
     timeframe = "15m"
     can_short: bool = True
     startup_candle_count: int = 400
+    enable_jev_decision: bool = True
+    enable_jev_hunter: bool = True
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
@@ -65,7 +74,9 @@ class StrategyMTFSniper(IStrategy):
         - Short C_sub65: Kèo Short điểm vừa, cấp 80 USDT.
         """
         if entry_tag:
-            if "long_A80plus" in entry_tag:
+            if "jev_hunter" in entry_tag:
+                return min(115.0, max_stake)
+            elif "long_A80plus" in entry_tag:
                 return min(115.0, max_stake)
             elif "short_B65plus" in entry_tag:
                 return min(105.0, max_stake)
@@ -505,6 +516,84 @@ class StrategyMTFSniper(IStrategy):
             tier = "A80plus" if sc >= 80 else ("B65plus" if sc >= 65 else "C_sub65")
             dataframe.loc[idx, "enter_tag"] = f"long_{tier}"
 
+        # ---------------------------------------------------------------------
+        # D. NHÁNH JEV ACTIVE MOMENTUM / WATERFALL HUNTER (DUAL-ENGINE)
+        # ---------------------------------------------------------------------
+        if getattr(self, "enable_jev_hunter", True):
+            try:
+                import sys
+                from pathlib import Path
+                strat_dir = str(Path(__file__).resolve().parent)
+                if strat_dir not in sys.path:
+                    sys.path.insert(0, strat_dir)
+                from jev_entry_hunter import MomentumRadar, JevHunterEngine
+
+                hunter = JevHunterEngine()
+                candidates = MomentumRadar.find_candidates(dataframe, cooldown_bars=12)
+                for c_idx, event_type in candidates:
+                    # Chỉ kích hoạt nếu nến đó chưa được chọn bởi Sniper
+                    if dataframe.loc[c_idx, "enter_short"] != 1 and dataframe.loc[c_idx, "enter_long"] != 1:
+                        df_32 = dataframe.iloc[max(0, c_idx-31):c_idx+1]
+                        if len(df_32) >= 16:
+                            row = dataframe.iloc[c_idx]
+                            ts_str = str(row["date"])
+                            macro_info = {
+                                "trend_4h": "BEAR" if row.get("is_bull_wave_4h", 0) == 0 else "BULL",
+                                "ema50_1h_dist_pct": ((row["close"] - row["ema_50_1h"]) / row["ema_50_1h"] * 100) if "ema_50_1h" in row else 0.0,
+                                "atr_percentile": row.get("atr_pct", 50.0),
+                                "range_24h_pct": row.get("range_24h", 0.0) * 100 if "range_24h" in row else 0.0
+                            }
+                            verdict = hunter.evaluate_candidate(df_32, pair, ts_str, event_type, macro_info)
+                            action = verdict.get("action")
+                            conf = verdict.get("confidence", 0.0)
+                            setup = verdict.get("setup_type", "breakout")
+
+                            # --- BẢO VỆ VĨ MÔ & LỌC GIẢI PHẪU NẾN (MACRO & ANATOMY GUARDS) ---
+                            # Xác định trạng thái vĩ mô (1D và 4H)
+                            is_bear_macro = (
+                                (row.get("is_macro_bear_market_1d", 0) == 1) or
+                                (row["close"] < row.get("ema_50_1d", row["close"] * 2)) or
+                                (row.get("is_bear_wave_4h", 0) == 1) or
+                                (row.get("macdhist_4h", 0) < 0)
+                            )
+                            is_bull_macro = (
+                                (row.get("is_macro_bull_run_1d", 0) == 1) or
+                                (row["close"] > row.get("ema_50_1d", 0)) or
+                                (row.get("is_bull_wave_4h", 0) == 1)
+                            )
+
+                            # 1. Chiều SHORT: Chỉ đi theo xu hướng giảm vĩ mô, cấm cản tàu trong uptrend
+                            if action == "enter_short" and is_bear_macro:
+                                # Chỉ chấp nhận setup thác đổ (waterfall_collapse), loại bỏ hoàn toàn bẫy hấp thụ hay bắt đỉnh
+                                if setup == "waterfall_collapse" and conf >= 0.85:
+                                    # Lọc giải phẫu nến: Không có râu dưới dài rút chân (lower_wick <= 0.25)
+                                    # Không đuổi giá quá xa EMA21 (khoảng cách >= -3.0%)
+                                    low_wick_ok = row.get("lower_wick_ratio", 0.0) <= 0.25
+                                    close_pos_ok = row.get("close_pos_ratio", 0.0) <= 0.35
+                                    dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
+                                    # Anti-Chase & Trend Exhaustion Guard (Loại bỏ hoàn toàn nến kiệt sức đuôi sóng)
+                                    not_exhausted_short = (dist_ema21 >= -0.015) and (row.get("rsi", 50.0) >= 28.0)
+                                    not_overextended = not_exhausted_short
+
+                                    if low_wick_ok and close_pos_ok and not_overextended:
+                                        dataframe.loc[c_idx, "enter_short"] = 1
+                                        dataframe.loc[c_idx, "enter_tag"] = f"jev_hunter_{setup}"
+
+                            # 2. Chiều LONG: Chỉ đi theo xu hướng tăng vĩ mô, cấm bắt đáy trong downtrend
+                            elif action == "enter_long" and is_bull_macro and not is_bear_macro:
+                                if setup in ["waterfall_collapse", "breakout_expansion"] and conf >= 0.85:
+                                    up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.25
+                                    close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
+                                    dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
+                                    not_exhausted_long = (dist_ema21 <= 0.015) and (row.get("rsi", 50.0) <= 72.0)
+                                    not_overextended = not_exhausted_long
+
+                                    if up_wick_ok and close_pos_ok and not_overextended:
+                                        dataframe.loc[c_idx, "enter_long"] = 1
+                                        dataframe.loc[c_idx, "enter_tag"] = f"jev_hunter_{setup}"
+            except Exception as e:
+                logger.warning(f"Jev Hunter populate error: {e}")
+
         return dataframe
 
     # =========================================================================
@@ -559,6 +648,36 @@ class StrategyMTFSniper(IStrategy):
                         profit_ratio = ot.calc_profit_ratio(curr_price)
                         if profit_ratio < -0.08:
                             return False
+
+        # Lệnh từ Jev Active Hunter đã được chính Jev AI duyệt và phát tín hiệu trực tiếp
+        if entry_tag and "jev_hunter" in entry_tag:
+            return True
+
+        # --- LỚP 3: JEV AI TRAJECTORY GATEKEEPER ---
+        if getattr(self, "enable_jev_decision", False):
+            try:
+                import sys
+                from pathlib import Path
+                strat_dir = str(Path(__file__).resolve().parent)
+                if strat_dir not in sys.path:
+                    sys.path.insert(0, strat_dir)
+                from jev_decision import CandleTrajectoryExtractor, JevDecisionEngine
+                analyzed_df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if analyzed_df is not None and not analyzed_df.empty:
+                    df_up_to_now = analyzed_df.loc[analyzed_df["date"] <= current_time]
+                    if len(df_up_to_now) >= 16:
+                        payload = CandleTrajectoryExtractor.build_payload(df_up_to_now, pair, side, lookback=32)
+                        engine = JevDecisionEngine()
+                        verdict = engine.evaluate(payload)
+                        logger.info(
+                            f"Jev AI Verdict: {pair} {side.upper()} @ {current_time} -> {verdict.get('decision')} "
+                            f"(Conf: {verdict.get('confidence')}, Regime: {verdict.get('market_regime')})"
+                        )
+                        if verdict.get("decision") != "CONFIRM":
+                            logger.info(f"Jev AI Vetoed trade: {pair} {side.upper()} @ {current_time} | Reasons: {verdict.get('reasons')}")
+                            return False
+            except Exception as e:
+                logger.warning(f"Jev AI evaluation error: {e}")
 
         return True
 
@@ -635,6 +754,8 @@ class StrategyMTFSniper(IStrategy):
                 return -0.20
             if current_profit >= 0.20:
                 return -stoploss_from_open(0.10, current_profit, is_short=True, leverage=10.0)
+            if current_profit >= 0.14:
+                return -stoploss_from_open(0.02, current_profit, is_short=True, leverage=10.0)
 
         duration_hours = (current_time - trade.open_date_utc).total_seconds() / 3600
         if duration_hours >= 24 and current_profit < 0.0:

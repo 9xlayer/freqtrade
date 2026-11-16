@@ -7,6 +7,8 @@ services:
     image: freqtradeorg/freqtrade:custom
     restart: unless-stopped
     container_name: freqtrade
+    environment:
+      - JEV_API_KEY=${JEV_API_KEY}
     volumes:
       - "/data/freqtrade/user_data:/freqtrade/user_data"
     # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
