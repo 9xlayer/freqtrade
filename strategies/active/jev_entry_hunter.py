@@ -44,6 +44,7 @@ class JevHunterAction(str, Enum):
 
 class JevSetupType(str, Enum):
     WATERFALL_COLLAPSE = "waterfall_collapse"
+    BREAKOUT_EXPANSION = "breakout_expansion"
     ABSORPTION_TRAP = "absorption_trap"
     TREND_PULLBACK = "trend_pullback"
     CONSOLIDATION_NOISE = "consolidation_noise"
@@ -59,17 +60,17 @@ class JevHunterStatus(str, Enum):
 
 def is_setup_valid_for_side(setup_type: Union[str, JevSetupType], side: str) -> bool:
     """
-    Xác thực tính tương thích cấu trúc giữa setup_type và vị thế giao dịch:
+    Validate setup/side compatibility for trend-following Hunter entries:
     - SHORT: waterfall_collapse
-    - LONG: absorption_trap, trend_pullback
-    - NO TRADE / INVALID: consolidation_noise, unknown
+    - LONG: breakout_expansion
+    - Mean-reversion labels (absorption_trap / trend_pullback) are not tradeable here
     """
     val = getattr(setup_type, "value", setup_type).lower()
     s = side.lower()
     if s == "short":
         return val == JevSetupType.WATERFALL_COLLAPSE.value
     elif s == "long":
-        return val in (JevSetupType.ABSORPTION_TRAP.value, JevSetupType.TREND_PULLBACK.value)
+        return val == JevSetupType.BREAKOUT_EXPANSION.value
     return False
 
 
@@ -609,18 +610,17 @@ class JevHunterEngine:
                 )
                 return verdict
 
-        # Heuristic 2: Long Breakout / Absorption Trap (LONG)
+        # Heuristic 2: Long Breakout Expansion (trend continuation only)
         elif is_long_event:
             is_strong_bull = (last_c["close"] > last_c["open"]) and (body_ratio >= 0.50) and (upper_wick_ratio <= 0.285)
+            is_breakout = ("BREAKOUT" in event_trigger) or ("SURGE" in event_trigger)
             macro_bull = (trend_4h == "BULL") or (macro_info.get("ema50_1h_dist_pct", 0.0) > 0)
 
-            if is_strong_bull and macro_bull:
+            if is_strong_bull and is_breakout and macro_bull:
                 confidence = 0.88 if vol_ratio >= 3.0 else 0.85
-                # Phân loại: Pullback vs Absorption
-                setup = JevSetupType.TREND_PULLBACK.value if "SURGE" in event_trigger else JevSetupType.ABSORPTION_TRAP.value
                 verdict = {
                     "action": JevHunterAction.ENTER_LONG.value,
-                    "setup_type": setup,
+                    "setup_type": JevSetupType.BREAKOUT_EXPANSION.value,
                     "confidence": confidence,
                     "status": JevHunterStatus.CONFIRMED.value,
                     "source": "native",
@@ -730,16 +730,19 @@ Radar Event: {event_trigger}
 """ + "\n".join(candles_summary)
 
         req_body = {
-            "model": HUNTER_MODEL_VERSION_EXTERNAL,
+            "model": self.external_model_version,
             "state": state_text,
             "questions": {
                 "suggested_action": {
                     "type": "choice",
-                    "instructions": "What is the optimal high-expectancy trading action for this price action sequence?",
+                    "instructions": (
+                        "What is the optimal high-expectancy trend-following action for this sequence? "
+                        "Prefer continuation with the dominant trend. Do not recommend mean-reversion bottoms or tops."
+                    ),
                     "criteria": {
-                        "enter_short": "Strong institutional selling pressure, waterfall trend continuation, or clean breakdown",
-                        "enter_long": "Deep oversold capitulation with buyers stepping in, absorption wick, or spring bottom",
-                        "no_trade": "Erratic chop, lack of clear follow-through, or ambiguous range bound trading"
+                        "enter_short": "Clean breakdown or waterfall continuation with expanding sell volume in a bearish regime",
+                        "enter_long": "Clean upside breakout or impulsive bullish continuation with expanding buy volume in a bullish regime",
+                        "no_trade": "Erratic chop, opposing rejection wicks, weak follow-through, or ambiguous range-bound action"
                     }
                 },
                 "setup_type": {
@@ -747,6 +750,7 @@ Radar Event: {event_trigger}
                     "instructions": "What market structure phenomenon does this sequence best represent?",
                     "criteria": {
                         "waterfall_collapse": "Rapid sequential lower highs and lower lows with expanding bearish volume",
+                        "breakout_expansion": "Impulsive upside break of structure with expanding bullish volume and limited upper rejection",
                         "absorption_trap": "Price pushed into a new extreme but met with heavy absorbing liquidity / rejection",
                         "trend_pullback": "Controlled counter-trend pause inside an existing larger trend",
                         "consolidation_noise": "Sideways churn without distinct edge"
@@ -854,25 +858,39 @@ Radar Event: {event_trigger}
             confidence = round(raw_prob, 2)
             status = JevHunterStatus.CONFIRMED.value if action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
 
+            # Xác định model version thực tế: ưu tiên từ response API backend
+            backend_model = res.get("model_version") or res.get("model")
+            if backend_model:
+                actual_model_version = str(backend_model)
+                can_cache = True
+            else:
+                actual_model_version = self.external_model_version
+                can_cache = (self.missing_model_policy != "no_cache")
+                if not can_cache:
+                    logger.info("[JevHunterEngine] Backend did not return model_version and missing_model_policy is 'no_cache'. Result will not be cached.")
+
+            logger.info(f"[JevHunterEngine] Evaluated candidate with model_version: {actual_model_version}")
+
             verdict = {
                 "action": action,
                 "setup_type": setup,
                 "confidence": confidence,
                 "status": status,
                 "source": "external",
-                "model_version": HUNTER_MODEL_VERSION_EXTERNAL,
+                "model_version": actual_model_version,
                 "engine_version": HUNTER_ENGINE_VERSION,
                 "raw_response": res
             }
 
-            # Lưu vào Cache SQLite chỉ khi verdict thành công và hợp lệ
-            self.cache.put(
-                pair, timestamp,
-                action, setup, confidence, status, res,
-                payload_hash=payload_hash,
-                model_version=HUNTER_MODEL_VERSION_EXTERNAL,
-                engine_version=HUNTER_ENGINE_VERSION
-            )
+            # Lưu vào Cache SQLite chỉ khi verdict thành công và được phép cache
+            if can_cache:
+                self.cache.put(
+                    pair, timestamp,
+                    action, setup, confidence, status, res,
+                    payload_hash=payload_hash,
+                    model_version=actual_model_version,
+                    engine_version=HUNTER_ENGINE_VERSION
+                )
             return verdict
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")[:500]

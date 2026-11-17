@@ -31,6 +31,17 @@ MODEL_VERSION_NATIVE = "native-system1-v2.6.2"
 MODEL_VERSION_EXTERNAL = "jev-latest"
 
 
+def _external_confirm_threshold() -> float:
+    """External confirm threshold (native uses 0.70). Override via JEV_CONFIRM_THRESHOLD."""
+    try:
+        return float(os.environ.get("JEV_CONFIRM_THRESHOLD", "0.60"))
+    except (TypeError, ValueError):
+        return 0.60
+
+
+EXTERNAL_CONFIRM_THRESHOLD = _external_confirm_threshold()
+
+
 class JevDecision(str, Enum):
     CONFIRM = "CONFIRM"
     VETO = "VETO"
@@ -598,7 +609,11 @@ Macro & Filter Context:
             "questions": {
                 "confirm_trade": {
                     "type": "noul",
-                    "instructions": f"Does the recent price trajectory and order flow sequence confirm a high-probability {side.lower()} continuation without significant opposing rejection wick absorption?"
+                    "instructions": (
+                        f"Does this sequence confirm a high-probability trend-following {side.lower()} continuation "
+                        f"with expanding directional pressure and without significant opposing rejection? "
+                        f"Score low if the regime is choppy/ranging or the move lacks follow-through."
+                    ),
                 },
                 "market_regime": {
                     "type": "choice",
@@ -628,22 +643,33 @@ Macro & Filter Context:
 
             if "answers" in result:
                 answers = result["answers"]
-                noul_conf = answers.get("confirm_trade", {}).get("noul", 0.5)
-                regime_choice = answers.get("market_regime", {}).get("choice", "trend_expansion")
-                regime = regime_choice.upper() if regime_choice else JevMarketRegime.TREND_EXPANSION.value
-                
-                # Calibration rõ ràng cho External LLM:
-                decision = JevDecision.CONFIRM.value if noul_conf >= 0.25 else JevDecision.VETO.value
+                noul_conf = float(answers.get("confirm_trade", {}).get("noul", 0.0) or 0.0)
+                regime_choice = str(answers.get("market_regime", {}).get("choice", "unknown") or "unknown")
+                regime = regime_choice.upper()
+                threshold = _external_confirm_threshold()
+                reasons = [
+                    f"Jev Cloud probability: {noul_conf:.2f}",
+                    f"Threshold: {threshold:.2f}",
+                    f"Regime: {regime}",
+                    f"Model: {result.get('model', MODEL_VERSION_EXTERNAL)}",
+                ]
+
+                # Hard veto chop/range even if noul clears the numeric threshold.
+                if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
+                    decision = JevDecision.VETO.value
+                    reasons.append("Vetoed by choppy/ranging regime")
+                elif noul_conf >= threshold:
+                    decision = JevDecision.CONFIRM.value
+                else:
+                    decision = JevDecision.VETO.value
+                    reasons.append("Below confirm threshold")
+
                 return make_verdict(
                     decision=decision,
                     side=side,
                     confidence=noul_conf,
                     market_regime=regime,
-                    reasons=[
-                        f"Jev Cloud probability: {noul_conf:.2f}",
-                        f"Regime: {regime}",
-                        f"Model: {result.get('model', MODEL_VERSION_EXTERNAL)}"
-                    ],
+                    reasons=reasons,
                     source="external",
                     model_version=result.get("model", MODEL_VERSION_EXTERNAL),
                     status=JevStatus.SUCCESS,
