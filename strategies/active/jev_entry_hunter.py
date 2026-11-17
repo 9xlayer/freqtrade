@@ -17,6 +17,7 @@ import sqlite3
 import hashlib
 import logging
 import urllib.request
+import urllib.error
 import math
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List, Union
@@ -30,7 +31,9 @@ logger = logging.getLogger(__name__)
 # Versioning
 HUNTER_ENGINE_VERSION = "2.6.2"
 HUNTER_MODEL_VERSION_NATIVE = "hunter-native-v2.6.2"
-HUNTER_MODEL_VERSION_EXTERNAL = "jev-hunter-latest"
+# Typesafe only exposes aliases like jev-latest (resolves e.g. jev-1.14.0).
+# Dedicated names such as jev-hunter-v1.0 return HTTP 400 Unknown model.
+HUNTER_MODEL_VERSION_EXTERNAL = os.environ.get("JEV_HUNTER_MODEL_VERSION", "jev-latest")
 
 
 class JevHunterAction(str, Enum):
@@ -68,6 +71,89 @@ def is_setup_valid_for_side(setup_type: Union[str, JevSetupType], side: str) -> 
     elif s == "long":
         return val in (JevSetupType.ABSORPTION_TRAP.value, JevSetupType.TREND_PULLBACK.value)
     return False
+
+
+def _clean_val(val: Any) -> Any:
+    """
+    Chuẩn hóa đệ quy giá trị để deterministic serialization:
+    - NaN / pd.NA / None -> None
+    - Inf / -Inf -> 'Infinity' / '-Infinity'
+    - Float -> Làm tròn 6 chữ số thập phân (loại bỏ floating-point jitter giữa các OS/CPU)
+    - Dict -> Sắp xếp keys tăng dần
+    - List/Tuple -> List các phần tử đã chuẩn hóa
+    """
+    if val is None:
+        return None
+    if isinstance(val, (bool, str, int)):
+        return val
+    if isinstance(val, (float, np.floating)):
+        if math.isnan(val) or pd.isna(val):
+            return None
+        if math.isinf(val):
+            return "Infinity" if val > 0 else "-Infinity"
+        return round(float(val), 6)
+    if pd.isna(val):
+        return None
+    if isinstance(val, dict):
+        return {str(k): _clean_val(v) for k, v in sorted(val.items())}
+    if isinstance(val, (list, tuple, np.ndarray, pd.Series)):
+        return [_clean_val(v) for v in val]
+    return str(val)
+
+
+def build_canonical_payload(
+    df_32: DataFrame,
+    pair: str,
+    timestamp: str,
+    event_trigger: str,
+    macro_info: Optional[Dict[str, Any]] = None,
+    model_version: str = "",
+    engine_version: str = HUNTER_ENGINE_VERSION
+) -> Dict[str, Any]:
+    """
+    Tạo canonical payload chứa toàn bộ dữ liệu thực sự ảnh hưởng đến verdict của Hunter:
+    1. Chuỗi nến OHLCV (open, high, low, close, volume)
+    2. Derived features có mặt trong DataFrame ảnh hưởng trực tiếp đến Native & External engines:
+       - rel_vol
+       - volume_ratio_20
+    3. Toàn bộ Macro Structural Anchors (trend_4h, ema50_1h_dist_pct, atr_percentile, range_24h_pct, ...)
+    4. Metadata sự kiện (pair, timestamp, event_trigger, current_price)
+    5. Version identity (model_version, engine_version)
+    """
+    macro_dict = macro_info or {}
+    last_candle = df_32.iloc[-1]
+    current_price = float(last_candle["close"])
+
+    # Xác định các cột OHLCV và derived features thực sự được tiêu thụ
+    core_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df_32.columns]
+    derived_cols = [c for c in ["rel_vol", "volume_ratio_20"] if c in df_32.columns]
+    all_consumed_cols = core_cols + derived_cols
+
+    candles_data = []
+    for _, row in df_32[all_consumed_cols].iterrows():
+        c_dict = {col: _clean_val(row[col]) for col in all_consumed_cols}
+        candles_data.append(c_dict)
+
+    canonical = {
+        "pair": str(pair),
+        "timestamp": str(timestamp),
+        "event_trigger": str(event_trigger),
+        "current_price": _clean_val(current_price),
+        "candles": candles_data,
+        "macro": _clean_val(macro_dict),
+        "model_version": str(model_version),
+        "engine_version": str(engine_version)
+    }
+    return canonical
+
+
+def compute_payload_hash(payload: Dict[str, Any]) -> str:
+    """
+    Hash deterministic canonical payload bằng SHA-256.
+    Đảm bảo 100% tất định (deterministic), không bị ảnh hưởng bởi thứ tự key hay float representation.
+    """
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()[:16]
 
 
 class MomentumRadar:
@@ -160,9 +246,10 @@ class JevHunterCache:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
         try:
-            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
+            with sqlite3.connect(self.db_path, timeout=30.0, isolation_level="IMMEDIATE") as conn:
                 conn.execute("PRAGMA journal_mode = WAL;")
-                conn.execute("PRAGMA busy_timeout = 5000;")
+                conn.execute("PRAGMA busy_timeout = 30000;")
+                conn.execute("PRAGMA synchronous = NORMAL;")
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS jev_hunter_verdicts (
                         pair TEXT,
@@ -226,7 +313,8 @@ class JevHunterCache:
         payload_hash: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         try:
-            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
+            with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+                conn.execute("PRAGMA busy_timeout = 30000;")
                 cursor = conn.cursor()
                 query = """
                     SELECT action, setup_type, confidence, status, raw_response, payload_hash, model_version
@@ -305,7 +393,8 @@ class JevHunterCache:
 
         p_hash = str(payload_hash) if payload_hash else "no_hash"
         try:
-            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
+            with sqlite3.connect(self.db_path, timeout=30.0, isolation_level="IMMEDIATE") as conn:
+                conn.execute("PRAGMA busy_timeout = 30000;")
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO jev_hunter_verdicts
@@ -341,7 +430,9 @@ class JevHunterEngine:
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
         cache_db: str = "user_data/jev_hunter_cache.sqlite",
-        mode: Optional[str] = None
+        mode: Optional[str] = None,
+        model_version: Optional[str] = None,
+        missing_model_policy: Optional[str] = None
     ):
         self._load_env()
         # Chế độ: native | external | backtest
@@ -353,7 +444,21 @@ class JevHunterEngine:
         self.api_key = api_key or os.environ.get("JEV_API_KEY")
         self.cache = JevHunterCache(cache_db)
 
-        logger.info(f"[JevHunterEngine] Initialized in mode: '{self.mode.upper()}' (Engine: {HUNTER_ENGINE_VERSION})")
+        # Cấu hình external model version bất biến và policy xử lý khi backend thiếu model version
+        self.external_model_version = (
+            model_version or
+            os.environ.get("JEV_HUNTER_MODEL_VERSION") or
+            HUNTER_MODEL_VERSION_EXTERNAL
+        )
+        self.missing_model_policy = (
+            missing_model_policy or
+            os.environ.get("JEV_HUNTER_MISSING_MODEL_POLICY", "use_configured")
+        ).lower()
+
+        logger.info(
+            f"[JevHunterEngine] Initialized in mode: '{self.mode.upper()}' "
+            f"(Engine: {HUNTER_ENGINE_VERSION}, ExtModel: {self.external_model_version}, Policy: {self.missing_model_policy})"
+        )
 
     def _load_env(self):
         if not os.environ.get("JEV_API_KEY"):
@@ -399,16 +504,13 @@ class JevHunterEngine:
         last_candle = df_32.iloc[-1]
         current_price = float(last_candle["close"])
 
-        # Tính hash đặc trưng payload bao gồm toàn bộ chuỗi nến OHLCV và bối cảnh macro
-        ohlcv_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df_32.columns]
-        candles_repr = df_32[ohlcv_cols].to_json(orient="values")
-        candles_hash = hashlib.sha256(candles_repr.encode("utf-8")).hexdigest()[:12]
-        macro_repr = json.dumps(macro_dict, sort_keys=True, default=str)
-        macro_hash = hashlib.sha256(macro_repr.encode("utf-8")).hexdigest()[:12]
-
-        target_model = HUNTER_MODEL_VERSION_NATIVE if self.mode in ("native", "backtest") else HUNTER_MODEL_VERSION_EXTERNAL
-        hash_str = f"{pair}|{timestamp}|{event_trigger}|{current_price:.2f}|{candles_hash}|{macro_hash}|{target_model}|{HUNTER_ENGINE_VERSION}"
-        payload_hash = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:16]
+        # Tính canonical payload và hash tất định bao gồm toàn bộ OHLCV, derived features, macro context và trigger
+        target_model = HUNTER_MODEL_VERSION_NATIVE if self.mode in ("native", "backtest") else self.external_model_version
+        canonical_payload = build_canonical_payload(
+            df_32, pair, timestamp, event_trigger, macro_dict,
+            model_version=target_model, engine_version=HUNTER_ENGINE_VERSION
+        )
+        payload_hash = compute_payload_hash(canonical_payload)
 
         # 1. Kiểm tra Cache SQLite với đầy đủ engine_version, model_version và payload_hash
         cached = self.cache.get(
@@ -772,6 +874,18 @@ Radar Event: {event_trigger}
                 engine_version=HUNTER_ENGINE_VERSION
             )
             return verdict
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")[:500]
+            logger.warning(f"[JevHunterEngine] API HTTP {e.code}: {body}")
+            return {
+                "action": JevHunterAction.NO_TRADE.value,
+                "setup_type": JevSetupType.UNKNOWN.value,
+                "confidence": 0.0,
+                "status": JevHunterStatus.UNAVAILABLE.value,
+                "source": "external",
+                "engine_version": HUNTER_ENGINE_VERSION,
+                "error": f"HTTP {e.code}: {body}"
+            }
         except urllib.error.URLError as e:
             logger.warning(f"[JevHunterEngine] API Network/Timeout error: {e}")
             return {
