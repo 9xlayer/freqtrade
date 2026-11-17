@@ -12,6 +12,7 @@ services:
       - JEV_API_URL=${JEV_API_URL:-https://api.typesafe.ai/v1/systemone}
       - JEV_MODE=${JEV_MODE:-native}
       - JEV_FAIL_POLICY=${JEV_FAIL_POLICY:-allow}
+      - JEV_CONFIRM_THRESHOLD=${JEV_CONFIRM_THRESHOLD:-0.60}
       - ENABLE_JEV_DECISION=${ENABLE_JEV_DECISION:-true}
       - ENABLE_JEV_HUNTER=${ENABLE_JEV_HUNTER:-true}
       - ENABLE_DYNAMIC_SIZING=${ENABLE_DYNAMIC_SIZING:-true}

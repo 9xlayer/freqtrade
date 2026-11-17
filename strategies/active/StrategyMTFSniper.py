@@ -746,10 +746,9 @@ class StrategyMTFSniper(IStrategy):
                                     cand_short.iloc[pos] = True
                                     cand_short_tags.loc[idx] = f"jev_hunter_{setup}"
 
-                        # 2. Chiều LONG: Đi theo xu hướng tăng 1D (close > ema_50_1d và close > ema_200_1d), CẤM trong Bear Market
-                        # Loại bỏ hoàn toàn sóng hồi (pullback) và bẫy hấp thụ theo chỉ thị người dùng (không tham sóng hồi)
+                        # 2. LONG: trend-follow only (above EMA50/200 1D). Accept breakout_expansion only.
                         elif action == "enter_long" and (row["close"] > row.get("ema_50_1d", 0)) and (row["close"] > row.get("ema_200_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
-                            if setup == "breakout_expansion" and conf >= 0.85:
+                            if setup == JevSetupType.BREAKOUT_EXPANSION.value and conf >= 0.85:
                                 up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.285
                                 close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
                                 dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
@@ -803,13 +802,17 @@ class StrategyMTFSniper(IStrategy):
                             time_in_force: str, current_time: datetime, entry_tag: str | None,
                             side: str, **kwargs) -> bool:
         # --- LỚP 1: STREAK CIRCUIT BREAKER ---
-        # Lọc đúng các lệnh thuộc về chiến lược hiện tại để tránh ảnh hưởng chéo (cross-strategy contamination)
+        # Cách ly hoàn toàn Circuit Breaker: Chỉ tính các trade có trade.strategy == self.__class__.__name__
+        # Loại trừ tuyệt đối các trade có strategy khác hoặc strategy=None để triệt tiêu cross-strategy contamination
         closed_trades = Trade.get_trades_proxy(is_open=False)
         strat_name = self.__class__.__name__
         strat_closed_trades = [
             t for t in closed_trades
-            if getattr(t, "strategy", None) == strat_name or getattr(t, "strategy", None) is None
+            if getattr(t, "strategy", None) == strat_name
         ]
+        untracked = [t for t in closed_trades if getattr(t, "strategy", None) is None]
+        if untracked:
+            logger.debug(f"[{strat_name} Circuit Breaker] Ignored {len(untracked)} untracked trades with strategy=None")
         if len(strat_closed_trades) >= 3:
             recent_trades = sorted(
                 strat_closed_trades,
