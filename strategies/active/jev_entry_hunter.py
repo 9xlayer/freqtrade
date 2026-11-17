@@ -175,31 +175,73 @@ class JevHunterCache:
                         status TEXT,
                         raw_response TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (pair, timestamp, engine_version)
+                        PRIMARY KEY (pair, timestamp, engine_version, model_version)
                     )
                 """)
+                # Di chuyển schema tự động nếu phiên bản cũ chưa có model_version trong PRIMARY KEY
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(jev_hunter_verdicts)")
+                columns = cursor.fetchall()
+                pk_cols = [c[1] for c in columns if len(c) > 5 and c[5] > 0]
+                if "model_version" not in pk_cols and len(pk_cols) > 0:
+                    logger.info("[JevHunterCache] Migrating primary key to include model_version...")
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS jev_hunter_verdicts_migrated (
+                            pair TEXT,
+                            timestamp TEXT,
+                            engine_version TEXT,
+                            model_version TEXT,
+                            payload_hash TEXT,
+                            action TEXT,
+                            setup_type TEXT,
+                            confidence REAL,
+                            status TEXT,
+                            raw_response TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (pair, timestamp, engine_version, model_version)
+                        )
+                    """)
+                    conn.execute("INSERT OR IGNORE INTO jev_hunter_verdicts_migrated SELECT * FROM jev_hunter_verdicts")
+                    conn.execute("DROP TABLE jev_hunter_verdicts")
+                    conn.execute("ALTER TABLE jev_hunter_verdicts_migrated RENAME TO jev_hunter_verdicts")
                 conn.commit()
         except Exception as e:
             logger.warning(f"[JevHunterCache] Failed to initialize DB at {self.db_path}: {e}")
 
-    def get(self, pair: str, timestamp: str, engine_version: str = HUNTER_ENGINE_VERSION) -> Optional[Dict[str, Any]]:
+    def get(
+        self,
+        pair: str,
+        timestamp: str,
+        engine_version: str = HUNTER_ENGINE_VERSION,
+        model_version: Optional[str] = None,
+        payload_hash: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         try:
             with sqlite3.connect(self.db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """
+                query = """
                     SELECT action, setup_type, confidence, status, raw_response, payload_hash, model_version
                     FROM jev_hunter_verdicts
                     WHERE pair=? AND timestamp=? AND engine_version=?
-                    """,
-                    (pair, str(timestamp), str(engine_version))
-                )
+                """
+                params = [pair, str(timestamp), str(engine_version)]
+                if model_version:
+                    query += " AND model_version=?"
+                    params.append(str(model_version))
+
+                cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
                 if row:
                     action, setup_type, conf, stat, raw_resp_str, p_hash, m_ver = row
                     # Không trả về cached error/invalid entries
                     if stat not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
                         return None
+
+                    # Xác thực payload_hash nếu được cung cấp để chống stale verdict khi nến/chỉ báo thay đổi
+                    if payload_hash and p_hash and p_hash != payload_hash:
+                        logger.debug(f"[JevHunterCache] Stale cache rejected: payload_hash mismatch ({p_hash} != {payload_hash})")
+                        return None
+
                     return {
                         "action": action,
                         "setup_type": setup_type,
@@ -211,26 +253,28 @@ class JevHunterCache:
                     }
 
                 # Tra cứu fallback trong bảng frozen historical dataset (jev_verdicts)
-                try:
-                    cursor.execute(
-                        "SELECT action, setup_type, confidence, raw_response FROM jev_verdicts WHERE pair=? AND timestamp=?",
-                        (pair, str(timestamp))
-                    )
-                    legacy_row = cursor.fetchone()
-                    if legacy_row:
-                        l_action, l_setup, l_conf, l_raw = legacy_row
-                        l_stat = JevHunterStatus.CONFIRMED.value if l_action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
-                        return {
-                            "action": l_action,
-                            "setup_type": l_setup,
-                            "confidence": float(l_conf),
-                            "status": l_stat,
-                            "payload_hash": "legacy_frozen",
-                            "model_version": "jev-frozen",
-                            "raw_response": json.loads(l_raw) if l_raw else {}
-                        }
-                except Exception:
-                    pass
+                # Chỉ cho phép fallback sang legacy frozen nếu KHÔNG yêu cầu model_version cụ thể hoặc model_version là "jev-frozen"
+                if model_version is None or model_version == "jev-frozen":
+                    try:
+                        cursor.execute(
+                            "SELECT action, setup_type, confidence, raw_response FROM jev_verdicts WHERE pair=? AND timestamp=?",
+                            (pair, str(timestamp))
+                        )
+                        legacy_row = cursor.fetchone()
+                        if legacy_row:
+                            l_action, l_setup, l_conf, l_raw = legacy_row
+                            l_stat = JevHunterStatus.CONFIRMED.value if l_action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
+                            return {
+                                "action": l_action,
+                                "setup_type": l_setup,
+                                "confidence": float(l_conf),
+                                "status": l_stat,
+                                "payload_hash": "legacy_frozen",
+                                "model_version": "jev-frozen",
+                                "raw_response": json.loads(l_raw) if l_raw else {}
+                            }
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning(f"[JevHunterCache] Read error: {e}")
         return None
@@ -347,12 +391,24 @@ class JevHunterEngine:
         last_candle = df_32.iloc[-1]
         current_price = float(last_candle["close"])
 
-        # Tính hash đặc trưng payload để đảm bảo cache nhất quán
-        hash_str = f"{pair}|{timestamp}|{event_trigger}|{current_price:.2f}|{HUNTER_ENGINE_VERSION}"
+        # Tính hash đặc trưng payload bao gồm toàn bộ chuỗi nến OHLCV và bối cảnh macro
+        ohlcv_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df_32.columns]
+        candles_repr = df_32[ohlcv_cols].to_json(orient="values")
+        candles_hash = hashlib.sha256(candles_repr.encode("utf-8")).hexdigest()[:12]
+        macro_repr = json.dumps(macro_dict, sort_keys=True, default=str)
+        macro_hash = hashlib.sha256(macro_repr.encode("utf-8")).hexdigest()[:12]
+
+        target_model = HUNTER_MODEL_VERSION_NATIVE if self.mode in ("native", "backtest") else HUNTER_MODEL_VERSION_EXTERNAL
+        hash_str = f"{pair}|{timestamp}|{event_trigger}|{current_price:.2f}|{candles_hash}|{macro_hash}|{target_model}|{HUNTER_ENGINE_VERSION}"
         payload_hash = hashlib.sha256(hash_str.encode("utf-8")).hexdigest()[:16]
 
-        # 1. Kiểm tra Cache SQLite trước
-        cached = self.cache.get(pair, timestamp, engine_version=HUNTER_ENGINE_VERSION)
+        # 1. Kiểm tra Cache SQLite với đầy đủ engine_version, model_version và payload_hash
+        cached = self.cache.get(
+            pair, timestamp,
+            engine_version=HUNTER_ENGINE_VERSION,
+            model_version=target_model,
+            payload_hash=payload_hash
+        )
         if cached:
             return cached
 

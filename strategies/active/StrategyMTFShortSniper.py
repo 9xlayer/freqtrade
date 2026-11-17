@@ -328,27 +328,29 @@ class StrategyMTFShortSniper(IStrategy):
         if "is_macro_bull_run_1d" in dataframe.columns:
             cond_macro_safe = dataframe["is_macro_bull_run_1d"].fillna(0) == 0
         else:
-            cond_macro_safe = pd.Series(True, index=dataframe.index)
+            cond_macro_safe = pd.Series(False, index=dataframe.index)
 
         # [ĐIỀU KIỆN 5b - LỚP 1: BỘ LỌC VĨ MÔ KHUNG NGÀY 1D]
         # Tuyệt đối CẤM Short khi khung Ngày (1D) đang trong Sóng Hồi Bò bùng nổ
-        if self.block_1d_bull_wave.value and "is_bull_wave_1d" in dataframe.columns:
+        if not self.block_1d_bull_wave.value:
+            cond_1d_aligned = pd.Series(True, index=dataframe.index)
+        elif "is_bull_wave_1d" in dataframe.columns:
             cond_1d_aligned = dataframe["is_bull_wave_1d"].fillna(0) == 0
         else:
-            cond_1d_aligned = pd.Series(True, index=dataframe.index)
+            cond_1d_aligned = pd.Series(False, index=dataframe.index)
 
         # [ĐIỀU KIỆN 5c - CHỐNG SHORT ĐÈ SÀN HỖ TRỢ VĨ MÔ 1D (FLOOR PROTECTION)]
         # Nếu giá đang nằm quá sát đáy thấp nhất 20 ngày qua (< 3.5% cách đáy) -> CẤM SHORT (tránh đè sàn hỗ trợ tổ chức)
         if "swing_low_20d_1d" in dataframe.columns:
             cond_floor_safe = ((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035
         else:
-            cond_floor_safe = pd.Series(True, index=dataframe.index)
+            cond_floor_safe = pd.Series(False, index=dataframe.index)
 
         # [ĐIỀU KIỆN 5d - CHỐNG SHORT ĐÈ SÀN VÙNG ĐÁY KIỆT SỨC CHU KỲ (DEEP CAPITULATION)]
         if "is_deep_capitulation_1d" in dataframe.columns:
             cond_capitulation_safe = dataframe["is_deep_capitulation_1d"].fillna(0) == 0
         else:
-            cond_capitulation_safe = pd.Series(True, index=dataframe.index)
+            cond_capitulation_safe = pd.Series(False, index=dataframe.index)
 
         # [ĐIỀU KIỆN 5e - BỘ LỌC CHỐNG SHORT BẪY SIDEWAY / NÉN CẠN KIỆT THANH KHOẢN (CHOP SQUEEZE DEFENSE)]
         # Cấm Short khi thị trường đang rơi vào trạng thái nén nghẽn biên độ cực hẹp:
@@ -487,9 +489,10 @@ class StrategyMTFShortSniper(IStrategy):
             consecutive_losses = 0
             for t in recent_trades:
                 profit = t.close_profit if t.close_profit is not None else 0.0
-                if profit < -0.10:
+                if profit <= -0.10:
                     consecutive_losses += 1
-                elif profit > 0.0:
+                else:
+                    # Lệnh hòa vốn, có lãi, hoặc lỗ nhẹ (> -10% ROE) -> Reset chuỗi thua nặng ngay lập tức
                     break
             
             if consecutive_losses >= 3:

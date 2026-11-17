@@ -289,8 +289,12 @@ class CandleTrajectoryExtractor:
         macro_ctx = cls.extract_macro_context(df)
         traj_seq = cls.extract_sequence(df, lookback=lookback)
 
-        # Tính payload_hash tất định cho caching
-        hash_seed = f"{pair}_{ts}_15m_{side.upper()}_{current_price:.4f}_{len(traj_seq)}"
+        # Tính payload_hash tất định cho caching đại diện cho toàn bộ chuỗi nến và macro context
+        traj_repr = json.dumps(traj_seq, sort_keys=True, default=str)
+        macro_repr = json.dumps(macro_ctx, sort_keys=True, default=str)
+        traj_hash = hashlib.sha256(traj_repr.encode("utf-8")).hexdigest()[:12]
+        macro_hash = hashlib.sha256(macro_repr.encode("utf-8")).hexdigest()[:12]
+        hash_seed = f"{pair}_{ts}_15m_{side.upper()}_{current_price:.4f}_{traj_hash}_{macro_hash}_{ENGINE_VERSION}"
         payload_hash = hashlib.sha256(hash_seed.encode("utf-8")).hexdigest()[:16]
 
         return {
@@ -454,10 +458,23 @@ class JevDecisionEngine:
                         )
                     row = cursor.fetchone()
                     if row:
+                        cached_source = row[4]
                         cached_engine_ver = row[6]
                         status_cached = row[7]
-                        # Chỉ tái sử dụng cache nếu kết quả là SUCCESS và khớp đúng engine_version
-                        if status_cached == JevStatus.SUCCESS.value and cached_engine_ver == getattr(self, "engine_version", ENGINE_VERSION):
+
+                        # Cách ly mode: native/backtest không dùng cache từ external và ngược lại
+                        mode_compatible = True
+                        if self.mode in ("native", "backtest"):
+                            if cached_source not in ("native", "backtest", "native_fallback", "cache"):
+                                mode_compatible = False
+                        elif self.mode == "external":
+                            if cached_source not in ("external", "api", "cache"):
+                                mode_compatible = False
+
+                        # Chỉ tái sử dụng cache nếu kết quả là SUCCESS, khớp đúng engine_version và tương thích mode
+                        if (status_cached == JevStatus.SUCCESS.value and 
+                            cached_engine_ver == getattr(self, "engine_version", ENGINE_VERSION) and
+                            mode_compatible):
                             try:
                                 reasons_cached = json.loads(row[3]) if row[3] else []
                             except Exception:

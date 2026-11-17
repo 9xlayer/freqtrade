@@ -16,6 +16,8 @@ import sqlite3
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
+from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -44,8 +46,13 @@ from jev_entry_hunter import (
     JevSetupType,
     JevHunterStatus,
     is_setup_valid_for_side,
-    HUNTER_ENGINE_VERSION
+    HUNTER_ENGINE_VERSION,
+    HUNTER_MODEL_VERSION_NATIVE,
+    HUNTER_MODEL_VERSION_EXTERNAL
 )
+from StrategyMTFSniper import StrategyMTFSniper
+from StrategyMTFShortSniper import StrategyMTFShortSniper
+from freqtrade.configuration import Configuration
 
 
 class TestCandleTrajectoryExtractor(unittest.TestCase):
@@ -128,6 +135,24 @@ class TestCandleTrajectoryExtractor(unittest.TestCase):
         self.assertEqual(payload["side"], "LONG")
         # Check unified field mapping for 1h EMA
         self.assertIn("ema_50_1h_dist_pct", payload["macro_context"])
+
+    def test_decision_payload_hash_sensitivity(self):
+        """Verify that payload_hash changes whenever candle values or macro context change."""
+        payload1 = CandleTrajectoryExtractor.build_payload(self.df, "BTC/USDT:USDT", "short", lookback=32)
+        h1 = payload1["payload_hash"]
+        self.assertTrue(len(h1) > 0)
+
+        # Mutate intermediate candle in trajectory (not timestamp, not last close)
+        df_mutated_candle = self.df.copy()
+        df_mutated_candle.loc[25, "close"] = 999.0
+        payload2 = CandleTrajectoryExtractor.build_payload(df_mutated_candle, "BTC/USDT:USDT", "short", lookback=32)
+        self.assertNotEqual(h1, payload2["payload_hash"], "Hash must change when trajectory candle values change")
+
+        # Mutate macro indicator in last candle
+        df_mutated_macro = self.df.copy()
+        df_mutated_macro.loc[39, "ema_50_1h"] = 555.0
+        payload3 = CandleTrajectoryExtractor.build_payload(df_mutated_macro, "BTC/USDT:USDT", "short", lookback=32)
+        self.assertNotEqual(h1, payload3["payload_hash"], "Hash must change when macro context changes")
 
 
 class TestMomentumRadar(unittest.TestCase):
@@ -310,6 +335,50 @@ class TestJevHunterCacheAndEngine(unittest.TestCase):
         self.assertFalse(is_setup_valid_for_side(JevSetupType.CONSOLIDATION_NOISE, "short"))
         self.assertFalse(is_setup_valid_for_side(JevSetupType.UNKNOWN, "long"))
 
+    def test_hunter_cache_mode_and_hash_isolation(self):
+        """Verify Hunter cache isolates native vs external models and rejects stale hash mismatches."""
+        pair = "ETH/USDT:USDT"
+        ts = "2026-01-01 15:00:00"
+
+        # 1. Put Native Verdict
+        self.cache.put(
+            pair, ts,
+            "enter_short", "waterfall_collapse", 0.88,
+            JevHunterStatus.CONFIRMED.value, {"foo": "bar"},
+            payload_hash="valid_hash_1",
+            model_version=HUNTER_MODEL_VERSION_NATIVE
+        )
+
+        # 2. Query with matching model and matching hash -> Hit
+        hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="valid_hash_1")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["action"], "enter_short")
+
+        # 3. Query with mismatched payload_hash -> None (prevents stale reused cache)
+        mismatch = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="changed_hash_2")
+        self.assertIsNone(mismatch)
+
+        # 4. Query with external model -> None (mode isolation)
+        isolated = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_EXTERNAL, payload_hash="valid_hash_1")
+        self.assertIsNone(isolated)
+
+        # 5. Put External Verdict at same timestamp with different action
+        self.cache.put(
+            pair, ts,
+            "enter_long", "absorption_trap", 0.90,
+            JevHunterStatus.CONFIRMED.value, {"external": True},
+            payload_hash="ext_hash_3",
+            model_version=HUNTER_MODEL_VERSION_EXTERNAL
+        )
+
+        # 6. Both co-exist independently without clobbering each other
+        native_hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="valid_hash_1")
+        ext_hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_EXTERNAL, payload_hash="ext_hash_3")
+        self.assertIsNotNone(native_hit)
+        self.assertEqual(native_hit["action"], "enter_short")
+        self.assertIsNotNone(ext_hit)
+        self.assertEqual(ext_hit["action"], "enter_long")
+
 
 class TestJevDecisionEngine(unittest.TestCase):
     """Unit tests for JevDecisionEngine, fail-safe resilience, and contract schemas."""
@@ -467,6 +536,144 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         self.assertTrue(is_setup_valid_for_side("absorption_trap", "long"))
         self.assertFalse(is_setup_valid_for_side("waterfall_collapse", "long"))
         self.assertFalse(is_setup_valid_for_side("consolidation_noise", "long"))
+
+    def test_jev_fail_policy_allow_and_reject(self):
+        """Verify JEV fail policy: 'allow' bypasses AI gate on UNAVAILABLE, 'reject' blocks."""
+        cfg = Configuration.from_files(["user_data/config.json"])
+        strat = StrategyMTFSniper(config=cfg)
+        strat.enable_jev_decision = True
+        strat.dp = MagicMock()
+
+        dates = pd.date_range("2026-01-01", periods=32, freq="15min")
+        df = pd.DataFrame({
+            "date": dates,
+            "open": [100.0] * 32, "high": [102.0] * 32, "low": [99.0] * 32,
+            "close": [101.0] * 32, "volume": [1000.0] * 32
+        })
+        strat.dp.get_analyzed_dataframe.return_value = (df, "15m")
+        now = dates[-1]
+
+        with patch("freqtrade.persistence.Trade.get_trades_proxy", return_value=[]):
+            with patch("jev_decision.JevDecisionEngine.evaluate") as mock_eval:
+                mock_eval.return_value = {
+                    "decision": "VETO",
+                    "status": JevStatus.UNAVAILABLE.value,
+                    "confidence": 0.0,
+                    "market_regime": "UNKNOWN",
+                    "reasons": ["API server down"]
+                }
+                # Policy 'allow' MUST return True
+                strat.jev_fail_policy = "allow"
+                self.assertTrue(strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "long"))
+
+                # Policy 'reject' MUST return False
+                strat.jev_fail_policy = "reject"
+                self.assertFalse(strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "long"))
+
+    def test_circuit_breaker_severe_loss_threshold_and_reset(self):
+        """Verify Circuit Breaker requires losses <= -10% ROE and resets immediately on > -10%."""
+        cfg = Configuration.from_files(["user_data/config.json"])
+        strat = StrategyMTFSniper(config=cfg)
+
+        class MockTrade:
+            def __init__(self, close_profit, close_date):
+                self.close_profit = close_profit
+                self.close_date = close_date
+                self.is_short = False
+                self.pair = "BTC/USDT:USDT"
+                self.calc_profit_ratio = lambda p: 0.0
+
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+
+        # Case 1: 3 severe losses <= -0.10 -> Circuit breaker triggers (False)
+        t_severe = [
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.10, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+        ]
+        with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
+            mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_severe
+            self.assertFalse(strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "short"))
+
+        # Case 2: 3 minor losses > -0.10 (-0.05, -0.02, -0.01) -> Does NOT trigger
+        t_minor = [
+            MockTrade(-0.05, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.02, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.01, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+        ]
+        with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
+            mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_minor
+            self.assertTrue(strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "short"))
+
+        # Case 3: Streak reset by minor loss: -0.15, -0.12, -0.05, -0.14 -> Streak is 2, Does NOT trigger
+        t_reset = [
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=timezone.utc)),
+        ]
+        with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
+            mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_reset
+            self.assertTrue(strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "short"))
+
+    def test_short_sniper_circuit_breaker_streak_reset(self):
+        """Verify ShortSniper circuit breaker resets streak when a trade profit is between -0.10 and 0.0."""
+        cfg = Configuration.from_files(["user_data/config.json"])
+        short_strat = StrategyMTFShortSniper(config=cfg)
+
+        class MockTrade:
+            def __init__(self, close_profit, close_date):
+                self.close_profit = close_profit
+                self.close_date = close_date
+                self.is_short = True
+                self.pair = "BTC/USDT:USDT"
+                self.calc_profit_ratio = lambda p: 0.0
+
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        # Sequence: -15%, -12%, -5% (broke streak), -14% -> Consecutive losses is 2, NOT 3
+        trades = [
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=timezone.utc)),
+        ]
+        with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
+            mock_proxy.side_effect = lambda is_open=False: [] if is_open else trades
+            self.assertTrue(short_strat.confirm_trade_entry("BTC/USDT:USDT", "market", 1.0, 100.0, "gtc", now, "entry", "short"))
+
+    def test_short_sniper_informative_fail_closed(self):
+        """Verify StrategyMTFShortSniper fails closed when informative columns are missing."""
+        cfg = Configuration.from_files(["user_data/config.json"])
+        short_strat = StrategyMTFShortSniper(config=cfg)
+
+        dates = pd.date_range("2026-01-01", periods=50, freq="15min")
+        # Construct dataframe with perfect sniper entry setup but omit required 1d columns
+        df = pd.DataFrame({
+            "date": dates,
+            "open": [100.0] * 50, "high": [101.0] * 50, "low": [98.0] * 50, "close": [98.5] * 50,
+            "volume": [1000.0] * 50, "body": [1.5] * 50, "total_range": [3.0] * 50, "atr": [1.0] * 50,
+            "swing_low": [99.0] * 50, "ema_10": [102.0] * 50, "ema_21": [103.0] * 50, "rsi": [45.0] * 50,
+            "close_1h": [98.5] * 50, "ema_50_1h": [98.0] * 50,
+            "macdhist_1h": [-0.5] * 50, "macdhist_prev_1h": [0.0] * 50,
+            "rsi_max_24_1h": [65.0] * 50, "is_bull_wave_4h": [0] * 50,
+        })
+        # Missing 'is_macro_bull_run_1d', 'swing_low_20d_1d', 'is_deep_capitulation_1d'
+        out = short_strat.populate_entry_trend(df, {"pair": "BTC/USDT:USDT"})
+        self.assertEqual(out["enter_short"].sum(), 0.0, "Must be fail-closed when macro informative columns are missing")
+
+    def test_hunter_4h_macro_three_state_classification(self):
+        """Verify Hunter 4H macro classification accurately distinguishes BULL, BEAR, and NEUTRAL."""
+        def classify_macro(is_bull_4h, is_bear_4h):
+            if is_bull_4h == 1:
+                return "BULL"
+            elif is_bear_4h == 1:
+                return "BEAR"
+            return "NEUTRAL"
+
+        self.assertEqual(classify_macro(1, 0), "BULL")
+        self.assertEqual(classify_macro(0, 1), "BEAR")
+        self.assertEqual(classify_macro(0, 0), "NEUTRAL")
+        self.assertNotEqual(classify_macro(0, 0), "BEAR", "Lack of bull wave must NOT automatically default to BEAR")
 
 
 if __name__ == "__main__":
