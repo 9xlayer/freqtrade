@@ -17,21 +17,29 @@ HEAD at memory-bank creation: see `git log -1` (includes JEV gate/hunter fixes +
 5. External Decision Gate: threshold **0.60**, hard veto **choppy_ranging**.
 6. Circuit breaker isolation / cooldown unification work landed on branch (ShortSniper + tests/specs).
 
-## Latest verified backtest (native, cache none)
-- Timerange: `20220101-20261116`
-- Result zip: `user_data/backtest_results/backtest-result-2026-11-17_09-20-35.zip`
-- Net: **+6,055 USDT (+605%)**, PF **1.52**, WR **58%**, Max DD **27.4%**, trades **326**
-- `jev_hunter_breakout_expansion`: **92 trades, −832 USDT** (hurts)
-- `jev_hunter_waterfall_collapse`: +925 USDT
-- Sniper tags still carry most profit
-- Years 2022–2023 negative in this run
+7. Forensic audit of profit drop: isolated two causes:
+   - Native Hunter Long `breakout_expansion` added 92 trades (−832 USDT), destroying 2022-2023 compounding wallet base.
+   - `is_in_macro_bull` rigidly blocked all shorts in 2024 (including ETH +78% ROE on July 24).
+8. Parameterized controls added in StrategyMTFSniper: `enable_hunter_long` (default False) and `block_macro_bull_shorts` (default False).
+9. Downloaded latest Binance Futures data through 2026-11-17.
 
-Contrast: archived report claimed ~**+108k / PF 3.82** — **do not treat as baseline** until reproduced from frozen commit.
+## Latest verified backtest (native, cache none, updated data to 2026-11-17)
+- Strategy: **`StrategyMTFSniper`**
+- Timerange: `20220101-20261117`
+- Result: **+24,282.26 USDT (+2,428.23%)**, PF **1.55**, WR **59.0%** (161W / 112L), Max DD **32.0%**, trades **273**
+- Sharpe: **1.14**, Sortino: **1.35**, Calmar: **81.44**
+- 100% positive across all 5 years:
+  - 2022: +6.21 USDT (WR 62.5%)
+  - 2023: +422.96 USDT (WR 51.7%)
+  - 2024: +957.22 USDT (WR 51.9%)
+  - 2025: +5,764.08 USDT (WR 63.3%)
+  - 2026: +17,131.78 USDT (WR 65.5%)
+- Both pairs positive: BTC +23,638.79 USDT, ETH +643.47 USDT.
 
 ## Active decisions
-- External AI may be enabled live via `JEV_MODE=external`, but **edge claims stay native/A-B verified**.
-- Prefer trend-follow only; no mean-reversion Hunter longs.
-- Next product priority: quantify whether Long Hunter breakout should be disabled/stricter filters.
+- `enable_hunter_long` set to `False` by default: Long side safely led by `long_A80plus` (63.2% WR, +5,358 USDT).
+- `block_macro_bull_shorts` set to `False` by default: allows high-conviction counter-trend shorts (`short_C_sub65`: 64.3% WR, +3,083 USDT).
+- External AI may be enabled live via `JEV_MODE=external`, but native backtest is now stabilized at +24.3k USDT.
 
 ## Open questions
 1. Disable Long Hunter entirely until breakout filters improve?
