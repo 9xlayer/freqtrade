@@ -1,4 +1,4 @@
-FROM freqtradeorg/freqtrade:stable
+FROM ghcr.io/freqtrade/freqtrade:stable
 
 # Cài đặt socksio hỗ trợ httpx SOCKS5 proxy
 RUN pip install --no-cache-dir socksio
