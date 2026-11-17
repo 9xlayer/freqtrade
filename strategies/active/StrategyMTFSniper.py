@@ -37,7 +37,7 @@ class StrategyMTFSniper(IStrategy):
     """
 
     INTERFACE_VERSION = 3
-    strategy_version = "2.3.0"
+    strategy_version = "2.6.0"
 
     timeframe = "15m"
     can_short: bool = True
@@ -46,7 +46,41 @@ class StrategyMTFSniper(IStrategy):
     # Default fallback flags (sẽ được ghi đè tự động bởi config.json hoặc biến môi trường)
     enable_jev_decision: bool = True
     enable_jev_hunter: bool = True
-    enable_dynamic_sizing: bool = True
+    enable_dynamic_sizing: bool = False
+    jev_fail_policy: str = "allow"
+    _hunter: Optional[object] = None
+
+    @staticmethod
+    def apply_cooldown(signal: pd.Series, cooldown: int) -> pd.Series:
+        """
+        Enforce strict candle-count cooldown using positional row index (0..len-1).
+        Ensures minimum `cooldown` bars between consecutive entry signals,
+        regardless of DataFrame index type (RangeIndex, DatetimeIndex, etc.).
+        Condition: pos - last_pos >= cooldown.
+        """
+        result = pd.Series(False, index=signal.index)
+        if not signal.any():
+            return result
+        sig_array = signal.to_numpy(dtype=bool)
+        res_array = np.zeros(len(sig_array), dtype=bool)
+        last_pos = -cooldown - 1
+        for pos, is_sig in enumerate(sig_array):
+            if is_sig and (pos - last_pos >= cooldown):
+                res_array[pos] = True
+                last_pos = pos
+        result.iloc[:] = res_array
+        return result
+
+
+    @staticmethod
+    def _to_bool(val: object, default: bool = False) -> bool:
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        return str(val).strip().lower() in ("true", "1", "yes", "on")
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -54,7 +88,7 @@ class StrategyMTFSniper(IStrategy):
 
     def _load_external_config(self) -> None:
         """
-        Nạp cấu hình từ bên ngoài theo thứ tự ưu tiên:
+        Nạp cấu hình từ bên ngoài theo thứ tự ưu tiên với parse boolean an toàn:
         1. Mục 'strategy_params' trong config.json
         2. Biến môi trường (.env / Docker Compose / Coolify)
         3. Giá trị mặc định (Fallback)
@@ -63,21 +97,27 @@ class StrategyMTFSniper(IStrategy):
 
         # 1. JEV AI Trajectory Gatekeeper
         if "enable_jev_decision" in strat_cfg:
-            self.enable_jev_decision = bool(strat_cfg["enable_jev_decision"])
+            self.enable_jev_decision = self._to_bool(strat_cfg["enable_jev_decision"], True)
         else:
-            self.enable_jev_decision = os.environ.get("ENABLE_JEV_DECISION", "true").lower() in ("true", "1", "yes")
+            self.enable_jev_decision = self._to_bool(os.environ.get("ENABLE_JEV_DECISION", "true"), True)
 
         # 2. JEV AI Momentum & Waterfall Hunter
         if "enable_jev_hunter" in strat_cfg:
-            self.enable_jev_hunter = bool(strat_cfg["enable_jev_hunter"])
+            self.enable_jev_hunter = self._to_bool(strat_cfg["enable_jev_hunter"], True)
         else:
-            self.enable_jev_hunter = os.environ.get("ENABLE_JEV_HUNTER", "true").lower() in ("true", "1", "yes")
+            self.enable_jev_hunter = self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "true"), True)
 
-        # 3. Dynamic Stake Sizing (Dao động vốn theo điểm tín hiệu A+, B+, C)
+        # 3. Dynamic Stake Sizing
         if "enable_dynamic_sizing" in strat_cfg:
-            self.enable_dynamic_sizing = bool(strat_cfg["enable_dynamic_sizing"])
+            self.enable_dynamic_sizing = self._to_bool(strat_cfg["enable_dynamic_sizing"], False)
         else:
-            self.enable_dynamic_sizing = os.environ.get("ENABLE_DYNAMIC_SIZING", "true").lower() in ("true", "1", "yes")
+            self.enable_dynamic_sizing = self._to_bool(os.environ.get("ENABLE_DYNAMIC_SIZING", "false"), False)
+
+        # 4. JEV Fail Policy ('reject' / 'allow')
+        if "jev_fail_policy" in strat_cfg:
+            self.jev_fail_policy = str(strat_cfg["jev_fail_policy"]).lower()
+        else:
+            self.jev_fail_policy = os.environ.get("JEV_FAIL_POLICY", "allow").lower()
 
     def bot_start(self, **kwargs) -> None:
         self._load_external_config()
@@ -98,40 +138,40 @@ class StrategyMTFSniper(IStrategy):
             logger.info("[JEV AI] JEV AI features are DISABLED via configuration. Operating in pure quantitative technical mode.")
 
     def version(self) -> str | None:
-        return f"v{self.strategy_version} (Dual-Engine AI Hunter & Capital Preservation Edition)"
+        return f"v{self.strategy_version} (Unified Risk Gate & Institutional Remediation Edition)"
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
                  side: str, **kwargs) -> float:
-        return 10.0
+        target_lev = 10.0
+        if max_leverage:
+            return min(target_lev, float(max_leverage))
+        return target_lev
 
     def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
                             proposed_stake: float, min_stake: float | None, max_stake: float,
                             leverage: float, entry_tag: str | None, side: str,
                             **kwargs) -> float:
         """
-        AI Agent Lens Dynamic Sizing:
-        - Nếu enable_dynamic_sizing = True:
-            * Kèo A+ (Long A80+ / Jev Hunter): 1.15x (~400$ khi base 350$)
-            * Kèo B+ (Short B65+): 1.05x (~370$ khi base 350$)
-            * Kèo A  (Short A80+): 0.90x (~315$ khi base 350$)
-            * Kèo C  (Short C_sub65): 0.80x (~280$ khi base 350$)
-        - Nếu enable_dynamic_sizing = False:
-            * Cấp vốn cố định (Flat) theo đúng proposed_stake từ config.
+        Unified Risk Budget Sizing:
+        - Mặc định: Flat 1.0x baseline để đảm bảo sự ổn định và nhất quán trong production.
+        - Khi bật enable_dynamic_sizing: Phân bổ cân đối theo Risk Budget giữa các nhóm tag.
         """
-        if not getattr(self, "enable_dynamic_sizing", True):
+        if not getattr(self, "enable_dynamic_sizing", False):
             return min(proposed_stake, max_stake)
 
         multiplier = 1.0
         if entry_tag:
-            if "jev_hunter" in entry_tag or "long_A80plus" in entry_tag:
-                multiplier = 1.15
-            elif "short_B65plus" in entry_tag:
-                multiplier = 1.05
+            if "long_A80plus" in entry_tag:
+                multiplier = 1.10
             elif "short_A80plus" in entry_tag:
-                multiplier = 0.90
+                multiplier = 1.10
+            elif "short_B65plus" in entry_tag:
+                multiplier = 1.00
             elif "short_C_sub65" in entry_tag:
-                multiplier = 0.80
+                multiplier = 0.85
+            elif "jev_hunter" in entry_tag:
+                multiplier = 1.00
 
         target_stake = proposed_stake * multiplier
         return min(target_stake, max_stake)
@@ -149,11 +189,15 @@ class StrategyMTFSniper(IStrategy):
             "stoploss": -0.25,
             "short_max_dist_ema21": 1.0,
             "short_candle_body_ratio_min": 0.62,
+            "long_max_dist_ema21": 3.3,
+            "long_candle_body_ratio_min": 0.63,
         },
         "ETH/USDT:USDT": {
             "stoploss": -0.28,
             "short_max_dist_ema21": 1.2,
             "short_candle_body_ratio_min": 0.60,
+            "long_max_dist_ema21": 3.3,
+            "long_candle_body_ratio_min": 0.63,
         },
     }
 
@@ -161,7 +205,7 @@ class StrategyMTFSniper(IStrategy):
         for k, v in self.custom_pair_params.items():
             if k == pair or k.split(":")[0] == pair.split(":")[0]:
                 return v
-        return self.custom_pair_params.get("BTC/USDT:USDT", {})
+        return {"stoploss": self.stoploss}
 
     minimal_roi = {
         "0": 1.00,
@@ -196,13 +240,13 @@ class StrategyMTFSniper(IStrategy):
     min_adx_4h = DecimalParameter(12.0, 25.0, default=18.0, decimals=1, space="buy", optimize=False)
 
     # --- AI AGENT LENS ENHANCEMENTS ---
-    block_high_vol = BooleanParameter(default=False, space="buy", optimize=False)
+    block_high_vol = BooleanParameter(default=True, space="buy", optimize=False)
     high_vol_pct = DecimalParameter(85.0, 95.0, default=90.0, decimals=1, space="buy", optimize=False)
     filter_wick_rejection = BooleanParameter(default=True, space="buy", optimize=False)
     max_rejection_wick_ratio = DecimalParameter(0.20, 0.45, default=0.35, decimals=2, space="buy", optimize=False)
     min_close_pos_ratio_long = DecimalParameter(0.55, 0.75, default=0.65, decimals=2, space="buy", optimize=False)
     max_close_pos_ratio_short = DecimalParameter(0.25, 0.45, default=0.35, decimals=2, space="buy", optimize=False)
-    filter_pdh_ceiling = BooleanParameter(default=False, space="buy", optimize=False)
+    filter_pdh_ceiling = BooleanParameter(default=True, space="buy", optimize=False)
 
     # =========================================================================
     # 2. KHUNG SIÊU VĨ MÔ NGÀY (INFORMATIVE 1D)
@@ -251,9 +295,9 @@ class StrategyMTFSniper(IStrategy):
         bb_1d = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         dataframe["bb_width"] = (bb_1d["upperband"] - bb_1d["lowerband"]) / bb_1d["middleband"]
 
-        # AI Agent Lens: Previous Day High / Low
-        dataframe["pdh"] = dataframe["high"]
-        dataframe["pdl"] = dataframe["low"]
+        # AI Agent Lens: Previous Day High / Low (Dùng nến hôm qua đã đóng, tránh lookahead)
+        dataframe["pdh"] = dataframe["high"].shift(1)
+        dataframe["pdl"] = dataframe["low"].shift(1)
         return dataframe
 
     # =========================================================================
@@ -280,6 +324,7 @@ class StrategyMTFSniper(IStrategy):
     # =========================================================================
     @informative("1h")
     def populate_indicators_1h(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe["ema_21"] = ta.EMA(dataframe, timeperiod=21)
         dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
         macd_1h = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
         dataframe["macdhist"] = macd_1h["macdhist"]
@@ -407,12 +452,63 @@ class StrategyMTFSniper(IStrategy):
         pair_cfg = self._get_pair_params(pair)
 
         # ---------------------------------------------------------------------
-        # BỘ LỌC CHUNG TỪ AI AGENT LENS: HIGH VOLATILITY REGIME
+        # 0. KHỞI TẠO CỘT TÍN HIỆU & KIỂM TRA TÍNH SẴN SÀNG CỦA DỮ LIỆU (FAIL-CLOSED)
         # ---------------------------------------------------------------------
-        cond_volatility_safe = (dataframe["atr_pct"] < self.high_vol_pct.value) if self.block_high_vol.value else pd.Series(True, index=dataframe.index)
+        dataframe["enter_long"] = 0
+        dataframe["enter_short"] = 0
+        dataframe["enter_tag"] = ""
+
+        required_informative_cols = [
+            "close_1h", "ema_50_1h", "macdhist_1h", "macdhist_prev_1h",
+            "macdhist_4h", "ema_50_1d", "macdhist_1d", "pdh_1d"
+        ]
+        missing_cols = [c for c in required_informative_cols if c not in dataframe.columns]
+        if missing_cols:
+            data_ready = pd.Series(False, index=dataframe.index)
+        else:
+            data_ready = dataframe[required_informative_cols].notna().all(axis=1)
 
         # ---------------------------------------------------------------------
-        # A. NHÁNH SHORT SNIPER
+        # 1. BỘ LỌC CHUNG TỪ AI AGENT LENS: HIGH VOLATILITY & SIDEWAYS SQUEEZE
+        # ---------------------------------------------------------------------
+        cond_volatility_safe = (
+            (dataframe["atr_pct"] < self.high_vol_pct.value)
+            if self.block_high_vol.value else pd.Series(True, index=dataframe.index)
+        )
+
+        is_chop_squeeze = pd.Series(False, index=dataframe.index)
+        if "bb_width_4h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | (dataframe["bb_width_4h"] < 0.02)
+        if "adx_4h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < self.min_adx_4h.value)
+        if "bb_width_1d" in dataframe.columns and "range_24h" in dataframe.columns:
+            is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
+        cond_sideway_safe = ~is_chop_squeeze
+
+        # ---------------------------------------------------------------------
+        # 2. XÁC ĐỊNH CHẾ ĐỘ THỊ TRƯỜNG VĨ MÔ (UNIFIED MACRO REGIMES)
+        # ---------------------------------------------------------------------
+        has_macro_cols = (
+            ("ema_50_1d" in dataframe.columns) and
+            ("is_macro_bull_run_1d" in dataframe.columns) and
+            ("is_macro_bear_market_1d" in dataframe.columns) and
+            ("macdhist_4h" in dataframe.columns)
+        )
+        if has_macro_cols:
+            is_macro_bull_1d = (
+                (dataframe["is_macro_bull_run_1d"].fillna(0) == 1) |
+                ((dataframe["close"] > dataframe["ema_50_1d"]) & (dataframe["macdhist_4h"].fillna(0) > 0))
+            )
+            is_macro_bear_1d = (
+                (dataframe["is_macro_bear_market_1d"].fillna(0) == 1) |
+                ((dataframe["close"] < dataframe["ema_50_1d"]) & (dataframe["macdhist_4h"].fillna(0) < 0))
+            )
+        else:
+            is_macro_bull_1d = pd.Series(False, index=dataframe.index)
+            is_macro_bear_1d = pd.Series(False, index=dataframe.index)
+
+        # ---------------------------------------------------------------------
+        # A. CANDIDATE SHORT SNIPER
         # ---------------------------------------------------------------------
         s_max_dist = pair_cfg.get("short_max_dist_ema21", self.short_max_dist_ema21.value)
         s_body_ratio = pair_cfg.get("short_candle_body_ratio_min", self.short_candle_body_ratio_min.value)
@@ -426,7 +522,11 @@ class StrategyMTFSniper(IStrategy):
         is_breakdown_major = (dataframe["close"] < dataframe["swing_low"]) & (dataframe["close"].shift(1) >= dataframe["swing_low"])
         is_below_emas = (dataframe["close"] < dataframe["ema_10"]) & (dataframe["close"] < dataframe["ema_21"])
 
-        cond_1h_short_pos = dataframe["close_1h"] >= (dataframe["ema_50_1h"] * self.short_loc_tolerance_1h.value)
+        # Short tại vùng hồi kháng cự hợp lý: từ -0.9% đến +2.5% so với EMA 50 1H
+        cond_1h_short_pos = (
+            (dataframe["close_1h"] >= (dataframe["ema_50_1h"] * self.short_loc_tolerance_1h.value)) &
+            (dataframe["close_1h"] <= (dataframe["ema_50_1h"] * 1.025))
+        )
         cond_1h_short_macd = ((dataframe["macdhist_1h"] - dataframe["macdhist_prev_1h"]) < 0) | (dataframe["macdhist_1h"] < 0)
         cond_1h_short_exhaustion = dataframe["rsi_max_24_1h"] >= self.short_min_1h_rsi_exhaustion.value
         cond_1h_short = cond_1h_short_pos & cond_1h_short_macd & cond_1h_short_exhaustion
@@ -436,47 +536,33 @@ class StrategyMTFSniper(IStrategy):
             cond_4h_di_short = dataframe["minus_di_4h"] > dataframe["plus_di_4h"]
         else:
             cond_4h_di_short = pd.Series(True, index=dataframe.index)
-        cond_macro_safe_short = (dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
+
+        # Fail-closed macro guards
+        cond_macro_safe_short = (dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
         cond_1d_short = (dataframe["is_bull_wave_1d"].fillna(0) == 0) if (self.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns) else pd.Series(True, index=dataframe.index)
-        cond_floor_safe = (((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035) if "swing_low_20d_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
-        cond_capitulation_safe = (dataframe["is_deep_capitulation_1d"].fillna(0) == 0) if "is_deep_capitulation_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
+        cond_floor_safe = (((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035) if "swing_low_20d_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
+        cond_capitulation_safe = (dataframe["is_deep_capitulation_1d"].fillna(0) == 0) if "is_deep_capitulation_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
 
         cond_not_chasing_short = (
             ((dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (s_max_dist / 100.0)) &
             (dataframe["rsi"] >= self.short_min_rsi_entry.value)
         )
 
-        is_chop_squeeze = pd.Series(False, index=dataframe.index)
-        if "bb_width_4h" in dataframe.columns:
-            is_chop_squeeze = is_chop_squeeze | (dataframe["bb_width_4h"] < 0.02)
-        if "adx_4h" in dataframe.columns:
-            is_chop_squeeze = is_chop_squeeze | (dataframe["adx_4h"] < self.min_adx_4h.value)
-        if "bb_width_1d" in dataframe.columns and "range_24h" in dataframe.columns:
-            is_chop_squeeze = is_chop_squeeze | ((dataframe["bb_width_1d"] < 0.10) & (dataframe["range_24h"] < 0.022))
-        cond_sideway_safe = ~is_chop_squeeze
-
-        # AI Agent Lens: Wick & Close Position filter for Short
         cond_candle_shape_short = (
             (dataframe["lower_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
             (dataframe["close_pos_ratio"] <= self.max_close_pos_ratio_short.value)
         ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
 
-        # AI Agent Lens: Score Gating (Dựa trên bằng chứng định lượng)
-        # - Long cần sức mạnh bứt phá và hợp lưu tuyệt đối A+ (Score >= 80)
-        # - Short cho phép đầy đủ dải điểm để không bỏ lỡ các đợt sập mạnh năm 2026
-        cond_score_long = dataframe["long_score"] >= 80
-        cond_score_short = pd.Series(True, index=dataframe.index)
-
-        raw_signal_short = (
+        raw_sniper_short = (
             is_decisive_red & is_breakdown_major & is_below_emas &
             cond_1h_short & cond_4h_short & cond_4h_di_short & cond_macro_safe_short & cond_1d_short &
             cond_floor_safe & cond_capitulation_safe & cond_sideway_safe &
             cond_not_chasing_short & cond_volatility_safe & cond_candle_shape_short &
-            cond_score_short & (dataframe["volume"] > 0)
+            (dataframe["volume"] > 0) & data_ready
         )
 
         # ---------------------------------------------------------------------
-        # B. NHÁNH LONG SNIPER
+        # B. CANDIDATE LONG SNIPER
         # ---------------------------------------------------------------------
         l_max_dist = pair_cfg.get("long_max_dist_ema21", self.long_max_dist_ema21.value)
         l_body_ratio = pair_cfg.get("long_candle_body_ratio_min", self.long_candle_body_ratio_min.value)
@@ -496,78 +582,64 @@ class StrategyMTFSniper(IStrategy):
         cond_1h_long_exhaustion = dataframe["rsi_min_24_1h"] <= self.long_max_1h_rsi_exhaustion.value
         cond_1h_long = cond_1h_long_pos & cond_1h_long_exhaustion
 
-        cond_4h_long = (dataframe["macdhist_4h"] > 0) if "macdhist_4h" in dataframe.columns else pd.Series(True, index=dataframe.index)
+        cond_4h_long = (dataframe["macdhist_4h"] > 0) if "macdhist_4h" in dataframe.columns else pd.Series(False, index=dataframe.index)
 
         cond_1d_long = (
             (dataframe["close"] > dataframe["ema_50_1d"]) & 
             ((dataframe["macdhist_1d"] > 0) if self.long_block_1d_macd.value else True)
-        ) if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns) else pd.Series(True, index=dataframe.index)
+        ) if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns) else pd.Series(False, index=dataframe.index)
 
-        cond_macro_safe_long = (dataframe["is_macro_bear_market_1d"].fillna(0) == 0) if "is_macro_bear_market_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
+        cond_macro_safe_long = (dataframe["is_macro_bear_market_1d"].fillna(0) == 0) if "is_macro_bear_market_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
 
         cond_overextended_safe = (
             dataframe["dist_from_ema_200_1d"] <= self.long_overextended_dist_max.value
-        ) if "dist_from_ema_200_1d" in dataframe.columns else pd.Series(True, index=dataframe.index)
+        ) if "dist_from_ema_200_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
 
         cond_not_chasing_long = (
             ((dataframe["close"] - dataframe["ema_21"]) / dataframe["ema_21"] <= (l_max_dist / 100.0)) &
             (dataframe["rsi"] <= self.long_max_rsi_entry.value)
         )
 
-        # AI Agent Lens: Wick & Close Position filter for Long
         cond_candle_shape_long = (
             (dataframe["upper_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
             (dataframe["close_pos_ratio"] >= self.min_close_pos_ratio_long.value)
         ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
 
-        # AI Agent Lens: PDH Trap Filter (Tránh mua ngay sát dưới cản đỉnh ngày hôm trước)
-        pdh_col = "pdh_1d" if "pdh_1d" in dataframe.columns else ("high_1d" if "high_1d" in dataframe.columns else None)
-        if pdh_col and self.filter_pdh_ceiling.value:
-            cond_pdh_safe_long = ~((dataframe["close"] < dataframe[pdh_col]) & (dataframe["close"] >= dataframe[pdh_col] * 0.997))
-        else:
+        # Strict PDH Filter (Không fallback sang high_1d)
+        if "pdh_1d" in dataframe.columns and self.filter_pdh_ceiling.value:
+            cond_pdh_safe_long = ~((dataframe["close"] < dataframe["pdh_1d"]) & (dataframe["close"] >= dataframe["pdh_1d"] * 0.997))
+        elif not self.filter_pdh_ceiling.value:
             cond_pdh_safe_long = pd.Series(True, index=dataframe.index)
+        else:
+            cond_pdh_safe_long = pd.Series(False, index=dataframe.index)
 
-        raw_signal_long = (
+        cond_score_long = dataframe["long_score"] >= 80
+
+        raw_sniper_long = (
             is_decisive_green & is_breakout_major & is_above_emas &
             cond_1h_long & cond_4h_long & cond_1d_long & cond_macro_safe_long &
             cond_overextended_safe & cond_sideway_safe &
             cond_not_chasing_long & cond_volatility_safe & cond_candle_shape_long & cond_pdh_safe_long &
-            cond_score_long & (dataframe["volume"] > 0)
+            cond_score_long & (dataframe["volume"] > 0) & data_ready
         )
 
         # ---------------------------------------------------------------------
-        # C. ÁP DỤNG COOLDOWN ĐỘC LẬP CHO SHORT & LONG
+        # C. KHỞI TẠO BỂ CANDIDATES VÀ GÁN TAG BAN ĐẦU CHO SNIPER
         # ---------------------------------------------------------------------
-        s_cooldown = self.short_cooldown_candles.value
-        entry_mask_short = pd.Series(False, index=dataframe.index)
-        last_short_idx = -9999
-        for idx in dataframe.index[raw_signal_short].tolist():
-            if (idx - last_short_idx) >= s_cooldown:
-                entry_mask_short.loc[idx] = True
-                last_short_idx = idx
-
-        l_cooldown = self.long_cooldown_candles.value
-        entry_mask_long = pd.Series(False, index=dataframe.index)
-        last_long_idx = -9999
-        for idx in dataframe.index[raw_signal_long].tolist():
-            if (idx - last_long_idx) >= l_cooldown:
-                entry_mask_long.loc[idx] = True
-                last_long_idx = idx
-
-        dataframe.loc[entry_mask_short, "enter_short"] = 1
-        for idx in dataframe.index[entry_mask_short]:
+        cand_short = raw_sniper_short.copy()
+        cand_short_tags = pd.Series("", index=dataframe.index)
+        for idx in dataframe.index[raw_sniper_short]:
             sc = dataframe.loc[idx, "short_score"]
             tier = "A80plus" if sc >= 80 else ("B65plus" if sc >= 65 else "C_sub65")
-            dataframe.loc[idx, "enter_tag"] = f"short_{tier}"
+            cand_short_tags.loc[idx] = f"short_{tier}"
 
-        dataframe.loc[entry_mask_long, "enter_long"] = 1
-        for idx in dataframe.index[entry_mask_long]:
-            sc = dataframe.loc[idx, "long_score"]
-            tier = "A80plus" if sc >= 80 else ("B65plus" if sc >= 65 else "C_sub65")
-            dataframe.loc[idx, "enter_tag"] = f"long_{tier}"
+        cand_long = raw_sniper_long.copy()
+        cand_long_tags = pd.Series("", index=dataframe.index)
+        for idx in dataframe.index[raw_sniper_long]:
+            cand_long_tags.loc[idx] = "long_A80plus"
 
         # ---------------------------------------------------------------------
-        # D. NHÁNH JEV ACTIVE MOMENTUM / WATERFALL HUNTER (DUAL-ENGINE)
+        # D. NHÁNH JEV ACTIVE MOMENTUM / WATERFALL HUNTER (TÍCH HỢP VÀO CANDIDATE POOL)
         # ---------------------------------------------------------------------
         if getattr(self, "enable_jev_hunter", True):
             try:
@@ -576,73 +648,126 @@ class StrategyMTFSniper(IStrategy):
                 strat_dir = str(Path(__file__).resolve().parent)
                 if strat_dir not in sys.path:
                     sys.path.insert(0, strat_dir)
-                from jev_entry_hunter import MomentumRadar, JevHunterEngine
+                from jev_entry_hunter import MomentumRadar, JevHunterEngine, JevSetupType
 
-                hunter = JevHunterEngine()
-                candidates = MomentumRadar.find_candidates(dataframe, cooldown_bars=12)
+                if not hasattr(self, "_hunter") or self._hunter is None:
+                    self._hunter = JevHunterEngine()
+                hunter = self._hunter
+
+                candidates = MomentumRadar.find_candidates(dataframe, cooldown_bars=12, directional_cooldown=True)
                 for c_idx, event_type in candidates:
-                    # Chỉ kích hoạt nếu nến đó chưa được chọn bởi Sniper
-                    if dataframe.loc[c_idx, "enter_short"] != 1 and dataframe.loc[c_idx, "enter_long"] != 1:
-                        df_32 = dataframe.iloc[max(0, c_idx-31):c_idx+1]
-                        if len(df_32) >= 16:
-                            row = dataframe.iloc[c_idx]
-                            ts_str = str(row["date"])
-                            macro_info = {
-                                "trend_4h": "BEAR" if row.get("is_bull_wave_4h", 0) == 0 else "BULL",
-                                "ema50_1h_dist_pct": ((row["close"] - row["ema_50_1h"]) / row["ema_50_1h"] * 100) if "ema_50_1h" in row else 0.0,
-                                "atr_percentile": row.get("atr_pct", 50.0),
-                                "range_24h_pct": row.get("range_24h", 0.0) * 100 if "range_24h" in row else 0.0
-                            }
-                            verdict = hunter.evaluate_candidate(df_32, pair, ts_str, event_type, macro_info)
-                            action = verdict.get("action")
-                            conf = verdict.get("confidence", 0.0)
-                            setup = verdict.get("setup_type", "breakout")
+                    pos = int(c_idx)
+                    if pos < 0 or pos >= len(dataframe):
+                        continue
+                    idx = dataframe.index[pos]
 
-                            # --- BẢO VỆ VĨ MÔ & LỌC GIẢI PHẪU NẾN (MACRO & ANATOMY GUARDS) ---
-                            # Xác định trạng thái vĩ mô (1D và 4H)
-                            is_bear_macro = (
-                                (row.get("is_macro_bear_market_1d", 0) == 1) or
-                                (row["close"] < row.get("ema_50_1d", row["close"] * 2)) or
-                                (row.get("is_bear_wave_4h", 0) == 1) or
-                                (row.get("macdhist_4h", 0) < 0)
-                            )
-                            is_bull_macro = (
-                                (row.get("is_macro_bull_run_1d", 0) == 1) or
-                                (row["close"] > row.get("ema_50_1d", 0)) or
-                                (row.get("is_bull_wave_4h", 0) == 1)
-                            )
+                    # Nếu nến đã được chọn bởi Sniper, bỏ qua
+                    if cand_short.iloc[pos] or cand_long.iloc[pos]:
+                        continue
 
-                            # 1. Chiều SHORT: Chỉ đi theo xu hướng giảm vĩ mô, cấm cản tàu trong uptrend
-                            if action == "enter_short" and is_bear_macro:
-                                # Chỉ chấp nhận setup thác đổ (waterfall_collapse), loại bỏ hoàn toàn bẫy hấp thụ hay bắt đỉnh
-                                if setup == "waterfall_collapse" and conf >= 0.85:
-                                    # Lọc giải phẫu nến: Không có râu dưới dài rút chân (lower_wick <= 0.25)
-                                    # Không đuổi giá quá xa EMA21 (khoảng cách >= -3.0%)
-                                    low_wick_ok = row.get("lower_wick_ratio", 0.0) <= 0.25
-                                    close_pos_ok = row.get("close_pos_ratio", 0.0) <= 0.35
-                                    dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
-                                    # Anti-Chase & Trend Exhaustion Guard (Loại bỏ hoàn toàn nến kiệt sức đuôi sóng)
-                                    not_exhausted_short = (dist_ema21 >= -0.015) and (row.get("rsi", 50.0) >= 28.0)
-                                    not_overextended = not_exhausted_short
+                    # Fail-closed nếu informative data chưa sẵn sàng tại nến pos
+                    if not data_ready.iloc[pos]:
+                        continue
 
-                                    if low_wick_ok and close_pos_ok and not_overextended:
-                                        dataframe.loc[c_idx, "enter_short"] = 1
-                                        dataframe.loc[c_idx, "enter_tag"] = f"jev_hunter_{setup}"
+                    df_32 = dataframe.iloc[max(0, pos - 31):pos + 1]
+                    if len(df_32) >= 16:
+                        row = dataframe.iloc[pos]
+                        ts_str = str(row["date"])
+                        macro_info = {
+                            "trend_4h": "BEAR" if row.get("is_bull_wave_4h", 0) == 0 else "BULL",
+                            "ema50_1h_dist_pct": ((row["close"] - row["ema_50_1h"]) / row["ema_50_1h"] * 100) if "ema_50_1h" in row else 0.0,
+                            "atr_percentile": row.get("atr_pct", 50.0),
+                            "range_24h_pct": row.get("range_24h", 0.0) * 100 if "range_24h" in row else 0.0
+                        }
+                        verdict = hunter.evaluate_candidate(df_32, pair, ts_str, event_type, macro_info)
+                        action = verdict.get("action")
+                        conf = verdict.get("confidence", 0.0)
+                        setup = verdict.get("setup_type", JevSetupType.UNKNOWN.value)
+                        status = verdict.get("status", "CONFIRMED")
 
-                            # 2. Chiều LONG: Chỉ đi theo xu hướng tăng vĩ mô, cấm bắt đáy trong downtrend
-                            elif action == "enter_long" and is_bull_macro and not is_bear_macro:
-                                if setup in ["waterfall_collapse", "breakout_expansion"] and conf >= 0.85:
-                                    up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.25
-                                    close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
-                                    dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
-                                    not_exhausted_long = (dist_ema21 <= 0.015) and (row.get("rsi", 50.0) <= 72.0)
-                                    not_overextended = not_exhausted_long
+                        # Chỉ tiếp tục nếu verdict status là CONFIRMED (loại bỏ REJECTED, UNAVAILABLE, INVALID_RESPONSE)
+                        if status != "CONFIRMED":
+                            continue
 
-                                    if up_wick_ok and close_pos_ok and not_overextended:
-                                        dataframe.loc[c_idx, "enter_long"] = 1
-                                        dataframe.loc[c_idx, "enter_tag"] = f"jev_hunter_{setup}"
+                        # Strict Macro Gates (Kế thừa v2.5.0 để loại bỏ hoàn toàn bẫy ngược trend)
+                        is_bear_macro_h = (
+                            (row.get("is_macro_bear_market_1d", 0) == 1) or
+                            (row["close"] < row.get("ema_50_1d", row["close"] * 2)) or
+                            (row.get("is_bear_wave_4h", 0) == 1) or
+                            (row.get("macdhist_4h", 0) < 0)
+                        )
+                        is_bull_macro_h = (
+                            (row.get("is_macro_bull_run_1d", 0) == 1) or
+                            (row["close"] > row.get("ema_50_1d", 0)) or
+                            (row.get("is_bull_wave_4h", 0) == 1)
+                        )
+
+                        # Kế thừa Risk Gate từ Sniper: Volatility, Sideway, Floor/PDH
+                        vol_safe = bool(cond_volatility_safe.iloc[pos])
+                        sideway_safe = bool(cond_sideway_safe.iloc[pos])
+
+                        # 1. Chiều SHORT: Chỉ chấp nhận waterfall collapse khi Bear Macro rõ ràng, CẤM trong Bull
+                        if action == "enter_short" and is_bear_macro_h and not is_bull_macro_h and (row.get("is_macro_bull_run_1d", 0) == 0):
+                            if setup == JevSetupType.WATERFALL_COLLAPSE.value and conf >= 0.85:
+                                # AI Waterfall: Cho phép râu dưới tới 0.285 (tránh lọc bỏ nến biến động mạnh như ngày 12/11/2026 có râu 0.28)
+                                low_wick_ok = row.get("lower_wick_ratio", 0.0) <= 0.285
+                                close_pos_ok = row.get("close_pos_ratio", 0.0) <= 0.35
+                                dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
+                                # Trong cú sập thác đổ, RSI phá sâu xuống 24 nhưng không kiệt sức hoàn toàn
+                                not_exhausted_short = (dist_ema21 >= -0.015) and (row.get("rsi", 50.0) >= 24.0)
+
+                                # Floor filter riêng cho AI Waterfall:
+                                # Không short khi nằm sát trên hỗ trợ 20D (0.0 <= floor_dist < 0.035, dễ bị bật nảy)
+                                # Cho phép short khi còn cách xa cản (>= 3.5%) HOẶC AI xác nhận đã chính thức thủng đáy (< 0.0)
+                                sw_low_20d = row.get("swing_low_20d_1d", 0.0)
+                                if sw_low_20d and sw_low_20d > 0:
+                                    floor_dist = (row["close"] - sw_low_20d) / sw_low_20d
+                                    floor_safe = (floor_dist >= 0.035) or (floor_dist < 0.0)
+                                else:
+                                    floor_safe = False
+
+                                if low_wick_ok and close_pos_ok and not_exhausted_short and vol_safe and sideway_safe and floor_safe:
+                                    cand_short.iloc[pos] = True
+                                    cand_short_tags.loc[idx] = f"jev_hunter_{setup}"
+
+                        # 2. Chiều LONG: Đi theo xu hướng tăng 1D (close > ema_50_1d), CẤM trong Bear Market
+                        elif action == "enter_long" and (row["close"] > row.get("ema_50_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
+                            if setup in (JevSetupType.TREND_PULLBACK.value, JevSetupType.ABSORPTION_TRAP.value) and conf >= 0.85:
+                                up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.285
+                                close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
+                                dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
+                                not_exhausted_long = (dist_ema21 <= 0.015) and (row.get("rsi", 50.0) <= 72.0)
+                                pdh_safe = bool(cond_pdh_safe_long.iloc[pos])
+
+                                if up_wick_ok and close_pos_ok and not_exhausted_long and vol_safe and sideway_safe and pdh_safe:
+                                    cand_long.iloc[pos] = True
+                                    cand_long_tags.loc[idx] = f"jev_hunter_{setup}"
             except Exception as e:
                 logger.warning(f"Jev Hunter populate error: {e}")
+
+        # ---------------------------------------------------------------------
+        # E. UNIFIED RISK GATE: ÁP DỤNG COOLDOWN ĐỒNG NHẤT CHO CANDIDATE POOL
+        # ---------------------------------------------------------------------
+        s_cooldown = self.short_cooldown_candles.value
+        final_short_mask = self.apply_cooldown(cand_short, s_cooldown)
+
+        l_cooldown = self.long_cooldown_candles.value
+        final_long_mask = self.apply_cooldown(cand_long, l_cooldown)
+
+        # Conflict Resolution: Nếu cả Long và Short cùng kích hoạt trên một cây nến (chop dị thường), hủy cả 2 để bảo toàn vốn
+        both_mask = final_short_mask & final_long_mask
+        if both_mask.any():
+            logger.warning(f"[RiskGate] Detected simultaneous Long & Short candidates on {both_mask.sum()} bars. Resolving conflict by canceling both.")
+            final_short_mask = final_short_mask & (~both_mask)
+            final_long_mask = final_long_mask & (~both_mask)
+
+        dataframe.loc[final_short_mask, "enter_short"] = 1
+        for idx in dataframe.index[final_short_mask]:
+            dataframe.loc[idx, "enter_tag"] = cand_short_tags.loc[idx]
+
+        dataframe.loc[final_long_mask, "enter_long"] = 1
+        for idx in dataframe.index[final_long_mask]:
+            dataframe.loc[idx, "enter_tag"] = cand_long_tags.loc[idx]
 
         return dataframe
 
@@ -671,18 +796,23 @@ class StrategyMTFSniper(IStrategy):
             consecutive_losses = 0
             for t in recent_trades:
                 profit = t.close_profit if t.close_profit is not None else 0.0
-                if profit < -0.10:
+                if profit < 0.0:
                     consecutive_losses += 1
-                elif profit > 0.0:
+                else:
+                    # Lệnh hòa vốn hoặc có lãi -> Reset chuỗi thua ngay lập tức
                     break
 
             if consecutive_losses >= 3:
                 last_loss_date = recent_trades[0].close_date
                 if last_loss_date:
                     if (current_time.timestamp() - last_loss_date.timestamp()) < (3 * 86400):
+                        logger.warning(
+                            f"[Circuit Breaker] Triggered: {consecutive_losses} consecutive losses. "
+                            f"Trading paused for 72h until {last_loss_date.timestamp() + 3*86400}."
+                        )
                         return False
 
-        # --- LỚP 2: PORTFOLIO CORRELATION GUARD ---
+        # --- LỚP 2: PORTFOLIO DIRECTIONAL LOCK & DISTRESS GUARD ---
         open_trades = Trade.get_trades_proxy(is_open=True)
         for ot in open_trades:
             ot_side = "short" if ot.is_short else "long"
@@ -699,11 +829,7 @@ class StrategyMTFSniper(IStrategy):
                         if profit_ratio < -0.08:
                             return False
 
-        # Lệnh từ Jev Active Hunter đã được chính Jev AI duyệt và phát tín hiệu trực tiếp
-        if entry_tag and "jev_hunter" in entry_tag:
-            return True
-
-        # --- LỚP 3: JEV AI TRAJECTORY GATEKEEPER ---
+        # --- LỚP 3: UNIFIED JEV AI TRAJECTORY GATEKEEPER (Áp dụng cho TẤT CẢ các lệnh) ---
         if getattr(self, "enable_jev_decision", False):
             try:
                 import sys
@@ -711,23 +837,44 @@ class StrategyMTFSniper(IStrategy):
                 strat_dir = str(Path(__file__).resolve().parent)
                 if strat_dir not in sys.path:
                     sys.path.insert(0, strat_dir)
-                from jev_decision import CandleTrajectoryExtractor, JevDecisionEngine
+                from jev_decision import CandleTrajectoryExtractor, JevDecisionEngine, JevStatus
+
                 analyzed_df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-                if analyzed_df is not None and not analyzed_df.empty:
-                    df_up_to_now = analyzed_df.loc[analyzed_df["date"] <= current_time]
-                    if len(df_up_to_now) >= 16:
-                        payload = CandleTrajectoryExtractor.build_payload(df_up_to_now, pair, side, lookback=32)
-                        engine = JevDecisionEngine()
-                        verdict = engine.evaluate(payload)
-                        logger.info(
-                            f"Jev AI Verdict: {pair} {side.upper()} @ {current_time} -> {verdict.get('decision')} "
-                            f"(Conf: {verdict.get('confidence')}, Regime: {verdict.get('market_regime')})"
-                        )
-                        if verdict.get("decision") != "CONFIRM":
-                            logger.info(f"Jev AI Vetoed trade: {pair} {side.upper()} @ {current_time} | Reasons: {verdict.get('reasons')}")
-                            return False
+                if analyzed_df is None or analyzed_df.empty:
+                    if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
+                        logger.warning(f"[JEV AI] Fail-safe active -> Trade {pair} rejected: missing analyzed dataframe.")
+                        return False
+                    return True
+
+                df_up_to_now = analyzed_df.loc[analyzed_df["date"] <= current_time]
+                if len(df_up_to_now) < 16:
+                    if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
+                        logger.warning(f"[JEV AI] Fail-safe active -> Trade {pair} rejected: insufficient candle history (<16 bars).")
+                        return False
+                    return True
+
+                payload = CandleTrajectoryExtractor.build_payload(df_up_to_now, pair, side, lookback=32)
+                engine = JevDecisionEngine()
+                verdict = engine.evaluate(payload)
+                logger.info(
+                    f"Jev AI Verdict: {pair} {side.upper()} @ {current_time} -> {verdict.get('decision')} "
+                    f"(Conf: {verdict.get('confidence')}, Regime: {verdict.get('market_regime')}, Status: {verdict.get('status')})"
+                )
+
+                v_status = verdict.get("status", JevStatus.SUCCESS.value)
+                if v_status != JevStatus.SUCCESS.value:
+                    if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
+                        logger.warning(f"[JEV AI] Fail-safe active -> Trade {pair} rejected: AI status is {v_status}")
+                        return False
+
+                if verdict.get("decision") != "CONFIRM":
+                    logger.info(f"Jev AI Vetoed trade: {pair} {side.upper()} @ {current_time} | Reasons: {verdict.get('reasons')}")
+                    return False
             except Exception as e:
                 logger.warning(f"Jev AI evaluation error: {e}")
+                if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
+                    logger.warning(f"[JEV AI] Fail-safe policy active -> Trade {pair} rejected due to AI evaluation failure: {e}")
+                    return False
 
         return True
 
@@ -753,29 +900,37 @@ class StrategyMTFSniper(IStrategy):
 
         duration_minutes = (current_time - trade.open_date_utc).total_seconds() / 60
 
-        # Cắt sớm khi xu hướng bị gãy cấu trúc (Break of Structure sau >= 2h nếu lệnh đang âm)
-        if duration_minutes >= 120 and current_profit < -0.003:
+        # Cắt sớm khi xu hướng bị gãy cấu trúc & HTF đảo chiều (sau >= 3h nếu lệnh âm > 8% ROE)
+        if duration_minutes >= 180 and current_profit < -0.08:
             if trade.is_short:
                 cond_structure_broken = r.get("close", 0) > r.get("swing_high_12", 0)
                 cond_htf_reversal = (
                     (r.get("close_1h", 0) > r.get("ema_50_1h", 0)) and
-                    (r.get("macdhist_1h", 0) > 0) and
-                    (r.get("macdhist", 0) > 0)
+                    (r.get("macdhist_1h", 0) > 0)
                 )
-                if cond_structure_broken or cond_htf_reversal:
+                if cond_structure_broken and cond_htf_reversal:
                     return "exit_short_trend_invalidated"
             else:
                 cond_structure_broken = r.get("close", 0) < r.get("swing_low_12", 0)
                 cond_htf_reversal = (
                     (r.get("close_1h", 0) < r.get("ema_50_1h", 0)) and
-                    (r.get("macdhist_1h", 0) < 0) and
-                    (r.get("macdhist", 0) < 0)
+                    (r.get("macdhist_1h", 0) < 0)
                 )
-                if cond_structure_broken or cond_htf_reversal:
+                if cond_structure_broken and cond_htf_reversal:
                     return "exit_long_trend_invalidated"
 
-        # Thời hạn tối đa 24h
-        if duration_minutes >= 24 * 60:
+        # HTF Trend Runner Mode: Nuôi các vị thế có đệm lãi lớn (>= 35% ROE) bám theo cấu trúc 1H
+        if current_profit >= 0.35:
+            e21_1h = r.get("ema_21_1h", 0)
+            c_1h = r.get("close_1h", 0)
+            if e21_1h > 0 and c_1h > 0:
+                if trade.is_short and c_1h > e21_1h:
+                    return "exit_short_htf_runner_broken"
+                elif (not trade.is_short) and c_1h < e21_1h:
+                    return "exit_long_htf_runner_broken"
+
+        # Thời hạn tối đa 24h (chỉ áp dụng cho các lệnh chưa thoát ly đệm lãi < 35% ROE)
+        if duration_minutes >= 24 * 60 and current_profit < 0.35:
             if trade.is_short and ((r.get("close", 0) > r.get("ema_21", 0)) or (current_profit < 0.015)):
                 return "exit_timeout_24h"
             elif (not trade.is_short) and ((r.get("close", 0) < r.get("ema_21", 0)) or (current_profit < 0.015)):
@@ -788,34 +943,84 @@ class StrategyMTFSniper(IStrategy):
     # =========================================================================
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
                         current_rate: float, current_profit: float, **kwargs) -> float:
+        lev = trade.leverage if (trade and trade.leverage) else 10.0
+
         if not trade.is_short:
             if current_profit >= 1.20:
                 return -0.20
             if current_profit >= 0.80:
                 return -0.30
             if current_profit >= 0.50:
-                return -stoploss_from_open(0.25, current_profit, is_short=False, leverage=10.0)
+                return stoploss_from_open(0.25, current_profit, is_short=False, leverage=lev)
             if current_profit >= 0.35:
-                return -stoploss_from_open(0.10, current_profit, is_short=False, leverage=10.0)
+                return stoploss_from_open(0.10, current_profit, is_short=False, leverage=lev)
             if current_profit >= 0.20:
-                return -stoploss_from_open(0.02, current_profit, is_short=False, leverage=10.0)
-        else:
-            if current_profit >= 0.35:
-                return -0.20
-            if current_profit >= 0.20:
-                return -stoploss_from_open(0.10, current_profit, is_short=True, leverage=10.0)
+                return stoploss_from_open(0.02, current_profit, is_short=False, leverage=lev)
             if current_profit >= 0.14:
-                return -stoploss_from_open(0.02, current_profit, is_short=True, leverage=10.0)
+                return stoploss_from_open(0.01, current_profit, is_short=False, leverage=lev)
+        else:
+            if current_profit >= 1.20:
+                return -0.20
+            if current_profit >= 0.80:
+                return -0.30
+            if current_profit >= 0.50:
+                return stoploss_from_open(0.25, current_profit, is_short=True, leverage=lev)
+            if current_profit >= 0.35:
+                return stoploss_from_open(0.10, current_profit, is_short=True, leverage=lev)
+            if current_profit >= 0.20:
+                return stoploss_from_open(0.02, current_profit, is_short=True, leverage=lev)
+            if current_profit >= 0.14:
+                return stoploss_from_open(0.01, current_profit, is_short=True, leverage=lev)
 
+        # Quản lý rủi ro vị thế kéo dài sau 24h:
+        # Nếu sau 24h vị thế vẫn đang âm, siết chặt stoploss về -5% ROE (-0.5% price distance tại 10x leverage, tránh nhiễu 15m)
         duration_hours = (current_time - trade.open_date_utc).total_seconds() / 3600
         if duration_hours >= 24 and current_profit < 0.0:
-            sl_rel = stoploss_from_open(-0.05, current_profit, is_short=trade.is_short, leverage=10.0)
-            return -max(sl_rel, 0.01)
+            sl_rel = stoploss_from_open(-0.05, current_profit, is_short=trade.is_short, leverage=lev)
+            return max(sl_rel, 0.01)
 
         pair_cfg = self._get_pair_params(pair)
         base_sl = pair_cfg.get("stoploss", self.stoploss)
-        if base_sl > self.stoploss:
-            sl_rel = stoploss_from_open(base_sl, current_profit, is_short=trade.is_short, leverage=10.0)
-            return -max(sl_rel, 0.01)
+        sl_rel = stoploss_from_open(base_sl, current_profit, is_short=trade.is_short, leverage=lev)
+        return max(sl_rel, 0.01)
 
-        return self.stoploss
+    # =========================================================================
+    # 11. CONFIRM TRADE EXIT (DYNAMIC RUNNER & CONFLICT RESOLUTION)
+    # =========================================================================
+    def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str, amount: float,
+                           rate: float, time_in_force: str, exit_reason: str,
+                           current_time: datetime, **kwargs) -> bool:
+        """
+        Bảo vệ quyền nuôi lệnh (Trend Runner) và tránh các cơ chế dẫm đạp:
+        1. Stoploss, Trailing SL, Emergency luôn được ưu tiên 100% (không bao giờ chặn).
+        2. Khi chạm minimal_roi nhưng xu hướng 1H vẫn đang đè mạnh và đệm lãi >= 50% ROE:
+           Tạm hoãn chốt lời để thả lỏng cho vị thế chạy theo siêu sóng.
+        """
+        if exit_reason in ("stop_loss", "trailing_stop_loss", "emergency_exit", "force_exit"):
+            return True
+
+        if exit_reason == "roi":
+            if not self.dp:
+                return True
+            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if df is None or df.empty:
+                return True
+            matched = df.loc[df["date"] <= current_time]
+            if matched.empty:
+                return True
+            r = matched.iloc[-1]
+
+            current_profit = trade.calc_profit_ratio(rate)
+            if current_profit >= 0.50:
+                c_1h = r.get("close_1h", 0)
+                e21_1h = r.get("ema_21_1h", 0)
+                macd_1h = r.get("macdhist_1h", 0)
+
+                if trade.is_short:
+                    if e21_1h > 0 and c_1h < e21_1h:
+                        return False
+                else:
+                    if e21_1h > 0 and c_1h > e21_1h:
+                        return False
+
+        return True
