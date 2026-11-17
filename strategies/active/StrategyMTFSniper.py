@@ -538,7 +538,10 @@ class StrategyMTFSniper(IStrategy):
             cond_4h_di_short = pd.Series(True, index=dataframe.index)
 
         # Fail-closed macro guards
-        cond_macro_safe_short = (dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
+        # Bộ lọc Xu hướng Lớn: Tuyệt đối không đánh ngược xu hướng (không tham sóng hồi)
+        # 1. Trong Bull Regime (giá trên cả EMA 50 và EMA 200 ngày): CẤM SHORT (không short sóng hồi trong uptrend)
+        is_in_macro_bull = (dataframe["close"] > dataframe["ema_50_1d"]) & (dataframe["close"] > dataframe["ema_200_1d"]) if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns) else pd.Series(False, index=dataframe.index)
+        cond_macro_safe_short = ~is_in_macro_bull & ((dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(False, index=dataframe.index))
         cond_1d_short = (dataframe["is_bull_wave_1d"].fillna(0) == 0) if (self.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns) else pd.Series(True, index=dataframe.index)
         cond_floor_safe = (((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035) if "swing_low_20d_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
         cond_capitulation_safe = (dataframe["is_deep_capitulation_1d"].fillna(0) == 0) if "is_deep_capitulation_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
@@ -589,7 +592,9 @@ class StrategyMTFSniper(IStrategy):
             ((dataframe["macdhist_1d"] > 0) if self.long_block_1d_macd.value else True)
         ) if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns) else pd.Series(False, index=dataframe.index)
 
-        cond_macro_safe_long = (dataframe["is_macro_bear_market_1d"].fillna(0) == 0) if "is_macro_bear_market_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
+        # 2. Trong Bear Regime (giá dưới cả EMA 50 hoặc EMA 200 ngày): CẤM LONG (không bắt dao rơi/sóng hồi trong downtrend)
+        is_in_macro_bear = (dataframe["close"] < dataframe["ema_200_1d"]) | (dataframe["close"] < dataframe["ema_50_1d"]) if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns) else pd.Series(False, index=dataframe.index)
+        cond_macro_safe_long = ~is_in_macro_bear & ((dataframe["is_macro_bear_market_1d"].fillna(0) == 0) if "is_macro_bear_market_1d" in dataframe.columns else pd.Series(False, index=dataframe.index))
 
         cond_overextended_safe = (
             dataframe["dist_from_ema_200_1d"] <= self.long_overextended_dist_max.value
