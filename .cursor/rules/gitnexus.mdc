@@ -1,0 +1,37 @@
+---
+description: GitNexus-first code intelligence protocol for freqtrade
+alwaysApply: true
+---
+
+# GitNexus Protocol
+
+This repo is indexed as **freqtrade**.
+
+## Non-bypassable scoping
+
+1. **Tier 1 — GitNexus graph** for architecture, callers/callees, blast radius, execution flows:
+   - MCP: `query` / `context` / `impact` / `trace` / `detect_changes`
+   - CLI: `node .gitnexus/run.cjs …` or `gitnexus …`
+2. **Tier 2 — ripgrep** only for literals/config/env/non-AST files, with bounded paths.
+
+## Required rituals
+
+| Moment | Action |
+|---|---|
+| Session / task start | `gitnexus status` (or MCP context). If stale → `gitnexus analyze` |
+| Before editing a symbol | `impact` upstream; warn on HIGH/CRITICAL; treat UNKNOWN as unresolved |
+| Before commit | `detect_changes` (scope all / compare to `develop` when reviewing branch) |
+| After commit | `gitnexus analyze` to refresh index |
+
+## Never
+
+- Blind whole-repo grepping as the primary exploration method
+- Edit/rename symbols without impact / graph-aware rename
+- Treat empty caller sets or `risk: UNKNOWN` as safe-to-delete
+
+## Resources
+
+- `gitnexus://repo/freqtrade/context`
+- `gitnexus://repo/freqtrade/clusters`
+- `gitnexus://repo/freqtrade/processes`
+- Skills: `.agents/skills/gitnexus-*` (symlinked into `.claude/skills` and `.cursor/skills`)

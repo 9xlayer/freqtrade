@@ -1,0 +1,27 @@
+---
+description: Memory Bank protocol — persistent project context across agent resets
+alwaysApply: true
+---
+
+# Memory Bank Protocol
+
+Before non-trivial work, read `memory-bank/` in order:
+
+1. `projectbrief.md`
+2. `productContext.md`
+3. `systemPatterns.md`
+4. `techContext.md`
+5. `activeContext.md`
+6. `progress.md`
+
+## Update policy (IWAS-style milestones)
+
+- Update `activeContext.md` + `progress.md` at **task completion boundaries** (before the final milestone commit), not on every small edit.
+- When the user says **update memory bank**, review ALL core files; focus on `activeContext.md` and `progress.md`.
+- Keep Memory Bank token-lean. Archive old milestones under `memory-bank/archive/` instead of letting active files bloat.
+- Permanent architecture invariants belong in durable docs (`strategies/README.md`, `reports/`, specs) — not only in Memory Bank scratch context.
+
+## Language
+
+- Memory Bank technical content: English preferred.
+- User chat: Vietnamese OK.

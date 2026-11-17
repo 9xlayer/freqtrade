@@ -1,0 +1,24 @@
+# Freqtrade / MTF Sniper + JEV
+
+Follow `AGENTS.md` as the primary agent protocol (IWAS/getiwas-style rituals adapted for this repo).
+
+## Always
+1. Read `memory-bank/` (especially `activeContext.md` + `progress.md`) at task start.
+2. Prefer **GitNexus** (`freqtrade` index) over blind whole-repo grep.
+3. Obey `.cursor/rules/memory-bank.mdc` and `.cursor/rules/gitnexus.mdc`.
+
+## GitNexus
+- Status: `gitnexus status` or `node .gitnexus/run.cjs status`
+- Reindex: `gitnexus analyze` after major changes / after commits
+- Skills canonical path: `.agents/skills/gitnexus-*` (symlinked in `.claude/skills` + `.cursor/skills`)
+- MCP: `.cursor/mcp.json` → server `gitnexus`
+
+## Hooks
+- `.cursor/hooks.json`: `sessionStart` bootstrap + post-`git commit` Memory Bank/GitNexus reminder
+
+## Trading / JEV
+- Prefer evidence (backtests, logs, tests) over report narrative.
+- Do not treat archived `reports/**/REPORT.md` headline PnL as ground truth without reproduction.
+- `JEV_MODE` only (`native|external|backtest`); external model alias that works: `jev-latest`.
+- Backtests: force `JEV_MODE=native` (or `backtest`).
+- Code comments in English; user communication may be Vietnamese.
