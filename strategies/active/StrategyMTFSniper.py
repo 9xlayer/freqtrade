@@ -678,8 +678,14 @@ class StrategyMTFSniper(IStrategy):
                     if len(df_32) >= 16:
                         row = dataframe.iloc[pos]
                         ts_str = str(row["date"])
+                        if row.get("is_bull_wave_4h", 0) == 1:
+                            trend_4h_str = "BULL"
+                        elif row.get("is_bear_wave_4h", 0) == 1:
+                            trend_4h_str = "BEAR"
+                        else:
+                            trend_4h_str = "NEUTRAL"
                         macro_info = {
-                            "trend_4h": "BEAR" if row.get("is_bull_wave_4h", 0) == 0 else "BULL",
+                            "trend_4h": trend_4h_str,
                             "ema50_1h_dist_pct": ((row["close"] - row["ema_50_1h"]) / row["ema_50_1h"] * 100) if "ema_50_1h" in row else 0.0,
                             "atr_percentile": row.get("atr_pct", 50.0),
                             "range_24h_pct": row.get("range_24h", 0.0) * 100 if "range_24h" in row else 0.0
@@ -801,10 +807,10 @@ class StrategyMTFSniper(IStrategy):
             consecutive_losses = 0
             for t in recent_trades:
                 profit = t.close_profit if t.close_profit is not None else 0.0
-                if profit < 0.0:
+                if profit <= -0.10:
                     consecutive_losses += 1
                 else:
-                    # Lệnh hòa vốn hoặc có lãi -> Reset chuỗi thua ngay lập tức
+                    # Lệnh hòa vốn, có lãi, hoặc lỗ nhẹ (> -10% ROE) -> Reset chuỗi thua nặng ngay lập tức
                     break
 
             if consecutive_losses >= 3:
@@ -871,6 +877,9 @@ class StrategyMTFSniper(IStrategy):
                     if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
                         logger.warning(f"[JEV AI] Fail-safe active -> Trade {pair} rejected: AI status is {v_status}")
                         return False
+                    else:
+                        logger.warning(f"[JEV AI] Fail-safe policy is 'allow' -> Bypassing AI gate due to status {v_status}")
+                        return True
 
                 if verdict.get("decision") != "CONFIRM":
                     logger.info(f"Jev AI Vetoed trade: {pair} {side.upper()} @ {current_time} | Reasons: {verdict.get('reasons')}")
@@ -880,6 +889,8 @@ class StrategyMTFSniper(IStrategy):
                 if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
                     logger.warning(f"[JEV AI] Fail-safe policy active -> Trade {pair} rejected due to AI evaluation failure: {e}")
                     return False
+                logger.warning(f"[JEV AI] Fail-safe policy is 'allow' -> Bypassing AI gate on exception: {e}")
+                return True
 
         return True
 
