@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 from datetime import datetime
+import logging
 from typing import Optional
 from freqtrade.strategy import (
     IStrategy,
@@ -17,6 +18,8 @@ try:
 except ImportError:
     import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.persistence import Trade
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyMTFShortSniper(IStrategy):
@@ -40,6 +43,10 @@ class StrategyMTFShortSniper(IStrategy):
     """
 
     INTERFACE_VERSION = 3
+    strategy_version = "2.6.2"
+
+    def version(self) -> str:
+        return f"v{self.strategy_version}"
 
     # Khung thời gian cơ sở (Trigger)
     timeframe = "15m"
@@ -54,9 +61,9 @@ class StrategyMTFShortSniper(IStrategy):
                  proposed_leverage: float, max_leverage: float, entry_tag: str | None,
                  side: str, **kwargs) -> float:
         """
-        Đòn bẩy 10x cho tài khoản Futures
+        Đòn bẩy 10x cho tài khoản Futures (giới hạn theo max_leverage của sàn)
         """
-        return 10.0
+        return min(10.0, float(max_leverage))
 
     # Cấu hình lệnh
     stoploss = -0.28  # Trần cắt lỗ tối đa -28% ký quỹ (= -2.8% chart), Custom Stoploss sẽ siết về -25% (-2.5%) cho BTC
@@ -289,6 +296,27 @@ class StrategyMTFShortSniper(IStrategy):
         max_dist_val = pair_cfg.get("max_dist_ema21", self.max_dist_ema21.value)
         body_ratio_val = pair_cfg.get("candle_body_ratio_min", self.candle_body_ratio_min.value)
 
+        # Khởi tạo cột tín hiệu & kiểm tra tính sẵn sàng của dữ liệu (Fail-Closed)
+        dataframe["enter_short"] = 0
+        dataframe["enter_tag"] = ""
+
+        required_cols = [
+            "open", "high", "low", "close", "volume",
+            "body", "total_range", "atr", "swing_low", "ema_10", "ema_21", "rsi",
+            "close_1h", "ema_50_1h", "macdhist_1h", "macdhist_prev_1h", "rsi_max_24_1h",
+            "is_bull_wave_4h", "is_macro_bull_run_1d", "is_bull_wave_1d",
+            "swing_low_20d_1d", "is_deep_capitulation_1d"
+        ]
+        missing_cols = [c for c in required_cols if c not in dataframe.columns]
+        if missing_cols:
+            logger.warning(
+                f"StrategyMTFShortSniper: Missing required informative columns: {missing_cols}. "
+                f"Failing closed (0 entry signals)."
+            )
+            return dataframe
+
+        data_ready = dataframe[required_cols].notna().all(axis=1)
+
         # [ĐIỀU KIỆN 1 - NẾN ĐỎ XẢ ÁP ĐẢO 15M]
         is_red = dataframe["close"] < dataframe["open"]
         is_decisive_red = (
@@ -374,6 +402,7 @@ class StrategyMTFShortSniper(IStrategy):
 
         # TỔNG HỢP TÍN HIỆU ENTRY
         raw_signal = (
+            data_ready &
             is_decisive_red &
             is_breakdown_major &
             is_below_emas &
@@ -479,10 +508,16 @@ class StrategyMTFShortSniper(IStrategy):
            đang âm (> 0.8% trên chart / > -8% ROE với x10), cấm mở vị thế thứ 2 để chặn đứng rủi ro kép (dual-loss).
         """
         # --- LỚP 1: STREAK CIRCUIT BREAKER ---
+        # Lọc đúng các lệnh thuộc về chiến lược hiện tại để tránh ảnh hưởng chéo (cross-strategy contamination)
         closed_trades = Trade.get_trades_proxy(is_open=False)
-        if len(closed_trades) >= 3:
+        strat_name = self.__class__.__name__
+        strat_closed_trades = [
+            t for t in closed_trades
+            if getattr(t, "strategy", None) == strat_name or getattr(t, "strategy", None) is None
+        ]
+        if len(strat_closed_trades) >= 3:
             recent_trades = sorted(
-                closed_trades,
+                strat_closed_trades,
                 key=lambda t: t.close_date.timestamp() if t.close_date else 0.0,
                 reverse=True
             )

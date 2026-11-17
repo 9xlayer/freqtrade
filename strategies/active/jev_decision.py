@@ -26,8 +26,8 @@ from pandas import DataFrame
 logger = logging.getLogger(__name__)
 
 # Engine Versioning
-ENGINE_VERSION = "2.6.0"
-MODEL_VERSION_NATIVE = "native-system1-v2.6"
+ENGINE_VERSION = "2.6.2"
+MODEL_VERSION_NATIVE = "native-system1-v2.6.2"
 MODEL_VERSION_EXTERNAL = "jev-latest"
 
 

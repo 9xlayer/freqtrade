@@ -1,0 +1,89 @@
+//@version=5
+indicator("Freqtrade BTC Trades Visualizer [MTF Sniper v2.6.2]", "FT BTC Trades v2.6.2", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// Settings
+show_boxes = input.bool(true, "Hiển thị Vùng Lệnh (Boxes)")
+show_lines = input.bool(true, "Hiển thị Đường nối Entry -> Exit")
+show_labels = input.bool(true, "Hiển thị Nhãn Entry & Exit")
+show_table = input.bool(true, "Hiển thị Bảng Thống kê Hiệu suất")
+
+f_draw_trade(int id, string dir, int t_in, float p_in, int t_out, float p_out, float pnl, string tag, string reason) =>
+    is_win = pnl > 0
+    c_main = is_win ? color.green : color.red
+    c_box = is_win ? color.new(color.green, 85) : color.new(color.red, 85)
+    // Draw connecting line
+    if show_lines
+        line.new(t_in, p_in, t_out, p_out, xloc=xloc.bar_time, color=c_main, width=2, style=line.style_dashed)
+    // Draw bounding box
+    if show_boxes
+        top = math.max(p_in, p_out)
+        bot = math.min(p_in, p_out)
+        box.new(t_in, top, t_out, bot, xloc=xloc.bar_time, bgcolor=c_box, border_color=c_main, border_width=1, border_style=line.style_dotted)
+    // Entry label
+    if show_labels
+        is_short = dir == "SHORT"
+        lbl_in_style = is_short ? label.style_label_down : label.style_label_up
+        lbl_in_col = is_short ? color.orange : color.blue
+        txt_in = "#" + str.tostring(id) + " " + dir + "\nEntry: $" + str.tostring(p_in, "#,###.1") + "\n[" + tag + "]"
+        label.new(t_in, p_in, txt_in, xloc=xloc.bar_time, yloc=yloc.price, style=lbl_in_style, color=lbl_in_col, textcolor=color.white, size=size.small)
+        // Exit label
+        lbl_out_style = is_short ? label.style_label_up : label.style_label_down
+        pnl_sign = pnl > 0 ? "+" : ""
+        txt_out = "Exit #" + str.tostring(id) + "\n$" + str.tostring(p_out, "#,###.1") + " (" + pnl_sign + str.tostring(pnl, "#.##") + "%)\n" + reason
+        label.new(t_out, p_out, txt_out, xloc=xloc.bar_time, yloc=yloc.price, style=lbl_out_style, color=c_main, textcolor=color.white, size=size.small)
+
+var is_drawn = false
+if barstate.islast and not is_drawn
+    is_drawn := true
+    f_draw_trade(1, "SHORT", 1767923100000, 90911.6, 1768179600000, 91311.5, -4.97, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(2, "SHORT", 1768688100000, 95140.7, 1769013000000, 88455.1, 70.0, "short_B65plus", "roi")
+    f_draw_trade(3, "SHORT", 1770129900000, 77838.2, 1770149700000, 75816.0, 25.0, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(4, "SHORT", 1770625800000, 70056.4, 1770654600000, 69846.4, 1.96, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(5, "SHORT", 1770734700000, 68197.0, 1770744600000, 69825.8, -25.0, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(6, "SHORT", 1771119000000, 69492.9, 1771244100000, 69286.2, 1.99, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(7, "SHORT", 1771339500000, 67067.1, 1771426800000, 67340.5, -5.0, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(8, "SHORT", 1772760600000, 70423.1, 1773061200000, 68580.1, 24.96, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(9, "SHORT", 1773819900000, 73673.5, 1774247400000, 68435.5, 70.0, "short_B65plus", "roi")
+    f_draw_trade(10, "SHORT", 1774584900000, 68367.9, 1774844100000, 67596.3, 10.02, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(11, "SHORT", 1775514600000, 69333.0, 1775552400000, 69194.2, 1.04, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(12, "SHORT", 1776562200000, 75500.0, 1776669300000, 75255.1, 2.01, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(13, "SHORT", 1778599800000, 80186.3, 1778764500000, 80039.6, 1.08, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(14, "SHORT", 1778850900000, 80103.5, 1779324300000, 78038.9, 25.41, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(15, "SHORT", 1781245800000, 63121.0, 1781333100000, 63676.1, -9.72, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(16, "SHORT", 1781448300000, 63908.5, 1781472600000, 65438.5, -25.0, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(17, "SHORT", 1781756100000, 63908.3, 1781915400000, 63717.9, 2.17, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(18, "SHORT", 1782384300000, 61369.1, 1782394200000, 61185.1, 2.0, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(19, "SHORT", 1783339200000, 62461.2, 1783347300000, 62336.3, 1.0, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(20, "SHORT", 1783476900000, 62853.1, 1783576800000, 62665.1, 2.13, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(21, "SHORT", 1784187900000, 64200.2, 1784307600000, 64021.7, 2.07, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(22, "SHORT", 1784898900000, 64343.1, 1785067200000, 64611.8, -4.9, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+    f_draw_trade(23, "SHORT", 1785482100000, 64038.6, 1785767400000, 63852.7, 2.53, "short_A80plus", "trailing_stop_loss")
+    f_draw_trade(24, "LONG", 1787417100000, 77405.6, 1787504400000, 77118.6, -5.0, "long_A80plus", "trailing_stop_loss")
+    f_draw_trade(25, "LONG", 1789647300000, 76789.9, 1790038800000, 85637.4, 112.92, "jev_hunter_absorption_trap", "trailing_stop_loss")
+    f_draw_trade(26, "LONG", 1790066700000, 86116.0, 1790153100000, 85774.8, -5.0, "long_A80plus", "trailing_stop_loss")
+    f_draw_trade(27, "LONG", 1790334900000, 85195.8, 1790344800000, 83149.1, -25.0, "jev_hunter_absorption_trap", "trailing_stop_loss")
+    f_draw_trade(28, "LONG", 1791546300000, 82960.3, 1791807300000, 83130.3, 0.98, "jev_hunter_trend_pullback", "trailing_stop_loss")
+    f_draw_trade(29, "LONG", 1792149300000, 82627.4, 1792235700000, 81531.1, -14.43, "jev_hunter_trend_pullback", "trailing_stop_loss")
+    f_draw_trade(30, "LONG", 1792588500000, 83796.7, 1792659600000, 81788.1, -24.99, "jev_hunter_absorption_trap", "trailing_stop_loss")
+    f_draw_trade(31, "SHORT", 1793881800000, 80080.1, 1794174300000, 75532.9, 56.44, "short_B65plus", "trailing_stop_loss")
+    f_draw_trade(32, "SHORT", 1794489300000, 72417.2, 1794700800000, 64536.4, 108.34, "jev_hunter_waterfall_collapse", "trailing_stop_loss")
+
+// Dashboard Table
+if barstate.islast and show_table
+    var tbl = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
+    table.cell(tbl, 0, 0, "Chiến Lược", text_color=color.white, bgcolor=color.navy, text_size=size.small)
+    table.cell(tbl, 1, 0, "StrategyMTFSniper v2.6.2", text_color=color.yellow, bgcolor=color.navy, text_size=size.small)
+    table.cell(tbl, 0, 1, "Cặp Giao Dịch", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, "BTC/USDT (15M)", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 2, "Tổng số lệnh", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, "32 (25 Short / 7 Long)", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 3, "Tỷ lệ Thắng (Winrate)", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, "65.6% (21 W / 11 L)", text_color=color.green, text_size=size.small)
+    table.cell(tbl, 0, 4, "Lệnh Thắng Lớn Nhất", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, "+112.9% (Long 17/09) & +108.3% (Short 12/11)", text_color=color.green, text_size=size.small)
+    table.cell(tbl, 0, 5, "Lệnh Thua Lớn Nhất", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 5, "-25.00% (Trailing SL)", text_color=color.red, text_size=size.small)
+    table.cell(tbl, 0, 6, "Giai đoạn đo lường", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 6, "01/01/2026 - 16/11/2026", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 7, "Nguồn Dữ Liệu", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 7, "Freqtrade Backtest Engine", text_color=color.aqua, text_size=size.small)

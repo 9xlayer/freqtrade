@@ -17,6 +17,7 @@ import sqlite3
 import hashlib
 import logging
 import urllib.request
+import math
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List, Union
 from enum import Enum
@@ -27,8 +28,8 @@ from pandas import DataFrame
 logger = logging.getLogger(__name__)
 
 # Versioning
-HUNTER_ENGINE_VERSION = "2.6.0"
-HUNTER_MODEL_VERSION_NATIVE = "hunter-native-v2.6"
+HUNTER_ENGINE_VERSION = "2.6.2"
+HUNTER_MODEL_VERSION_NATIVE = "hunter-native-v2.6.2"
 HUNTER_MODEL_VERSION_EXTERNAL = "jev-hunter-latest"
 
 
@@ -175,18 +176,18 @@ class JevHunterCache:
                         status TEXT,
                         raw_response TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (pair, timestamp, engine_version, model_version)
+                        PRIMARY KEY (pair, timestamp, engine_version, model_version, payload_hash)
                     )
                 """)
-                # Di chuyển schema tự động nếu phiên bản cũ chưa có model_version trong PRIMARY KEY
+                # Di chuyển schema tự động nếu phiên bản cũ chưa có payload_hash trong PRIMARY KEY
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(jev_hunter_verdicts)")
                 columns = cursor.fetchall()
                 pk_cols = [c[1] for c in columns if len(c) > 5 and c[5] > 0]
-                if "model_version" not in pk_cols and len(pk_cols) > 0:
-                    logger.info("[JevHunterCache] Migrating primary key to include model_version...")
+                if ("payload_hash" not in pk_cols or "model_version" not in pk_cols) and len(pk_cols) > 0:
+                    logger.info("[JevHunterCache] Migrating primary key to (pair, timestamp, engine_version, model_version, payload_hash)...")
                     conn.execute("""
-                        CREATE TABLE IF NOT EXISTS jev_hunter_verdicts_migrated (
+                        CREATE TABLE IF NOT EXISTS jev_hunter_verdicts_v3 (
                             pair TEXT,
                             timestamp TEXT,
                             engine_version TEXT,
@@ -198,12 +199,20 @@ class JevHunterCache:
                             status TEXT,
                             raw_response TEXT,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (pair, timestamp, engine_version, model_version)
+                            PRIMARY KEY (pair, timestamp, engine_version, model_version, payload_hash)
                         )
                     """)
-                    conn.execute("INSERT OR IGNORE INTO jev_hunter_verdicts_migrated SELECT * FROM jev_hunter_verdicts")
+                    conn.execute("""
+                        INSERT OR IGNORE INTO jev_hunter_verdicts_v3 
+                        (pair, timestamp, engine_version, model_version, payload_hash, action, setup_type, confidence, status, raw_response, created_at)
+                        SELECT pair, timestamp, engine_version, 
+                               COALESCE(model_version, 'hunter-native-v2.6.2'),
+                               COALESCE(NULLIF(payload_hash, ''), 'no_hash'),
+                               action, setup_type, confidence, status, raw_response, created_at
+                        FROM jev_hunter_verdicts
+                    """)
                     conn.execute("DROP TABLE jev_hunter_verdicts")
-                    conn.execute("ALTER TABLE jev_hunter_verdicts_migrated RENAME TO jev_hunter_verdicts")
+                    conn.execute("ALTER TABLE jev_hunter_verdicts_v3 RENAME TO jev_hunter_verdicts")
                 conn.commit()
         except Exception as e:
             logger.warning(f"[JevHunterCache] Failed to initialize DB at {self.db_path}: {e}")
@@ -228,6 +237,9 @@ class JevHunterCache:
                 if model_version:
                     query += " AND model_version=?"
                     params.append(str(model_version))
+                if payload_hash:
+                    query += " AND payload_hash=?"
+                    params.append(str(payload_hash))
 
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
@@ -235,11 +247,6 @@ class JevHunterCache:
                     action, setup_type, conf, stat, raw_resp_str, p_hash, m_ver = row
                     # Không trả về cached error/invalid entries
                     if stat not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
-                        return None
-
-                    # Xác thực payload_hash nếu được cung cấp để chống stale verdict khi nến/chỉ báo thay đổi
-                    if payload_hash and p_hash and p_hash != payload_hash:
-                        logger.debug(f"[JevHunterCache] Stale cache rejected: payload_hash mismatch ({p_hash} != {payload_hash})")
                         return None
 
                     return {
@@ -288,7 +295,7 @@ class JevHunterCache:
         confidence: float,
         status: str,
         raw_response: Dict[str, Any],
-        payload_hash: str = "",
+        payload_hash: str = "no_hash",
         model_version: str = HUNTER_MODEL_VERSION_NATIVE,
         engine_version: str = HUNTER_ENGINE_VERSION
     ):
@@ -296,6 +303,7 @@ class JevHunterCache:
         if status not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
             return
 
+        p_hash = str(payload_hash) if payload_hash else "no_hash"
         try:
             with sqlite3.connect(self.db_path, timeout=5.0) as conn:
                 conn.execute(
@@ -309,12 +317,12 @@ class JevHunterCache:
                         str(timestamp),
                         str(engine_version),
                         str(model_version),
-                        str(payload_hash),
+                        str(p_hash),
                         str(action),
                         str(setup_type),
                         float(confidence),
                         str(status),
-                        json.dumps(raw_response)
+                        json.dumps(raw_response or {}, default=str)
                     )
                 )
                 conn.commit()
@@ -470,8 +478,8 @@ class JevHunterEngine:
 
         # Heuristic 1: Waterfall Collapse (SHORT)
         if is_short_event:
-            # Điều kiện Waterfall: Nến đỏ thân đặc, nến đóng gần đáy (lower wick nhỏ), volume nở rộng
-            is_strong_bear = (last_c["close"] < last_c["open"]) and (body_ratio >= 0.50) and (lower_wick_ratio <= 0.25)
+            # Điều kiện Waterfall: Nến đỏ thân đặc, nến đóng gần đáy (lower wick nhỏ <= 0.285), volume nở rộng
+            is_strong_bear = (last_c["close"] < last_c["open"]) and (body_ratio >= 0.50) and (lower_wick_ratio <= 0.285)
             is_breakdown = ("BREAKOUT" in event_trigger) or ("SURGE" in event_trigger)
             macro_bear = (trend_4h == "BEAR") or (macro_info.get("ema50_1h_dist_pct", 0.0) < 0)
 
@@ -650,21 +658,98 @@ Radar Event: {event_trigger}
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "Freqtrade-Jev-Hunter/2.6.0"
+                "User-Agent": "Freqtrade-Jev-Hunter/2.6.2"
             }
             req = urllib.request.Request(self.api_url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=8.0) as resp:
                 res = json.loads(resp.read().decode("utf-8"))
 
-            ans = res.get("answers", {})
-            action_raw = ans.get("suggested_action", {}).get("choice", "no_trade").lower()
-            probs = ans.get("suggested_action", {}).get("probabilities", {})
-            action_prob = float(probs.get(action_raw, 0.5))
-            setup_raw = ans.get("setup_type", {}).get("choice", "consolidation_noise").lower()
+            # Schema Validation Nghiêm ngặt: Bắt buộc root phải có 'answers'
+            if not isinstance(res, dict) or "answers" not in res:
+                logger.warning(f"[JevHunterEngine] API invalid root schema: {res}")
+                return {
+                    "action": JevHunterAction.NO_TRADE.value,
+                    "setup_type": JevSetupType.UNKNOWN.value,
+                    "confidence": 0.0,
+                    "status": JevHunterStatus.INVALID_RESPONSE.value,
+                    "source": "external",
+                    "engine_version": HUNTER_ENGINE_VERSION,
+                    "error": "Missing 'answers' root field in API response"
+                }
 
-            action = action_raw if action_raw in ("enter_short", "enter_long", "no_trade") else JevHunterAction.NO_TRADE.value
-            setup = setup_raw if setup_raw in [e.value for e in JevSetupType] else JevSetupType.CONSOLIDATION_NOISE.value
-            confidence = round(max(0.0, min(1.0, action_prob)), 2)
+            ans = res.get("answers", {})
+            sug_action = ans.get("suggested_action")
+            setup_info = ans.get("setup_type")
+
+            # Bắt buộc phải có cả suggested_action và setup_type dưới dạng dict
+            if not isinstance(sug_action, dict) or not isinstance(setup_info, dict):
+                logger.warning(f"[JevHunterEngine] API missing required answer objects: {ans}")
+                return {
+                    "action": JevHunterAction.NO_TRADE.value,
+                    "setup_type": JevSetupType.UNKNOWN.value,
+                    "confidence": 0.0,
+                    "status": JevHunterStatus.INVALID_RESPONSE.value,
+                    "source": "external",
+                    "engine_version": HUNTER_ENGINE_VERSION,
+                    "error": "suggested_action or setup_type missing or invalid"
+                }
+
+            action_raw = sug_action.get("choice")
+            probs = sug_action.get("probabilities")
+            setup_raw = setup_info.get("choice")
+
+            # Choice và probabilities phải hợp lệ và đầy đủ
+            if (
+                not action_raw or not isinstance(action_raw, str) or
+                action_raw.lower() not in ("enter_short", "enter_long", "no_trade") or
+                not isinstance(probs, dict) or
+                not setup_raw or not isinstance(setup_raw, str) or
+                setup_raw.lower() not in [e.value for e in JevSetupType]
+            ):
+                logger.warning(f"[JevHunterEngine] Invalid choice or probabilities format in {ans}")
+                return {
+                    "action": JevHunterAction.NO_TRADE.value,
+                    "setup_type": JevSetupType.UNKNOWN.value,
+                    "confidence": 0.0,
+                    "status": JevHunterStatus.INVALID_RESPONSE.value,
+                    "source": "external",
+                    "engine_version": HUNTER_ENGINE_VERSION,
+                    "error": "Invalid choice or probabilities format"
+                }
+
+            action_str = action_raw.lower()
+            if action_str not in probs:
+                logger.warning(f"[JevHunterEngine] Probability missing for chosen action '{action_str}' in {probs}")
+                return {
+                    "action": JevHunterAction.NO_TRADE.value,
+                    "setup_type": JevSetupType.UNKNOWN.value,
+                    "confidence": 0.0,
+                    "status": JevHunterStatus.INVALID_RESPONSE.value,
+                    "source": "external",
+                    "engine_version": HUNTER_ENGINE_VERSION,
+                    "error": f"Probability missing for action '{action_str}'"
+                }
+
+            try:
+                raw_prob = float(probs[action_str])
+            except (ValueError, TypeError):
+                raw_prob = -1.0
+
+            if math.isnan(raw_prob) or raw_prob < 0.0 or raw_prob > 1.0:
+                logger.warning(f"[JevHunterEngine] Action probability out of bounds [0.0, 1.0]: {raw_prob}")
+                return {
+                    "action": JevHunterAction.NO_TRADE.value,
+                    "setup_type": JevSetupType.UNKNOWN.value,
+                    "confidence": 0.0,
+                    "status": JevHunterStatus.INVALID_RESPONSE.value,
+                    "source": "external",
+                    "engine_version": HUNTER_ENGINE_VERSION,
+                    "error": f"Invalid probability value: {raw_prob}"
+                }
+
+            action = action_str
+            setup = setup_raw.lower()
+            confidence = round(raw_prob, 2)
             status = JevHunterStatus.CONFIRMED.value if action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
 
             verdict = {
@@ -678,7 +763,7 @@ Radar Event: {event_trigger}
                 "raw_response": res
             }
 
-            # Lưu vào Cache SQLite vĩnh viễn nếu kết quả thành công
+            # Lưu vào Cache SQLite chỉ khi verdict thành công và hợp lệ
             self.cache.put(
                 pair, timestamp,
                 action, setup, confidence, status, res,
