@@ -20,6 +20,9 @@
     "buy": {
       "block_1d_counter_wave": true,
       "block_4h_counter_wave": true,
+      "block_high_vol": true,
+      "filter_pdh_ceiling": true,
+      "filter_wick_rejection": true,
       "min_adx_4h": 18.0,
       "short_candle_body_ratio_min": 0.62,
       "short_cooldown_candles": 96,
