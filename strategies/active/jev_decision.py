@@ -331,16 +331,9 @@ class JevDecisionEngine:
         self._load_env()
         self._init_cache()
 
-        # Xác định chế độ hoạt động tường minh: native, external, hoặc backtest
-        configured_mode = mode or os.environ.get("JEV_MODE", "").lower()
-        if not configured_mode:
-            # Nếu có URL/Key hợp lệ từ tham số hoặc env và explicitly muốn external
-            if os.environ.get("ENABLE_EXTERNAL_JEV", "false").lower() in ("true", "1", "yes") and os.environ.get("JEV_API_KEY"):
-                self.mode = "external"
-            else:
-                self.mode = "native"
-        else:
-            self.mode = configured_mode if configured_mode in ("native", "external", "backtest") else "native"
+        # Mode is controlled only by JEV_MODE (native | external | backtest); default native.
+        configured_mode = (mode or os.environ.get("JEV_MODE", "native")).lower()
+        self.mode = configured_mode if configured_mode in ("native", "external", "backtest") else "native"
 
         self.fail_policy = (fail_policy or os.environ.get("JEV_FAIL_POLICY", "reject")).lower()
         self.api_url = api_url or os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
