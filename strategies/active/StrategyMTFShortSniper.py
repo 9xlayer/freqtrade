@@ -65,6 +65,27 @@ class StrategyMTFShortSniper(IStrategy):
         """
         return min(10.0, float(max_leverage))
 
+    @staticmethod
+    def apply_cooldown(signal: pd.Series, cooldown: int) -> pd.Series:
+        """
+        Enforce strict candle-count cooldown using positional row index (0..len-1).
+        Ensures minimum `cooldown` bars between consecutive entry signals,
+        regardless of DataFrame index type (RangeIndex, DatetimeIndex, non-contiguous, etc.).
+        Condition: pos - last_pos >= cooldown.
+        """
+        result = pd.Series(False, index=signal.index)
+        if not signal.any():
+            return result
+        sig_array = signal.to_numpy(dtype=bool)
+        res_array = np.zeros(len(sig_array), dtype=bool)
+        last_pos = -cooldown - 1
+        for pos, is_sig in enumerate(sig_array):
+            if is_sig and (pos - last_pos >= cooldown):
+                res_array[pos] = True
+                last_pos = pos
+        result.iloc[:] = res_array
+        return result
+
     # Cấu hình lệnh
     stoploss = -0.28  # Trần cắt lỗ tối đa -28% ký quỹ (= -2.8% chart), Custom Stoploss sẽ siết về -25% (-2.5%) cho BTC
     use_custom_stoploss = True
@@ -417,16 +438,9 @@ class StrategyMTFShortSniper(IStrategy):
             (dataframe["volume"] > 0)
         )
 
-        # ÁP DỤNG COOLDOWN 24H (96 NẾN 15M)
+        # ÁP DỤNG COOLDOWN 24H (96 NẾN 15M) - Positional Indexing bất biến theo loại Index
         cooldown = self.cooldown_candles.value
-        entry_mask = pd.Series(False, index=dataframe.index)
-        last_entry_idx = -9999
-
-        raw_indices = dataframe.index[raw_signal].tolist()
-        for idx in raw_indices:
-            if (idx - last_entry_idx) >= cooldown:
-                entry_mask.loc[idx] = True
-                last_entry_idx = idx
+        entry_mask = self.apply_cooldown(raw_signal, cooldown)
 
         dataframe.loc[entry_mask, "enter_tag"] = "entry_short_mtf_sniper"
         dataframe.loc[entry_mask, "enter_short"] = 1
@@ -508,13 +522,17 @@ class StrategyMTFShortSniper(IStrategy):
            đang âm (> 0.8% trên chart / > -8% ROE với x10), cấm mở vị thế thứ 2 để chặn đứng rủi ro kép (dual-loss).
         """
         # --- LỚP 1: STREAK CIRCUIT BREAKER ---
-        # Lọc đúng các lệnh thuộc về chiến lược hiện tại để tránh ảnh hưởng chéo (cross-strategy contamination)
+        # Cách ly hoàn toàn Circuit Breaker: Chỉ tính các trade có trade.strategy == self.__class__.__name__
+        # Loại trừ tuyệt đối các trade có strategy khác hoặc strategy=None để triệt tiêu cross-strategy contamination
         closed_trades = Trade.get_trades_proxy(is_open=False)
         strat_name = self.__class__.__name__
         strat_closed_trades = [
             t for t in closed_trades
-            if getattr(t, "strategy", None) == strat_name or getattr(t, "strategy", None) is None
+            if getattr(t, "strategy", None) == strat_name
         ]
+        untracked = [t for t in closed_trades if getattr(t, "strategy", None) is None]
+        if untracked:
+            logger.debug(f"[{strat_name} Circuit Breaker] Ignored {len(untracked)} untracked trades with strategy=None")
         if len(strat_closed_trades) >= 3:
             recent_trades = sorted(
                 strat_closed_trades,
