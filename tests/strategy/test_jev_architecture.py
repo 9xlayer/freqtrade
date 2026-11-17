@@ -36,7 +36,11 @@ from jev_decision import (
     JevStatus,
     JevMarketRegime,
     make_verdict,
-    ENGINE_VERSION as DECISION_ENGINE_VERSION
+    build_decision_cache_key,
+    _parse_unit_interval,
+    ENGINE_VERSION as DECISION_ENGINE_VERSION,
+    PROMPT_VERSION_NATIVE,
+    PROMPT_VERSION_EXTERNAL,
 )
 from jev_entry_hunter import (
     MomentumRadar,
@@ -48,6 +52,7 @@ from jev_entry_hunter import (
     is_setup_valid_for_side,
     build_canonical_payload,
     compute_payload_hash,
+    is_mutable_model_id,
     HUNTER_ENGINE_VERSION,
     HUNTER_MODEL_VERSION_NATIVE,
     HUNTER_MODEL_VERSION_EXTERNAL
@@ -646,6 +651,322 @@ class TestJevDecisionEngine(unittest.TestCase):
                 v_chop = ext_engine.evaluate(payload)
         self.assertEqual(v_chop["decision"], "VETO")
         self.assertTrue(any("choppy" in r.lower() for r in v_chop["reasons"]))
+
+    def test_decision_cache_identity_isolates_model_prompt_threshold(self):
+        """Same payload with different model/prompt/threshold must miss; identical identity must hit."""
+        payload = CandleTrajectoryExtractor.build_payload(self.df_32, "BTC/USDT:USDT", "long")
+        p_hash = payload["payload_hash"]
+
+        class MockResponse:
+            def __init__(self, data_dict):
+                self.data_dict = data_dict
+
+            def read(self):
+                return json.dumps(self.data_dict).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        api_ok = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "confirm_trade": {"type": "noul", "noul": 0.75},
+                "market_regime": {"type": "choice", "choice": "trend_expansion"},
+            },
+        }
+
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.60", "JEV_DECISION_MODEL_VERSION": "jev-1.14.0"}):
+            eng = JevDecisionEngine(
+                cache_db=self.db_path,
+                mode="external",
+                api_url="http://localhost/mock",
+                api_key="k",
+            )
+            eng.external_model_version = "jev-1.14.0"
+            eng.prompt_version = PROMPT_VERSION_EXTERNAL
+            with patch("urllib.request.urlopen", return_value=MockResponse(api_ok)) as mock_api:
+                v1 = eng.evaluate(payload)
+            self.assertEqual(v1["decision"], "CONFIRM")
+            self.assertEqual(v1["status"], "SUCCESS")
+            self.assertEqual(mock_api.call_count, 1)
+
+            # Same identity → cache hit (no second API call)
+            with patch("urllib.request.urlopen", return_value=MockResponse(api_ok)) as mock_api2:
+                v_hit = eng.evaluate(payload)
+            self.assertEqual(mock_api2.call_count, 0)
+            self.assertTrue(any("cache" in r.lower() for r in v_hit.get("reasons", [])))
+
+        # Model change → miss
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.60"}):
+            eng2 = JevDecisionEngine(cache_db=self.db_path, mode="external", api_url="http://localhost/mock", api_key="k")
+            eng2.external_model_version = "jev-9.9.9"
+            eng2.prompt_version = PROMPT_VERSION_EXTERNAL
+            with patch("urllib.request.urlopen", return_value=MockResponse(api_ok)) as mock_api3:
+                v_model = eng2.evaluate(payload)
+            self.assertEqual(mock_api3.call_count, 1)
+            self.assertNotIn("Loaded from cache", " ".join(v_model.get("reasons", [])))
+
+        # Threshold change → miss
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.80"}):
+            eng3 = JevDecisionEngine(cache_db=self.db_path, mode="external", api_url="http://localhost/mock", api_key="k")
+            eng3.external_model_version = "jev-1.14.0"
+            eng3.prompt_version = PROMPT_VERSION_EXTERNAL
+            with patch("urllib.request.urlopen", return_value=MockResponse(api_ok)) as mock_api4:
+                v_thr = eng3.evaluate(payload)
+            self.assertEqual(mock_api4.call_count, 1)
+            self.assertNotIn("Loaded from cache", " ".join(v_thr.get("reasons", [])))
+
+        # Prompt/policy version change → miss
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.60"}):
+            eng4 = JevDecisionEngine(cache_db=self.db_path, mode="external", api_url="http://localhost/mock", api_key="k")
+            eng4.external_model_version = "jev-1.14.0"
+            eng4.prompt_version = "decision-external-prompt-altered"
+            with patch("urllib.request.urlopen", return_value=MockResponse(api_ok)) as mock_api5:
+                v_prompt = eng4.evaluate(payload)
+            self.assertEqual(mock_api5.call_count, 1)
+            self.assertNotIn("Loaded from cache", " ".join(v_prompt.get("reasons", [])))
+
+        # Identity helper itself differs when any component changes
+        k1 = build_decision_cache_key(
+            p_hash, model_version="m1", engine_version="e", prompt_version="p",
+            confirm_threshold="0.6000", fail_policy="reject", mode="external",
+        )
+        k2 = build_decision_cache_key(
+            p_hash, model_version="m2", engine_version="e", prompt_version="p",
+            confirm_threshold="0.6000", fail_policy="reject", mode="external",
+        )
+        self.assertNotEqual(k1, k2)
+
+    def test_external_invalid_confidence_and_threshold(self):
+        """NaN/Inf/OOB confidence → INVALID; bad threshold → INVALID; malformed answers → INVALID."""
+        payload = CandleTrajectoryExtractor.build_payload(self.df_32, "BTC/USDT:USDT", "long")
+
+        class MockResponse:
+            def __init__(self, data_dict):
+                self.data_dict = data_dict
+
+            def read(self):
+                return json.dumps(self.data_dict).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        eng = JevDecisionEngine(
+            cache_db=self.db_path, mode="external", api_url="http://localhost/mock", api_key="k"
+        )
+        eng.external_model_version = "jev-1.14.0"
+
+        for bad in (float("nan"), float("inf"), -1.0, 1.5, "not-a-float", None):
+            body = {
+                "model": "jev-1.14.0",
+                "answers": {
+                    "confirm_trade": {"type": "noul", "noul": bad},
+                    "market_regime": {"type": "choice", "choice": "trend_expansion"},
+                },
+            }
+            with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.60"}):
+                with patch("urllib.request.urlopen", return_value=MockResponse(body)):
+                    v = eng.evaluate(payload)
+            self.assertEqual(v["status"], "INVALID", msg=f"bad conf={bad!r}")
+            self.assertEqual(v["decision"], "VETO")
+            self.assertNotIn("Loaded from cache", " ".join(v.get("reasons", [])))
+
+        # Invalid threshold env
+        ok_body = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "confirm_trade": {"type": "noul", "noul": 0.9},
+                "market_regime": {"type": "choice", "choice": "trend_expansion"},
+            },
+        }
+        for bad_thr in ("1.5", "-0.1", "NaN", "inf"):
+            with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": bad_thr}):
+                with patch("urllib.request.urlopen", return_value=MockResponse(ok_body)):
+                    v = eng.evaluate(payload)
+            self.assertEqual(v["status"], "INVALID", msg=f"bad thr={bad_thr}")
+            self.assertEqual(v["decision"], "VETO")
+
+        # Missing answers / wrong types
+        for bad_resp in (
+            {"model": "jev-1.14.0"},
+            {"model": "jev-1.14.0", "answers": []},
+            {"model": "jev-1.14.0", "answers": {"confirm_trade": 0.9}},
+            {"model": "jev-1.14.0", "answers": {"confirm_trade": {"noul": 0.9}}},
+        ):
+            with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.60"}):
+                with patch("urllib.request.urlopen", return_value=MockResponse(bad_resp)):
+                    v = eng.evaluate(payload)
+            self.assertEqual(v["status"], "INVALID")
+            self.assertEqual(v["decision"], "VETO")
+
+        self.assertIsNone(_parse_unit_interval(float("nan")))
+        self.assertIsNone(_parse_unit_interval(1.5))
+        self.assertEqual(_parse_unit_interval(0.6), 0.6)
+
+
+class TestHunterExternalModelIdentity(unittest.TestCase):
+    """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "hunter_identity.sqlite")
+        idx = pd.date_range("2026-01-01", periods=32, freq="15min", tz="UTC")
+        self.df = pd.DataFrame(
+            {
+                "open": np.linspace(100, 90, 32),
+                "high": np.linspace(101, 91, 32),
+                "low": np.linspace(99, 89, 32),
+                "close": np.linspace(100, 90, 32),
+                "volume": np.full(32, 1000.0),
+                "rel_vol": np.full(32, 2.5),
+            },
+            index=idx,
+        )
+        self.df.loc[self.df.index[-1], "close"] = 88.0
+        self.df.loc[self.df.index[-1], "open"] = 92.0
+        self.df.loc[self.df.index[-1], "high"] = 92.5
+        self.df.loc[self.df.index[-1], "low"] = 87.5
+        self.df.loc[self.df.index[-1], "rel_vol"] = 4.0
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_mutable_alias_helpers(self):
+        self.assertTrue(is_mutable_model_id("jev-latest"))
+        self.assertTrue(is_mutable_model_id("foo-latest"))
+        self.assertFalse(is_mutable_model_id("jev-1.14.0"))
+
+    def test_hunter_cache_hit_with_actual_model_no_second_api(self):
+        engine = JevHunterEngine(
+            cache_db=self.db_path,
+            mode="external",
+            api_url="http://localhost/mock",
+            api_key="k",
+            model_version="jev-latest",
+            missing_model_policy="no_cache",
+        )
+        pair, ts = "BTC/USDT:USDT", "2026-01-01T08:00:00+00:00"
+        api_body = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "suggested_action": {
+                    "type": "choice",
+                    "choice": "enter_short",
+                    "probabilities": {
+                        "enter_short": 0.82,
+                        "enter_long": 0.05,
+                        "no_trade": 0.13,
+                    },
+                },
+                "setup_type": {"type": "choice", "choice": "waterfall_collapse"},
+            },
+        }
+
+        class MockResponse:
+            def __init__(self, data_dict):
+                self.data_dict = data_dict
+
+            def read(self):
+                return json.dumps(self.data_dict).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api:
+            v1 = engine.evaluate_candidate(
+                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
+            )
+        self.assertEqual(v1["model_version"], "jev-1.14.0")
+        self.assertIn(v1["status"], ("CONFIRMED", "REJECTED"))
+        self.assertEqual(mock_api.call_count, 1)
+
+        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api2:
+            v2 = engine.evaluate_candidate(
+                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
+            )
+        self.assertEqual(mock_api2.call_count, 0, "Second call must hit cache under actual model")
+        self.assertEqual(v2["model_version"], "jev-1.14.0")
+
+        # Different actual model must not reuse prior verdict
+        engine_b = JevHunterEngine(
+            cache_db=self.db_path,
+            mode="external",
+            api_url="http://localhost/mock",
+            api_key="k",
+            model_version="jev-latest",
+            missing_model_policy="no_cache",
+        )
+        api_body_b = dict(api_body)
+        api_body_b["model"] = "jev-2.0.0"
+        with patch("urllib.request.urlopen", return_value=MockResponse(api_body_b)) as mock_api3:
+            v3 = engine_b.evaluate_candidate(
+                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
+            )
+        self.assertEqual(mock_api3.call_count, 1)
+        self.assertEqual(v3["model_version"], "jev-2.0.0")
+
+    def test_hunter_no_cache_when_backend_omits_model_and_policy_no_cache(self):
+        engine = JevHunterEngine(
+            cache_db=self.db_path,
+            mode="external",
+            api_url="http://localhost/mock",
+            api_key="k",
+            model_version="jev-latest",
+            missing_model_policy="no_cache",
+        )
+        pair, ts = "ETH/USDT:USDT", "2026-01-01T08:00:00+00:00"
+        api_body = {
+            "answers": {
+                "suggested_action": {
+                    "type": "choice",
+                    "choice": "no_trade",
+                    "probabilities": {
+                        "enter_short": 0.1,
+                        "enter_long": 0.1,
+                        "no_trade": 0.8,
+                    },
+                },
+                "setup_type": {"type": "choice", "choice": "consolidation_noise"},
+            },
+        }
+
+        class MockResponse:
+            def __init__(self, data_dict):
+                self.data_dict = data_dict
+
+            def read(self):
+                return json.dumps(self.data_dict).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)):
+            v1 = engine.evaluate_candidate(
+                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR"}
+            )
+        self.assertEqual(v1["status"], "REJECTED")
+
+        # Nothing stored under alias or empty model
+        cached_alias = engine.cache.get(
+            pair, ts, engine_version=HUNTER_ENGINE_VERSION, model_version="jev-latest"
+        )
+        self.assertIsNone(cached_alias)
+
+        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api:
+            engine.evaluate_candidate(self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR"})
+        self.assertEqual(mock_api.call_count, 1, "Must re-call API when nothing was cached")
 
 
 class TestStrategyIntegrationAndRiskGating(unittest.TestCase):

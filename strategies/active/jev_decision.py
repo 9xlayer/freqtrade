@@ -28,18 +28,56 @@ logger = logging.getLogger(__name__)
 # Engine Versioning
 ENGINE_VERSION = "2.6.2"
 MODEL_VERSION_NATIVE = "native-system1-v2.6.2"
-MODEL_VERSION_EXTERNAL = "jev-latest"
+MODEL_VERSION_EXTERNAL = os.environ.get("JEV_DECISION_MODEL_VERSION", "jev-latest")
+PROMPT_VERSION_NATIVE = "decision-native-v2.6.2"
+PROMPT_VERSION_EXTERNAL = "decision-external-prompt-v2.6.2-trend-follow"
 
 
-def _external_confirm_threshold() -> float:
-    """External confirm threshold (native uses 0.70). Override via JEV_CONFIRM_THRESHOLD."""
+def _parse_unit_interval(value: Any, default: Optional[float] = None) -> Optional[float]:
+    """Parse a finite float in [0, 1]. Returns default/None on invalid input."""
     try:
-        return float(os.environ.get("JEV_CONFIRM_THRESHOLD", "0.60"))
+        parsed = float(value)
     except (TypeError, ValueError):
-        return 0.60
+        return default
+    if math.isnan(parsed) or math.isinf(parsed) or parsed < 0.0 or parsed > 1.0:
+        return default
+    return parsed
+
+
+def _external_confirm_threshold() -> Optional[float]:
+    """
+    External confirm threshold (native uses 0.70).
+    Must be finite and inside [0, 1]; invalid env values yield None (fail closed).
+    """
+    raw = os.environ.get("JEV_CONFIRM_THRESHOLD", "0.60")
+    return _parse_unit_interval(raw, default=None)
 
 
 EXTERNAL_CONFIRM_THRESHOLD = _external_confirm_threshold()
+
+
+def build_decision_cache_key(
+    payload_hash: str,
+    *,
+    model_version: str,
+    engine_version: str,
+    prompt_version: str,
+    confirm_threshold: str,
+    fail_policy: str,
+    mode: str,
+) -> str:
+    """Deterministic cache identity across payload + model/prompt/threshold/policy/mode."""
+    identity = {
+        "payload_hash": str(payload_hash or ""),
+        "model_version": str(model_version or ""),
+        "engine_version": str(engine_version or ""),
+        "prompt_version": str(prompt_version or ""),
+        "confirm_threshold": str(confirm_threshold),
+        "fail_policy": str(fail_policy or ""),
+        "mode": str(mode or ""),
+    }
+    blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
 
 
 class JevDecision(str, Enum):
@@ -350,10 +388,14 @@ class JevDecisionEngine:
         self.api_url = api_url or os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
         self.api_key = api_key or os.environ.get("JEV_API_KEY")
         self.engine_version = ENGINE_VERSION
+        self.external_model_version = os.environ.get("JEV_DECISION_MODEL_VERSION", MODEL_VERSION_EXTERNAL)
+        self.prompt_version = (
+            PROMPT_VERSION_EXTERNAL if self.mode == "external" else PROMPT_VERSION_NATIVE
+        )
 
         logger.info(
             f"JevDecisionEngine initialized. Mode={self.mode}, FailPolicy={self.fail_policy}, "
-            f"EngineVer={ENGINE_VERSION}"
+            f"EngineVer={ENGINE_VERSION}, PromptVer={self.prompt_version}"
         )
 
     def _load_env(self):
@@ -375,14 +417,15 @@ class JevDecisionEngine:
     def _init_cache(self):
         try:
             db_dir = os.path.dirname(self.cache_db)
-            if db_dir:
+            if db_dir and db_dir not in (".", ""):
                 os.makedirs(db_dir, exist_ok=True)
             with sqlite3.connect(self.cache_db) as conn:
                 conn.execute("PRAGMA journal_mode = WAL;")
                 conn.execute("PRAGMA busy_timeout = 5000;")
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS jev_gatekeeper_verdicts (
-                        payload_hash TEXT PRIMARY KEY,
+                        cache_key TEXT PRIMARY KEY,
+                        payload_hash TEXT,
                         pair TEXT,
                         timestamp TEXT,
                         side TEXT,
@@ -392,19 +435,79 @@ class JevDecisionEngine:
                         source TEXT,
                         model_version TEXT,
                         engine_version TEXT,
+                        prompt_version TEXT,
+                        confirm_threshold TEXT,
+                        fail_policy TEXT,
+                        mode TEXT,
                         status TEXT,
                         reasons TEXT,
                         raw_response TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # Migrate legacy payload_hash-PK tables that lack cache_key identity columns.
+                cols = {
+                    r[1] for r in conn.execute("PRAGMA table_info(jev_gatekeeper_verdicts)").fetchall()
+                }
+                if "cache_key" not in cols and "payload_hash" in cols:
+                    logger.info("[JevDecisionEngine] Migrating gatekeeper cache to cache_key identity schema...")
+                    conn.execute("ALTER TABLE jev_gatekeeper_verdicts RENAME TO jev_gatekeeper_verdicts_legacy")
+                    conn.execute("""
+                        CREATE TABLE jev_gatekeeper_verdicts (
+                            cache_key TEXT PRIMARY KEY,
+                            payload_hash TEXT,
+                            pair TEXT,
+                            timestamp TEXT,
+                            side TEXT,
+                            decision TEXT,
+                            confidence REAL,
+                            market_regime TEXT,
+                            source TEXT,
+                            model_version TEXT,
+                            engine_version TEXT,
+                            prompt_version TEXT,
+                            confirm_threshold TEXT,
+                            fail_policy TEXT,
+                            mode TEXT,
+                            status TEXT,
+                            reasons TEXT,
+                            raw_response TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    # Do not copy legacy rows — old identity was incomplete by design.
+                    conn.execute("DROP TABLE jev_gatekeeper_verdicts_legacy")
                 conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_gatekeeper_lookup 
-                    ON jev_gatekeeper_verdicts(pair, timestamp, side)
+                    CREATE INDEX IF NOT EXISTS idx_gatekeeper_lookup
+                    ON jev_gatekeeper_verdicts(pair, timestamp, side, payload_hash)
                 """)
                 conn.commit()
         except Exception as e:
             logger.warning(f"Jev Gatekeeper cache init warning: {e}")
+
+    def _cache_model_version(self) -> str:
+        if self.mode == "external":
+            return str(self.external_model_version)
+        return MODEL_VERSION_NATIVE
+
+    def _cache_threshold_token(self) -> str:
+        if self.mode != "external":
+            return "native"
+        threshold = _external_confirm_threshold()
+        if threshold is None:
+            return "invalid"
+        return f"{threshold:.4f}"
+
+    def _build_cache_key(self, payload_hash: str) -> str:
+        return build_decision_cache_key(
+            payload_hash,
+            model_version=self._cache_model_version(),
+            engine_version=getattr(self, "engine_version", ENGINE_VERSION),
+            prompt_version=getattr(self, "prompt_version", PROMPT_VERSION_NATIVE),
+            confirm_threshold=self._cache_threshold_token(),
+            fail_policy=getattr(self, "fail_policy", "reject"),
+            mode=getattr(self, "mode", "native"),
+        )
 
     def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -441,44 +544,38 @@ class JevDecisionEngine:
                 source="validator"
             )
 
-        # 1. Tra cứu Cache SQLite
-        if self.cache_db:
+        # 1. Tra cứu Cache SQLite — full identity (payload + model + prompt + threshold + policy + mode)
+        cache_key = self._build_cache_key(p_hash) if p_hash else ""
+        if self.cache_db and cache_key:
             try:
                 with sqlite3.connect(self.cache_db, timeout=5.0) as conn:
                     cursor = conn.cursor()
-                    if p_hash:
-                        cursor.execute(
-                            """SELECT decision, confidence, market_regime, reasons, source, 
-                                      model_version, engine_version, status, raw_response 
-                               FROM jev_gatekeeper_verdicts WHERE payload_hash=?""",
-                            (p_hash,)
-                        )
-                    else:
-                        cursor.execute(
-                            """SELECT decision, confidence, market_regime, reasons, source, 
-                                      model_version, engine_version, status, raw_response 
-                               FROM jev_gatekeeper_verdicts WHERE pair=? AND timestamp=? AND side=?""",
-                            (pair, ts, side)
-                        )
+                    cursor.execute(
+                        """SELECT decision, confidence, market_regime, reasons, source,
+                                  model_version, engine_version, status, raw_response,
+                                  prompt_version, confirm_threshold, fail_policy, mode
+                           FROM jev_gatekeeper_verdicts WHERE cache_key=?""",
+                        (cache_key,),
+                    )
                     row = cursor.fetchone()
                     if row:
-                        cached_source = row[4]
-                        cached_engine_ver = row[6]
                         status_cached = row[7]
-
-                        # Cách ly mode: native/backtest không dùng cache từ external và ngược lại
-                        mode_compatible = True
-                        if self.mode in ("native", "backtest"):
-                            if cached_source not in ("native", "backtest", "native_fallback", "cache"):
-                                mode_compatible = False
-                        elif self.mode == "external":
-                            if cached_source not in ("external", "api", "cache"):
-                                mode_compatible = False
-
-                        # Chỉ tái sử dụng cache nếu kết quả là SUCCESS, khớp đúng engine_version và tương thích mode
-                        if (status_cached == JevStatus.SUCCESS.value and 
-                            cached_engine_ver == getattr(self, "engine_version", ENGINE_VERSION) and
-                            mode_compatible):
+                        cached_engine_ver = row[6]
+                        cached_prompt = row[9] or ""
+                        cached_threshold = row[10] or ""
+                        cached_fail_policy = row[11] or ""
+                        cached_mode = row[12] or ""
+                        expected_threshold = self._cache_threshold_token()
+                        identity_ok = (
+                            status_cached == JevStatus.SUCCESS.value
+                            and cached_engine_ver == getattr(self, "engine_version", ENGINE_VERSION)
+                            and cached_prompt == getattr(self, "prompt_version", PROMPT_VERSION_NATIVE)
+                            and cached_threshold == expected_threshold
+                            and cached_fail_policy == getattr(self, "fail_policy", "reject")
+                            and cached_mode == getattr(self, "mode", "native")
+                            and expected_threshold != "invalid"
+                        )
+                        if identity_ok:
                             try:
                                 reasons_cached = json.loads(row[3]) if row[3] else []
                             except Exception:
@@ -498,7 +595,7 @@ class JevDecisionEngine:
                                 model_version=row[5],
                                 engine_version=row[6],
                                 status=status_cached,
-                                raw_response=raw_cached
+                                raw_response=raw_cached,
                             )
             except Exception as e:
                 logger.debug(f"Cache lookup bypassed: {e}")
@@ -536,27 +633,43 @@ class JevDecisionEngine:
         else:
             verdict = self._evaluate_native_sequence(payload)
 
-        # 3. Ghi vào Cache SQLite (chỉ khi SUCCESS)
-        if self.cache_db and verdict.get("status") == JevStatus.SUCCESS.value and p_hash:
+        # 3. Ghi vào Cache SQLite (chỉ khi SUCCESS + identity hợp lệ)
+        threshold_token = self._cache_threshold_token()
+        if (
+            self.cache_db
+            and verdict.get("status") == JevStatus.SUCCESS.value
+            and p_hash
+            and cache_key
+            and threshold_token != "invalid"
+        ):
             try:
                 with sqlite3.connect(self.cache_db, timeout=5.0) as conn:
                     conn.execute(
-                        """INSERT OR REPLACE INTO jev_gatekeeper_verdicts 
-                           (payload_hash, pair, timestamp, side, decision, confidence, 
-                            market_regime, source, model_version, engine_version, status, reasons, raw_response) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        """INSERT OR REPLACE INTO jev_gatekeeper_verdicts
+                           (cache_key, payload_hash, pair, timestamp, side, decision, confidence,
+                            market_regime, source, model_version, engine_version, prompt_version,
+                            confirm_threshold, fail_policy, mode, status, reasons, raw_response)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
-                            p_hash, pair, ts, side,
+                            cache_key,
+                            p_hash,
+                            pair,
+                            ts,
+                            side,
                             verdict.get("decision"),
                             verdict.get("confidence", 0.0),
                             verdict.get("market_regime", JevMarketRegime.UNKNOWN.value),
                             verdict.get("source", "native"),
-                            verdict.get("model_version", MODEL_VERSION_NATIVE),
+                            verdict.get("model_version", self._cache_model_version()),
                             verdict.get("engine_version", ENGINE_VERSION),
+                            getattr(self, "prompt_version", PROMPT_VERSION_NATIVE),
+                            threshold_token,
+                            getattr(self, "fail_policy", "reject"),
+                            getattr(self, "mode", "native"),
                             verdict.get("status", JevStatus.SUCCESS.value),
                             json.dumps(verdict.get("reasons", [])),
-                            json.dumps(verdict.get("raw_response", {}))
-                        )
+                            json.dumps(verdict.get("raw_response", {})),
+                        ),
                     )
                     conn.commit()
             except Exception as e:
@@ -603,8 +716,9 @@ Macro & Filter Context:
 - AI Lens Confluence Score: {macro.get('short_score' if side == 'SHORT' else 'long_score', 50.0):.1f}
 """
 
+        model_id = getattr(self, "external_model_version", MODEL_VERSION_EXTERNAL)
         req_body = {
-            "model": MODEL_VERSION_EXTERNAL,
+            "model": model_id,
             "state": state_text,
             "questions": {
                 "confirm_trade": {
@@ -641,51 +755,103 @@ Macro & Filter Context:
             with urllib.request.urlopen(req, timeout=timeout_val) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
 
-            if "answers" in result:
-                answers = result["answers"]
-                noul_conf = float(answers.get("confirm_trade", {}).get("noul", 0.0) or 0.0)
-                regime_choice = str(answers.get("market_regime", {}).get("choice", "unknown") or "unknown")
-                regime = regime_choice.upper()
-                threshold = _external_confirm_threshold()
-                reasons = [
-                    f"Jev Cloud probability: {noul_conf:.2f}",
-                    f"Threshold: {threshold:.2f}",
-                    f"Regime: {regime}",
-                    f"Model: {result.get('model', MODEL_VERSION_EXTERNAL)}",
-                ]
-
-                # Hard veto chop/range even if noul clears the numeric threshold.
-                if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
-                    decision = JevDecision.VETO.value
-                    reasons.append("Vetoed by choppy/ranging regime")
-                elif noul_conf >= threshold:
-                    decision = JevDecision.CONFIRM.value
-                else:
-                    decision = JevDecision.VETO.value
-                    reasons.append("Below confirm threshold")
-
-                return make_verdict(
-                    decision=decision,
-                    side=side,
-                    confidence=noul_conf,
-                    market_regime=regime,
-                    reasons=reasons,
-                    source="external",
-                    model_version=result.get("model", MODEL_VERSION_EXTERNAL),
-                    status=JevStatus.SUCCESS,
-                    raw_response=result
-                )
-            else:
+            answers = result.get("answers")
+            if not isinstance(answers, dict):
                 return make_verdict(
                     decision=JevDecision.VETO,
                     side=side,
                     confidence=0.0,
                     market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=["External API response missing answers structure"],
+                    reasons=["External API response missing or invalid answers structure"],
                     source="external",
                     status=JevStatus.INVALID,
-                    raw_response=result
+                    raw_response=result if isinstance(result, dict) else {"raw": result},
                 )
+
+            confirm_trade = answers.get("confirm_trade")
+            market_regime_ans = answers.get("market_regime")
+            if not isinstance(confirm_trade, dict) or "noul" not in confirm_trade:
+                return make_verdict(
+                    decision=JevDecision.VETO,
+                    side=side,
+                    confidence=0.0,
+                    market_regime=JevMarketRegime.UNKNOWN,
+                    reasons=["External API response missing confirm_trade.noul"],
+                    source="external",
+                    status=JevStatus.INVALID,
+                    raw_response=result,
+                )
+            if not isinstance(market_regime_ans, dict) or "choice" not in market_regime_ans:
+                return make_verdict(
+                    decision=JevDecision.VETO,
+                    side=side,
+                    confidence=0.0,
+                    market_regime=JevMarketRegime.UNKNOWN,
+                    reasons=["External API response missing market_regime.choice"],
+                    source="external",
+                    status=JevStatus.INVALID,
+                    raw_response=result,
+                )
+
+            noul_conf = _parse_unit_interval(confirm_trade.get("noul"), default=None)
+            if noul_conf is None:
+                return make_verdict(
+                    decision=JevDecision.VETO,
+                    side=side,
+                    confidence=0.0,
+                    market_regime=JevMarketRegime.UNKNOWN,
+                    reasons=[
+                        f"Invalid AI confidence (must be finite in [0,1]): {confirm_trade.get('noul')!r}"
+                    ],
+                    source="external",
+                    status=JevStatus.INVALID,
+                    raw_response=result,
+                )
+
+            threshold = _external_confirm_threshold()
+            if threshold is None:
+                return make_verdict(
+                    decision=JevDecision.VETO,
+                    side=side,
+                    confidence=0.0,
+                    market_regime=JevMarketRegime.UNKNOWN,
+                    reasons=["Invalid JEV_CONFIRM_THRESHOLD (must be finite in [0,1])"],
+                    source="external",
+                    status=JevStatus.INVALID,
+                    raw_response=result,
+                )
+
+            regime_choice = str(market_regime_ans.get("choice") or "unknown")
+            regime = regime_choice.upper()
+            actual_model = result.get("model") if isinstance(result.get("model"), str) else model_id
+            reasons = [
+                f"Jev Cloud probability: {noul_conf:.2f}",
+                f"Threshold: {threshold:.2f}",
+                f"Regime: {regime}",
+                f"Model: {actual_model}",
+            ]
+
+            # Hard veto chop/range even if noul clears the numeric threshold.
+            if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
+                decision = JevDecision.VETO.value
+                reasons.append("Vetoed by choppy/ranging regime")
+            elif noul_conf >= threshold:
+                decision = JevDecision.CONFIRM.value
+            else:
+                decision = JevDecision.VETO.value
+                reasons.append("Below confirm threshold")
+
+            return make_verdict(
+                decision=decision,
+                side=side,
+                confidence=noul_conf,
+                market_regime=regime,
+                reasons=reasons,
+                source="external",
+                model_version=actual_model,
+                status=JevStatus.SUCCESS,
+                raw_response=result,
+            )
         except Exception as e:
             return make_verdict(
                 decision=JevDecision.VETO,

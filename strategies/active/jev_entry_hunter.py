@@ -34,6 +34,27 @@ HUNTER_MODEL_VERSION_NATIVE = "hunter-native-v2.6.2"
 # Typesafe only exposes aliases like jev-latest (resolves e.g. jev-1.14.0).
 # Dedicated names such as jev-hunter-v1.0 return HTTP 400 Unknown model.
 HUNTER_MODEL_VERSION_EXTERNAL = os.environ.get("JEV_HUNTER_MODEL_VERSION", "jev-latest")
+# Mutable / floating aliases must not be used as durable cache keys.
+_MUTABLE_MODEL_ALIASES = frozenset(
+    {
+        "jev-latest",
+        "latest",
+        "jev",
+        "default",
+    }
+)
+
+
+def is_mutable_model_id(model_id: Optional[str]) -> bool:
+    """True when model id is a floating alias (e.g. jev-latest), not an immutable version."""
+    if not model_id:
+        return True
+    mid = str(model_id).strip().lower()
+    if mid in _MUTABLE_MODEL_ALIASES:
+        return True
+    if mid.endswith("-latest") or mid.endswith(":latest"):
+        return True
+    return False
 
 
 class JevHunterAction(str, Enum):
@@ -451,15 +472,38 @@ class JevHunterEngine:
             os.environ.get("JEV_HUNTER_MODEL_VERSION") or
             HUNTER_MODEL_VERSION_EXTERNAL
         )
+        # Default no_cache: never persist verdicts under a mutable alias when backend omits version.
         self.missing_model_policy = (
             missing_model_policy or
-            os.environ.get("JEV_HUNTER_MISSING_MODEL_POLICY", "use_configured")
+            os.environ.get("JEV_HUNTER_MISSING_MODEL_POLICY", "no_cache")
         ).lower()
+        if self.missing_model_policy not in ("no_cache", "use_configured"):
+            self.missing_model_policy = "no_cache"
+
+        # In-process map: configured alias -> last resolved immutable backend model.
+        self._alias_resolution: Dict[str, str] = {}
 
         logger.info(
             f"[JevHunterEngine] Initialized in mode: '{self.mode.upper()}' "
-            f"(Engine: {HUNTER_ENGINE_VERSION}, ExtModel: {self.external_model_version}, Policy: {self.missing_model_policy})"
+            f"(Engine: {HUNTER_ENGINE_VERSION}, ExtModel: {self.external_model_version}, "
+            f"MissingModelPolicy: {self.missing_model_policy})"
         )
+
+    def _resolve_lookup_model(self, configured_model: str) -> str:
+        """
+        Prefer immutable model identity for cache lookup.
+        If configured is a mutable alias and we previously resolved an actual version, use that.
+        """
+        if not is_mutable_model_id(configured_model):
+            return configured_model
+        resolved = self._alias_resolution.get(configured_model)
+        if resolved and not is_mutable_model_id(resolved):
+            return resolved
+        return configured_model
+
+    def _remember_alias_resolution(self, configured_model: str, actual_model: str) -> None:
+        if is_mutable_model_id(configured_model) and actual_model and not is_mutable_model_id(actual_model):
+            self._alias_resolution[configured_model] = actual_model
 
     def _load_env(self):
         if not os.environ.get("JEV_API_KEY"):
@@ -505,19 +549,35 @@ class JevHunterEngine:
         last_candle = df_32.iloc[-1]
         current_price = float(last_candle["close"])
 
-        # Tính canonical payload và hash tất định bao gồm toàn bộ OHLCV, derived features, macro context và trigger
-        target_model = HUNTER_MODEL_VERSION_NATIVE if self.mode in ("native", "backtest") else self.external_model_version
+        # Model identity for the cache PK column (prefer immutable / resolved actual).
+        configured_model = (
+            HUNTER_MODEL_VERSION_NATIVE
+            if self.mode in ("native", "backtest")
+            else self.external_model_version
+        )
+        lookup_model = (
+            configured_model
+            if self.mode in ("native", "backtest")
+            else self._resolve_lookup_model(configured_model)
+        )
+        # Content hash must stay stable across alias → actual resolution.
+        # Model identity lives in the cache PK column, not inside the hash seed for external mode.
+        hash_model_token = (
+            HUNTER_MODEL_VERSION_NATIVE
+            if self.mode in ("native", "backtest")
+            else ""
+        )
         canonical_payload = build_canonical_payload(
             df_32, pair, timestamp, event_trigger, macro_dict,
-            model_version=target_model, engine_version=HUNTER_ENGINE_VERSION
+            model_version=hash_model_token, engine_version=HUNTER_ENGINE_VERSION
         )
         payload_hash = compute_payload_hash(canonical_payload)
 
-        # 1. Kiểm tra Cache SQLite với đầy đủ engine_version, model_version và payload_hash
+        # 1. Cache lookup by (engine, model identity, content hash)
         cached = self.cache.get(
             pair, timestamp,
             engine_version=HUNTER_ENGINE_VERSION,
-            model_version=target_model,
+            model_version=lookup_model,
             payload_hash=payload_hash
         )
         if cached:
@@ -858,16 +918,36 @@ Radar Event: {event_trigger}
             confidence = round(raw_prob, 2)
             status = JevHunterStatus.CONFIRMED.value if action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
 
-            # Xác định model version thực tế: ưu tiên từ response API backend
+            # Prefer immutable backend model. Never durable-cache under a mutable alias.
             backend_model = res.get("model_version") or res.get("model")
-            if backend_model:
-                actual_model_version = str(backend_model)
+            backend_model_str = str(backend_model).strip() if backend_model else ""
+            configured = self.external_model_version
+
+            if backend_model_str and not is_mutable_model_id(backend_model_str):
+                actual_model_version = backend_model_str
                 can_cache = True
+                self._remember_alias_resolution(configured, actual_model_version)
+            elif backend_model_str and is_mutable_model_id(backend_model_str):
+                # Backend echoed a floating alias — treat as missing immutable identity.
+                actual_model_version = backend_model_str
+                can_cache = False
+                logger.info(
+                    "[JevHunterEngine] Backend returned mutable model alias %r; "
+                    "external verdict will not be cached.",
+                    backend_model_str,
+                )
             else:
-                actual_model_version = self.external_model_version
-                can_cache = (self.missing_model_policy != "no_cache")
-                if not can_cache:
-                    logger.info("[JevHunterEngine] Backend did not return model_version and missing_model_policy is 'no_cache'. Result will not be cached.")
+                actual_model_version = configured
+                if self.missing_model_policy == "use_configured" and not is_mutable_model_id(configured):
+                    can_cache = True
+                else:
+                    can_cache = False
+                    logger.info(
+                        "[JevHunterEngine] Backend omitted immutable model_version "
+                        "(configured=%r, policy=%s). Result will not be cached.",
+                        configured,
+                        self.missing_model_policy,
+                    )
 
             logger.info(f"[JevHunterEngine] Evaluated candidate with model_version: {actual_model_version}")
 
@@ -882,7 +962,7 @@ Radar Event: {event_trigger}
                 "raw_response": res
             }
 
-            # Lưu vào Cache SQLite chỉ khi verdict thành công và được phép cache
+            # Persist only under immutable model identity + content-stable payload_hash
             if can_cache:
                 self.cache.put(
                     pair, timestamp,
