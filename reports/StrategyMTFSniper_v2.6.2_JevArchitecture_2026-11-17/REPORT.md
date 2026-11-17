@@ -3,11 +3,12 @@
 
 > **Ngày thực hiện:** 17/11/2026  
 > **Phiên bản Strategy:** v2.6.2 (Unified Long/Short Symmetry & Trend Runner)  
-> **Trạng thái nghiệm thu:** **ĐẠT CHUẨN TOÀN BỘ (PASS ALL 37/37 TESTS)**  
-> **Hiệu suất tổng thể (2022 – 2026):** **+108,541.54 USDT (+10,854.15%) | Win Rate: 63.01% | Profit Factor: 3.82 | Max Drawdown: 21.95%**  
-> **Hiệu suất chiều LONG:** **83 lệnh | Win Rate: 63.9% (53W / 30L) | Lợi nhuận: +20,944.56 USDT**  
-> **Hiệu suất chiều SHORT:** **163 lệnh | Win Rate: 62.6% (102W / 61L) | Lợi nhuận: +87,596.98 USDT**  
-> **Hiệu suất tháng 11/2026 (Live Out-of-Sample):** **3/3 lệnh thắng (100% Win Rate) | Lợi nhuận: +1,245.27 USDT (+124.53%) | Max Drawdown: 0.00%**
+> **Trạng thái nghiệm thu:** **ĐẠT CHUẨN TOÀN BỘ (PASS ALL 65/65 TESTS)**  
+> **Hiệu suất tổng thể (2022 – 2026):**  
+> - **Run 1 (Frozen/Historical Hunter):** **+108,541.54 USDT (+10,854.15%) | Win Rate: 63.01% | Max DD: 21.95%**  
+> - **Run 2 (Clean Native Offline Hunter):** **+19,659.38 USDT (+1,965.94%) | Win Rate: 59.32% | Max DD: 30.90%**  
+> **Chi tiết quy chuẩn tái lập:** Tra cứu tại [BACKTEST_SPECIFICATION.md](file:///Users/nathan/Documents/WORK/freqtrade/reports/BACKTEST_SPECIFICATION.md)  
+> **Lệnh sập BTC 12/11/2026:** Bắt đúng tại $72,417.20, nuôi trọn 58.75h về $64,536.40, đạt **+108.34% ROE**  
 
 ---
 
