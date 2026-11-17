@@ -37,7 +37,7 @@ class StrategyMTFSniper(IStrategy):
     """
 
     INTERFACE_VERSION = 3
-    strategy_version = "2.6.0"
+    strategy_version = "2.6.2"
 
     timeframe = "15m"
     can_short: bool = True
@@ -460,20 +460,25 @@ class StrategyMTFSniper(IStrategy):
 
         required_informative_cols = [
             "close_1h", "ema_50_1h", "macdhist_1h", "macdhist_prev_1h",
+            "rsi_max_24_1h", "rsi_min_24_1h", "atr_pct",
             "macdhist_4h", "ema_50_1d", "macdhist_1d", "pdh_1d"
         ]
         missing_cols = [c for c in required_informative_cols if c not in dataframe.columns]
         if missing_cols:
-            data_ready = pd.Series(False, index=dataframe.index)
-        else:
-            data_ready = dataframe[required_informative_cols].notna().all(axis=1)
+            logger.warning(
+                f"StrategyMTFSniper: Missing required informative columns: {missing_cols}. "
+                f"Failing closed (0 entry signals)."
+            )
+            return dataframe
+
+        data_ready = dataframe[required_informative_cols].notna().all(axis=1)
 
         # ---------------------------------------------------------------------
         # 1. BỘ LỌC CHUNG TỪ AI AGENT LENS: HIGH VOLATILITY & SIDEWAYS SQUEEZE
         # ---------------------------------------------------------------------
         cond_volatility_safe = (
             (dataframe["atr_pct"] < self.high_vol_pct.value)
-            if self.block_high_vol.value else pd.Series(True, index=dataframe.index)
+            if (self.block_high_vol.value and "atr_pct" in dataframe.columns) else pd.Series(True, index=dataframe.index)
         )
 
         is_chop_squeeze = pd.Series(False, index=dataframe.index)
@@ -554,7 +559,7 @@ class StrategyMTFSniper(IStrategy):
         cond_candle_shape_short = (
             (dataframe["lower_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
             (dataframe["close_pos_ratio"] <= self.max_close_pos_ratio_short.value)
-        ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
+        ) if (self.filter_wick_rejection.value and "lower_wick_ratio" in dataframe.columns and "close_pos_ratio" in dataframe.columns) else pd.Series(True, index=dataframe.index)
 
         raw_sniper_short = (
             is_decisive_red & is_breakdown_major & is_below_emas &
@@ -608,7 +613,7 @@ class StrategyMTFSniper(IStrategy):
         cond_candle_shape_long = (
             (dataframe["upper_wick_ratio"] <= self.max_rejection_wick_ratio.value) &
             (dataframe["close_pos_ratio"] >= self.min_close_pos_ratio_long.value)
-        ) if self.filter_wick_rejection.value else pd.Series(True, index=dataframe.index)
+        ) if (self.filter_wick_rejection.value and "upper_wick_ratio" in dataframe.columns and "close_pos_ratio" in dataframe.columns) else pd.Series(True, index=dataframe.index)
 
         # Strict PDH Filter (Không fallback sang high_1d)
         if "pdh_1d" in dataframe.columns and self.filter_pdh_ceiling.value:
@@ -618,7 +623,7 @@ class StrategyMTFSniper(IStrategy):
         else:
             cond_pdh_safe_long = pd.Series(False, index=dataframe.index)
 
-        cond_score_long = dataframe["long_score"] >= 80
+        cond_score_long = (dataframe["long_score"] >= 80) if "long_score" in dataframe.columns else pd.Series(False, index=dataframe.index)
 
         raw_sniper_long = (
             is_decisive_green & is_breakout_major & is_above_emas &
@@ -797,10 +802,16 @@ class StrategyMTFSniper(IStrategy):
                             time_in_force: str, current_time: datetime, entry_tag: str | None,
                             side: str, **kwargs) -> bool:
         # --- LỚP 1: STREAK CIRCUIT BREAKER ---
+        # Lọc đúng các lệnh thuộc về chiến lược hiện tại để tránh ảnh hưởng chéo (cross-strategy contamination)
         closed_trades = Trade.get_trades_proxy(is_open=False)
-        if len(closed_trades) >= 3:
+        strat_name = self.__class__.__name__
+        strat_closed_trades = [
+            t for t in closed_trades
+            if getattr(t, "strategy", None) == strat_name or getattr(t, "strategy", None) is None
+        ]
+        if len(strat_closed_trades) >= 3:
             recent_trades = sorted(
-                closed_trades,
+                strat_closed_trades,
                 key=lambda t: t.close_date.timestamp() if t.close_date else 0.0,
                 reverse=True
             )
