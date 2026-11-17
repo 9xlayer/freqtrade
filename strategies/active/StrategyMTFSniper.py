@@ -746,9 +746,10 @@ class StrategyMTFSniper(IStrategy):
                                     cand_short.iloc[pos] = True
                                     cand_short_tags.loc[idx] = f"jev_hunter_{setup}"
 
-                        # 2. Chiều LONG: Đi theo xu hướng tăng 1D (close > ema_50_1d), CẤM trong Bear Market
-                        elif action == "enter_long" and (row["close"] > row.get("ema_50_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
-                            if setup in (JevSetupType.TREND_PULLBACK.value, JevSetupType.ABSORPTION_TRAP.value) and conf >= 0.85:
+                        # 2. Chiều LONG: Đi theo xu hướng tăng 1D (close > ema_50_1d và close > ema_200_1d), CẤM trong Bear Market
+                        # Loại bỏ hoàn toàn sóng hồi (pullback) và bẫy hấp thụ theo chỉ thị người dùng (không tham sóng hồi)
+                        elif action == "enter_long" and (row["close"] > row.get("ema_50_1d", 0)) and (row["close"] > row.get("ema_200_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
+                            if setup == "breakout_expansion" and conf >= 0.85:
                                 up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.285
                                 close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
                                 dist_ema21 = (row["close"] - row["ema_21"]) / row["ema_21"] if "ema_21" in row else 0.0
