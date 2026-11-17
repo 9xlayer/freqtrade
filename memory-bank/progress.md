@@ -33,10 +33,13 @@ Informal score retained from audit framing: **~6.5/10 design vs evidence gap**.
 
 ## Priority roadmap
 ### P0 — Prove / protect edge
-- [ ] Freeze baseline commit + config + cost assumptions
-- [ ] Ledger export + year/side/tag attribution
+- [x] Freeze baseline commit + config + cost assumptions
+- [x] Ledger export + year/side/tag attribution
+- [x] Decision on Long Hunter: safely disabled by default (`enable_hunter_long=False`), Long driven by proven `long_A80plus` (63.2% WR)
+- [x] Relaxed `is_in_macro_bull` short blocker: restored 2024 profitable shorts (+3,083 USDT from `short_C_sub65`)
+- [x] Updated data from Binance Futures through 2026-11-17
+- [x] Verified 5Y profit recovered to **+24,282.26 USDT (+2,428.23%)** with all 5 years positive
 - [ ] A/B: Sniper-only vs +Hunter vs +Gate
-- [ ] Decision on Long Hunter: disable vs stricter filters (after −832 BT evidence)
 
 ### P1 — Risk engine
 - [ ] Risk-based sizing from stop distance + equity %

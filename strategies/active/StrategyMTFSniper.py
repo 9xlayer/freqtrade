@@ -46,6 +46,8 @@ class StrategyMTFSniper(IStrategy):
     # Default fallback flags (sẽ được ghi đè tự động bởi config.json hoặc biến môi trường)
     enable_jev_decision: bool = True
     enable_jev_hunter: bool = True
+    enable_hunter_long: bool = False
+    block_macro_bull_shorts: bool = False
     enable_dynamic_sizing: bool = False
     jev_fail_policy: str = "allow"
     _hunter: Optional[object] = None
@@ -107,13 +109,24 @@ class StrategyMTFSniper(IStrategy):
         else:
             self.enable_jev_hunter = self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "true"), True)
 
-        # 3. Dynamic Stake Sizing
+        if "enable_hunter_long" in strat_cfg:
+            self.enable_hunter_long = self._to_bool(strat_cfg["enable_hunter_long"], False)
+        else:
+            self.enable_hunter_long = self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
+
+        # 3. Macro Bull Short Guard
+        if "block_macro_bull_shorts" in strat_cfg:
+            self.block_macro_bull_shorts = self._to_bool(strat_cfg["block_macro_bull_shorts"], False)
+        else:
+            self.block_macro_bull_shorts = self._to_bool(os.environ.get("BLOCK_MACRO_BULL_SHORTS", "false"), False)
+
+        # 4. Dynamic Stake Sizing
         if "enable_dynamic_sizing" in strat_cfg:
             self.enable_dynamic_sizing = self._to_bool(strat_cfg["enable_dynamic_sizing"], False)
         else:
             self.enable_dynamic_sizing = self._to_bool(os.environ.get("ENABLE_DYNAMIC_SIZING", "false"), False)
 
-        # 4. JEV Fail Policy ('reject' / 'allow')
+        # 5. JEV Fail Policy ('reject' / 'allow')
         if "jev_fail_policy" in strat_cfg:
             self.jev_fail_policy = str(strat_cfg["jev_fail_policy"]).lower()
         else:
@@ -124,7 +137,8 @@ class StrategyMTFSniper(IStrategy):
         logger.info(
             f"StrategyMTFSniper v{self.strategy_version} started. "
             f"Active Profile: JEV Decision={self.enable_jev_decision}, "
-            f"JEV Hunter={self.enable_jev_hunter}, "
+            f"JEV Hunter={self.enable_jev_hunter} (Long={self.enable_hunter_long}), "
+            f"Block Bull Shorts={self.block_macro_bull_shorts}, "
             f"Dynamic Sizing={self.enable_dynamic_sizing}"
         )
         api_key = os.environ.get("JEV_API_KEY", "")
@@ -543,10 +557,12 @@ class StrategyMTFSniper(IStrategy):
             cond_4h_di_short = pd.Series(True, index=dataframe.index)
 
         # Fail-closed macro guards
-        # Bộ lọc Xu hướng Lớn: Tuyệt đối không đánh ngược xu hướng (không tham sóng hồi)
-        # 1. Trong Bull Regime (giá trên cả EMA 50 và EMA 200 ngày): CẤM SHORT (không short sóng hồi trong uptrend)
+        # Bộ lọc Xu hướng Lớn:
+        # Khi block_macro_bull_shorts = True: cấm Short trong Bull Regime (giá trên cả EMA 50 và EMA 200 ngày).
+        # Mặc định False: cho phép các setup Short chất lượng cao (như short_C_sub65) bắt các nhịp sập 20-30% giữa bull run.
         is_in_macro_bull = (dataframe["close"] > dataframe["ema_50_1d"]) & (dataframe["close"] > dataframe["ema_200_1d"]) if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns) else pd.Series(False, index=dataframe.index)
-        cond_macro_safe_short = ~is_in_macro_bull & ((dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(False, index=dataframe.index))
+        macro_bull_guard = ~is_in_macro_bull if getattr(self, "block_macro_bull_shorts", False) else pd.Series(True, index=dataframe.index)
+        cond_macro_safe_short = macro_bull_guard & ((dataframe["is_macro_bull_run_1d"].fillna(0) == 0) if "is_macro_bull_run_1d" in dataframe.columns else pd.Series(False, index=dataframe.index))
         cond_1d_short = (dataframe["is_bull_wave_1d"].fillna(0) == 0) if (self.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns) else pd.Series(True, index=dataframe.index)
         cond_floor_safe = (((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035) if "swing_low_20d_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
         cond_capitulation_safe = (dataframe["is_deep_capitulation_1d"].fillna(0) == 0) if "is_deep_capitulation_1d" in dataframe.columns else pd.Series(False, index=dataframe.index)
@@ -746,8 +762,9 @@ class StrategyMTFSniper(IStrategy):
                                     cand_short.iloc[pos] = True
                                     cand_short_tags.loc[idx] = f"jev_hunter_{setup}"
 
-                        # 2. LONG: trend-follow only (above EMA50/200 1D). Accept breakout_expansion only.
-                        elif action == "enter_long" and (row["close"] > row.get("ema_50_1d", 0)) and (row["close"] > row.get("ema_200_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
+                        # 2. LONG: trend-follow only (above EMA50/200 1D). Chấp nhận breakout_expansion khi enable_hunter_long = True.
+                        # Khi enable_hunter_long = False (mặc định an toàn): Chiều Long giao phó hoàn toàn cho long_A80plus (WR 63.8%, lợi nhuận ổn định).
+                        elif action == "enter_long" and getattr(self, "enable_hunter_long", False) and (row["close"] > row.get("ema_50_1d", 0)) and (row["close"] > row.get("ema_200_1d", 0)) and (row.get("is_macro_bear_market_1d", 0) == 0):
                             if setup == JevSetupType.BREAKOUT_EXPANSION.value and conf >= 0.85:
                                 up_wick_ok = row.get("upper_wick_ratio", 0.0) <= 0.285
                                 close_pos_ok = row.get("close_pos_ratio", 0.0) >= 0.65
