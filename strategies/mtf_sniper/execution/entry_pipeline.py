@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate, TriggerEvent
 from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.common_gates import missing_informative_columns
@@ -314,17 +315,15 @@ class EntryPipeline:
             i = int(idx)
             row = dataframe.iloc[i]
             if has_date:
-                ts = row["date"]
-                if not isinstance(ts, datetime):
-                    ts = pd.Timestamp(ts).to_pydatetime()
+                ts = normalize_utc(row["date"])
             else:
-                ts = datetime.utcfromtimestamp(0)
-            epoch = int(pd.Timestamp(ts).timestamp())
+                ts = normalize_utc(datetime(1970, 1, 1))
             feats: Dict[str, Any] = {
                 "setup_complete": True,
                 "setup_name": setup_name,
                 "legacy_sniper": side.value,
                 "mask": f"legacy_and_{side.value}",
+                "signal_source": "vectorized_and",
                 "recipe_sensors": list(part_names),
                 "sensors": list(part_names),
                 "part": "structure",
@@ -332,7 +331,7 @@ class EntryPipeline:
             }
             out.append(
                 TradeCandidate(
-                    candidate_id=f"{pair}_{side.value}_{epoch}_{i}",
+                    candidate_id=make_candidate_id(pair, side, ts, i),
                     pair=pair,
                     side=side,
                     primary_sensor=setup_name,

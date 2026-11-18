@@ -65,7 +65,13 @@ class DecisionVerdict:
 
 @dataclass(frozen=True)
 class RiskAuthorization:
-    """Final capital / risk authorization from UnifiedRiskEngine."""
+    """Final capital / risk authorization from RiskEngine.
+
+    Stages (documented separately): entry eligibility → portfolio authorization
+    → position sizing → leverage → stop-loss. Fields below make approved values
+    and rejection reasons explicit. Stop-distance-based stake sizing is NOT
+    claimed unless ``sizing_method`` says so.
+    """
 
     is_approved: bool
     stake_amount: float
@@ -73,6 +79,16 @@ class RiskAuthorization:
     stoploss_rate: float
     rejection_reasons: List[str]
     risk_budget_used_pct: float = 0.02
+    # Explicit portfolio / sizing surface (Phase 4)
+    risk_per_trade_pct: float = 0.0
+    stop_distance_pct: float = 0.0
+    max_open_positions: int = 0
+    open_positions: int = 0
+    directional_open: int = 0
+    total_exposure_pct: float = 0.0
+    sizing_method: str = "freqtrade_proposed"  # not stop-distance unless set
+    config_fingerprint: str = ""
+    stage_rejected: str = ""  # entry|portfolio|sizing|leverage|stoploss|""
 
 
 @dataclass(frozen=True)
@@ -95,6 +111,12 @@ class TelemetryDecisionRecord:
     risk_approved: bool
     final_action: str
     final_reasons: List[str]
+    # Phase 7 correlation / provenance (optional for backward compat)
+    setup_type: str = ""
+    signal_source: str = ""
+    policy_version: str = ""
+    config_fingerprint: str = ""
+    feature_snapshot: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

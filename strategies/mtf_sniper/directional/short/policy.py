@@ -69,6 +69,7 @@ class ShortPolicy:
         close = float(row.get("close", 0.0) or 0.0)
 
         if is_setup_pass:
+            # Setup eligibility is independent of quality grade.
             short_score = float(
                 candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
             )
@@ -78,7 +79,7 @@ class ShortPolicy:
             return PolicyEvaluationResult(
                 is_valid=True,
                 score=score,
-                quality_grade=grade if grade != "REJECT" else "B",
+                quality_grade=grade,  # honest grade; do not remap REJECT→B
                 reasons=["ACCEPT"],
                 suggested_stop_distance_pct=cfg.base_stop_distance_pct,
                 target_rr=cfg.target_rr,
@@ -87,6 +88,7 @@ class ShortPolicy:
                     "entry_tag": setup.value,
                     "short_score": short_score,
                     "setup_complete": True,
+                    "setup_eligible": True,
                     "mask_pass": True,
                 },
             )

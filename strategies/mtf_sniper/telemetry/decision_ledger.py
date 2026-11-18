@@ -25,6 +25,16 @@ class DecisionLedger:
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    def __getstate__(self) -> dict:
+        # threading.Lock is not picklable; hyperopt loky workers need this.
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
     def record(self, row: TelemetryDecisionRecord) -> None:
         if not self.enabled:
             return
