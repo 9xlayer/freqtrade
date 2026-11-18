@@ -19,20 +19,23 @@ services:
       - JEV_DECISION_MODEL_VERSION=${JEV_DECISION_MODEL_VERSION:-jev-latest}
       - ENABLE_JEV_DECISION=${ENABLE_JEV_DECISION:-true}
       - ENABLE_JEV_HUNTER=${ENABLE_JEV_HUNTER:-false}
+      - ENABLE_HUNTER_LONG=${ENABLE_HUNTER_LONG:-false}
       - ENABLE_DYNAMIC_SIZING=${ENABLE_DYNAMIC_SIZING:-true}
       - HTTPS_PROXY=${HTTPS_PROXY:-http://192.168.68.100:40002}
       - HTTP_PROXY=${HTTP_PROXY:-http://192.168.68.100:40002}
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,binance.com,api.binance.com,fapi.binance.com,typesafe.ai,api.typesafe.ai}
     volumes:
+      # Persistent data only — strategies come from the image build
       - "/data/freqtrade/user_data:/freqtrade/user_data"
-    # Port 8088 mapping vào 8080 (tránh xung đột với coolify-proxy đang dùng 8080)
+    # Host 8088 → container 8080 (avoid clash with coolify-proxy on 8080)
     ports:
       - "8088:8080"
-    # Lệnh khởi chạy bot tự động tải StrategyMTFSniper
+    # Overlay config wins over stale strategy_path in mounted config.json
     command: >
       trade
       --logfile /freqtrade/user_data/logs/freqtrade.log
       --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
       --config /freqtrade/user_data/config.json
+      --config /freqtrade/config.mtf_sniper.json
       --strategy-path /freqtrade/strategies/mtf_sniper
       --strategy StrategyMTFSniper

@@ -10,11 +10,14 @@
 ## Gaps
 - Hunter/AI re-enable later (composer `drop_anomalies=False` when gateway injected)
 - Old compare tree removed — use git history if needed
+- Coolify host `/data/.../config.json` may still say `strategies/active` until manually updated (image overlay covers it)
 
-## BT evidence (wallet 1000, hunter off)
-- 5Y OFF new=old: 234 trades, +12307%, DD 43.8%
-- 5Y ON new: 213 trades, +7905%, DD 21.9%
-- 2026 ON: 31 trades, +209%, DD 21.8%
+## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
+- Live Decision ON: 204 trades, +3462.93% (+34,629 USDT), WR 60.8%, DD 25.43%, PF 2.18
+- Decision OFF: 224 trades, +4858.45% (+48,584 USDT), WR 61.6%, DD 32.72%, PF 2.10
+- vs report Run1 (+10,854% / DD 21.95%): not matched — that run used frozen Hunter cache
+- vs report Run2 (+1,966% / DD 30.9%): new Decision ON beats PnL; DD similar band
+- Nov 12 waterfall trade absent (Hunter off); Nov 5 short_B65plus still captured
 
 ## Do not regress
 - Incomplete parts ≠ enter_*
