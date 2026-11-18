@@ -227,6 +227,13 @@ class StrategyMTFSniper(IStrategy):
             f"dynamic_sizing={self.enable_dynamic_sizing} "
             f"telemetry={self.enable_telemetry}"
         )
+        if self.enable_jev_hunter:
+            # Config intent ≠ live wiring: EntryPipeline.live always passes hunter=None.
+            logger.warning(
+                "[Hunter] enable_jev_hunter=True in runtime profile, but live "
+                "EntryPipeline hard-disables hunter_escalation — entries stay sniper-only. "
+                "Set enable_jev_hunter=false (or use deterministic mode) to avoid confusion."
+            )
         if eff is not None:
             logger.info(f"[EffectiveConfig] {eff.to_log_dict()}")
         api_key = os.environ.get("JEV_API_KEY", "")
@@ -491,6 +498,7 @@ class StrategyMTFSniper(IStrategy):
     ) -> str | None:
         """Registry → reconstruct from analyzed enter bar. Never invent non-canonical IDs."""
         from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
+        from strategies.mtf_sniper.core.candidate_registry import DEFAULT_LOOKUP_MAX_AGE
         from strategies.mtf_sniper.core.enums import TradeSide
 
         reg = getattr(self, "_candidate_registry", None)
@@ -501,7 +509,7 @@ class StrategyMTFSniper(IStrategy):
             if found:
                 return found
 
-        # Reconstruct canonical ID from last matching enter_* bar
+        # Reconstruct canonical ID from last matching enter_* bar (same max-age as registry).
         try:
             df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         except Exception:
@@ -510,6 +518,7 @@ class StrategyMTFSniper(IStrategy):
             side_l = str(side).lower()
             col = "enter_short" if side_l == "short" else "enter_long"
             if col in df.columns:
+                ct = normalize_utc(current_time)
                 mask = (df["date"] <= current_time) & (df[col].fillna(0).astype(bool))
                 if entry_tag and "enter_tag" in df.columns:
                     mask = mask & (df["enter_tag"].astype(str) == str(entry_tag))
@@ -517,6 +526,15 @@ class StrategyMTFSniper(IStrategy):
                 if not hits.empty:
                     label = hits.index[-1]
                     row = hits.iloc[-1]
+                    ts = normalize_utc(row["date"])
+                    if ts > ct:
+                        return None  # never reconstruct from a future bar
+                    if (ct - ts) > DEFAULT_LOOKUP_MAX_AGE:
+                        logger.warning(
+                            f"[CandidateID] DataFrame fallback stale for {pair} {side_l}: "
+                            f"signal_age={(ct - ts)} > max={DEFAULT_LOOKUP_MAX_AGE}"
+                        )
+                        return None
                     candle_index = self._dataframe_position(df, label)
                     if candle_index is None:
                         logger.warning(
@@ -524,7 +542,6 @@ class StrategyMTFSniper(IStrategy):
                             f"{pair} label={label!r} — refusing non-canonical invent"
                         )
                         return None
-                    ts = normalize_utc(row["date"])
                     trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
                     return make_candidate_id(pair, trade_side, ts, candle_index)
 
@@ -532,36 +549,46 @@ class StrategyMTFSniper(IStrategy):
 
     @staticmethod
     def _dataframe_position(df, label) -> int | None:
-        """Absolute row position in ``df`` for ``label`` — never hits-relative."""
+        """Absolute row position in ``df`` for ``label`` — never hits-relative.
+
+        Prefer ``get_loc`` so duplicate labels resolve to the **last** occurrence
+        (matching ``hits.index[-1]``). ``get_indexer`` alone returns the first hit.
+        """
+        import numpy as np
+
+        try:
+            loc = df.index.get_loc(label)
+            if isinstance(loc, (int, np.integer)):
+                return int(loc)
+            if isinstance(loc, slice):
+                if loc.stop is None:
+                    return int(loc.start) if loc.start is not None else None
+                return int(loc.stop - 1)
+            arr = np.asarray(loc)
+            if arr.dtype == bool:
+                nz = np.flatnonzero(arr)
+                return int(nz[-1]) if len(nz) else None
+            if arr.size:
+                return int(arr.ravel()[-1])
+            return None
+        except KeyError:
+            pass
+        except Exception:
+            pass
         try:
             indexer = df.index.get_indexer([label])
             if len(indexer) and int(indexer[0]) >= 0:
                 return int(indexer[0])
         except Exception:
             pass
-        try:
-            loc = df.index.get_loc(label)
-            if isinstance(loc, (int,)):
-                return int(loc)
-            if isinstance(loc, slice):
-                # Duplicate labels → last occurrence in the slice
-                return int(loc.stop - 1) if loc.stop else int(loc.start)
-            # ndarray / boolean mask from duplicate labels
-            import numpy as np
-
-            arr = np.asarray(loc)
-            if arr.dtype == bool:
-                nz = np.flatnonzero(arr)
-                return int(nz[-1]) if len(nz) else None
-            return int(arr.ravel()[-1])
-        except Exception:
-            return None
+        return None
 
     def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> bool:
         """Write + re-read verify. Returns True only when restart-safe persist succeeded."""
         from strategies.mtf_sniper.core.candidate_id import (
             CANDIDATE_ID_CUSTOM_DATA_KEY,
             CANDIDATE_ID_MISSING,
+            candidate_id_matches_trade,
             is_canonical_candidate_id,
         )
 
@@ -570,6 +597,16 @@ class StrategyMTFSniper(IStrategy):
         if not is_canonical_candidate_id(candidate_id):
             logger.warning(
                 f"[CandidateID] Refusing to persist non-canonical id={candidate_id!r}"
+            )
+            return False
+        trade_pair = getattr(trade, "pair", None)
+        trade_side = "short" if getattr(trade, "is_short", False) else "long"
+        if trade_pair and not candidate_id_matches_trade(
+            candidate_id, pair=str(trade_pair), side=trade_side
+        ):
+            logger.warning(
+                f"[CandidateID] Refusing to persist mismatched id={candidate_id!r} "
+                f"for trade pair={trade_pair} side={trade_side}"
             )
             return False
         try:
@@ -592,6 +629,7 @@ class StrategyMTFSniper(IStrategy):
     def _read_persisted_candidate_id(self, trade: Trade) -> str | None:
         from strategies.mtf_sniper.core.candidate_id import (
             CANDIDATE_ID_CUSTOM_DATA_KEY,
+            candidate_id_matches_trade,
             is_canonical_candidate_id,
         )
 
@@ -605,6 +643,16 @@ class StrategyMTFSniper(IStrategy):
         if not is_canonical_candidate_id(cid):
             logger.warning(
                 f"[CandidateID] Ignoring non-canonical persisted id={cid!r}"
+            )
+            return None
+        trade_pair = getattr(trade, "pair", None)
+        trade_side = "short" if getattr(trade, "is_short", False) else "long"
+        if trade_pair and not candidate_id_matches_trade(
+            cid, pair=str(trade_pair), side=trade_side
+        ):
+            logger.warning(
+                f"[CandidateID] Ignoring mismatched persisted id={cid!r} "
+                f"for trade pair={trade_pair} side={trade_side}"
             )
             return None
         return cid

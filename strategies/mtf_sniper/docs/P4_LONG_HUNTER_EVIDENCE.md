@@ -1,7 +1,14 @@
 # P4 Long Hunter — Evidence & Gate Outcome (2026-11-18)
 
+> **Version context (read first):** This evidence was produced against strategy tag
+> **`v3.2.0-p4-hunter-gates`**. The live package is now **`4.4.1-deterministic`**
+> (see `__init__.py`). Hunter remains **off** the live `EntryPipeline` in the
+> current release — this file is an optimization experiment record, not a
+> description of present entry behavior. See `ARCHITECTURE.md` / `MIGRATION_PLAN.md`.
+
 ## Setup
-- Strategy: `strategies/mtf_sniper` `v3.2.0-p4-hunter-gates`
+- Strategy **at experiment time:** `strategies/mtf_sniper` `v3.2.0-p4-hunter-gates`
+- Current package (for orientation only): `4.4.1-deterministic`
 - Timerange: `20220101-20261116`
 - `JEV_MODE=native`
 - Gate module: `directional/long/hunter_gates.py` → wired in `execution/hunter_merge.py`
