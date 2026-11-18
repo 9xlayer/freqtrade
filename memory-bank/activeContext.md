@@ -41,9 +41,20 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - RuntimeMode `deterministic` + force-native Decision (no external AI)
 - Candidate ID UTC contract; policy grade honesty; RiskAuthorization surface
 - Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
-- Still open: full MTF look-ahead suite, stop-distance sizing, BT parity re-run after commit
+- Phase 8 unit + FT `lookahead-analysis`: **no bias** (20 signals)
+- BT parity re-run confirmed Ep46 ON/OFF numbers above
+
+## Rejected opt (evidence 2026-11-18)
+Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong baseline** (pre-Ep46 DD25.4%/PF2.18).
+- `#1` tag multipliers: inert (`enable_dynamic_sizing=False`); tag narrative ≠ Ep46 ENTER TAG
+- `#2` ladder: defer isolated A/B only
+- `#3` ETH tighten (`SL -0.22`, dist `0.9`, body `0.68`): **regressed** ON BT → +3197%/DD22.3%/PF1.65/ETH+131% vs Ep46 +3867%/DD18.9%/PF1.71/ETH+502% — **reverted**
+
+## Hygiene
+- Retargeted broken `user_data/strategies/*` symlinks away from deleted `strategies/active/`
+- Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
 ## Next
-- Commit stabilize batches; Coolify redeploy (`:latest` base)
-- Phase 8 look-ahead tests + BT parity report vs pre-Ep46 baseline
+- Coolify redeploy (`:latest` base) when ready
+- Optional: isolated stoploss-ladder A/B only (do not bundle)
 - Only then consider Hunter re-enable
