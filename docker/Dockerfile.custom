@@ -1,8 +1,27 @@
-FROM ghcr.io/freqtrade/freqtrade:stable
+FROM ghcr.io/freqtrade/freqtrade:latest
 
-# Cài đặt socksio hỗ trợ httpx SOCKS5 proxy
+# SOCKS5 support for httpx (optional proxy on Pi / Coolify)
 RUN pip install --no-cache-dir socksio
 
-# Đóng gói toàn bộ chiến lược từ git repository trực tiếp vào image
-# Đảm bảo mỗi khi git push -> Coolify build image -> bot tự động có strategy mới nhất
+# Coolify/CI: bake strategies from git into the image so every rebuild
+# picks up strategies/mtf_sniper without relying on the user_data volume.
 COPY --chown=ftuser:ftuser strategies/ /freqtrade/strategies/
+
+# Overlay config forces strategy_path (mounted user_data/config.json may still
+# point at the removed strategies/active path).
+COPY --chown=ftuser:ftuser docker/config.mtf_sniper.json /freqtrade/config.mtf_sniper.json
+
+ENV PYTHONPATH=/freqtrade
+WORKDIR /freqtrade
+
+# Default CMD for Coolify Dockerfile-only deploys (compose command overrides this).
+# Base image ENTRYPOINT is `freqtrade`.
+CMD [ \
+  "trade", \
+  "--logfile", "/freqtrade/user_data/logs/freqtrade.log", \
+  "--db-url", "sqlite:////freqtrade/user_data/tradesv3.sqlite", \
+  "--config", "/freqtrade/user_data/config.json", \
+  "--config", "/freqtrade/config.mtf_sniper.json", \
+  "--strategy-path", "/freqtrade/strategies/mtf_sniper", \
+  "--strategy", "StrategyMTFSniper" \
+]

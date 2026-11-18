@@ -12,11 +12,20 @@
 |---|---|
 | `strategies/mtf_sniper/` | Live SensorSuite strategy + JEV Decision |
 | `user_data/config.json` | Runtime config (pairs, stake, strategy_params) |
-| `docker-compose.yml` | Env wiring into container |
+| `docker-compose.yml` | Coolify/Pi compose: env + trade command |
+| `docker/Dockerfile.custom` | Bakes `strategies/` + overlay config into image |
+| `docker/config.mtf_sniper.json` | Forces `StrategyMTFSniper` + `/freqtrade/strategies/mtf_sniper` |
+| `docker/README.md` | Coolify deploy checklist |
 | `.env` | Secrets + mode (gitignored) |
 | `reports/` | Audit reports (treat as claims, verify) |
 | `tests/strategy/test_jev_architecture.py` | JEV architecture tests |
 | `reports/BACKTEST_SPECIFICATION.md` | Canonical backtest command recipe |
+
+## Coolify / Docker load path
+- Strategies are **not** on the volume — they come from the image `COPY strategies/`.
+- Trade command loads two configs: mounted `user_data/config.json` then overlay `config.mtf_sniper.json` (overlay wins for strategy path).
+- `PYTHONPATH=/freqtrade` required for package imports.
+- Do not point Coolify custom command at removed `strategies/active`.
 
 ## Config knobs
 ### `user_data/config.json` → `strategy_params`

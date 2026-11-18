@@ -24,9 +24,7 @@ Bộ chiến lược **MTF Sniper** là hệ thống giao dịch thuật toán t
 
 * **Không phải Scalping thắng đều hàng ngày:** Hệ thống không tìm kiếm các khoản lãi nhỏ li ti mỗi ngày với tỷ lệ thắng 80%.
 * **Cơ chế sinh lời:** Chấp nhận tỷ lệ thắng quanh **$50\%$**, hòa vốn hoặc lỗ nhỏ có kiểm soát ở đa số các lệnh. Toàn bộ lợi nhuận ròng được tạo ra bởi **các lệnh ăn trọn sóng lớn $+7\%$ đến $+10\%$ chart (tức $+70\%$ đến $+100\%$ ROE với đòn bẩy 10x)**.
-* **Các chiến lược thành phần:**
-  1. **[`StrategyMTFSniper.py`](file:///Users/nathan/Documents/WORK/freqtrade/strategies/active/StrategyMTFSniper.py)**: Bản hai chiều (LONG + SHORT), có cơ chế lọc xu hướng ngày để cấm Long trong thị trường gấu và cấm Short trong thị trường siêu tăng.
-  2. **[`StrategyMTFShortSniper.py`](file:///Users/nathan/Documents/WORK/freqtrade/strategies/active/StrategyMTFShortSniper.py)**: Bản độc lập chuyên biệt chỉ đánh vị thế SHORT.
+* **Live strategy:** [`strategies/mtf_sniper/`](mtf_sniper/) → class `StrategyMTFSniper` (LONG + SHORT, SensorSuite + optional JEV Decision). Short-only facade removed; use directional short package inside `mtf_sniper`.
 
 > [!WARNING]
 > **Đặc tính chu kỳ vốn (Drawdown Profile):**
@@ -206,6 +204,7 @@ flowchart TD
 ### Các Lệnh CLI Chuẩn
 > [!NOTE]
 > Live path: `strategies/mtf_sniper` (SensorSuite v4). Cần `PYTHONPATH=.` khi chạy local.
+> Coolify/Docker: image bake + overlay `docker/config.mtf_sniper.json` — see `docker/README.md`.
 
 ```bash
 # 1. Backtest:
@@ -213,4 +212,7 @@ PYTHONPATH=. .venv/bin/freqtrade backtesting --config user_data/config.json --st
 
 # 2. Dry-Run / trade:
 PYTHONPATH=. .venv/bin/freqtrade trade --config user_data/config.json --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper
+
+# 3. Coolify / compose (strategies baked in image):
+docker compose up -d --build
 ```

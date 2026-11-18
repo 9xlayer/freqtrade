@@ -5,6 +5,7 @@ Dockerfile
 .devcontainer/
 docker/
 !docker/Dockerfile.custom
+!docker/config.mtf_sniper.json
 docs/
 # Needed by requirements-dev.txt (devcontainer build)
 !docs/requirements-docs.txt
@@ -33,6 +34,7 @@ freqtrade.egg-info
 config.json*
 *.sqlite
 user_data/
+strategies/archive/
 *.log
 
 .vscode

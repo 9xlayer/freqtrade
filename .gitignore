@@ -1,5 +1,6 @@
 # Freqtrade rules
 config*.json
+!docker/config.mtf_sniper.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

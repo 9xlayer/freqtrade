@@ -1,0 +1,11 @@
+{
+  "strategy": "StrategyMTFSniper",
+  "strategy_path": "/freqtrade/strategies/mtf_sniper",
+  "strategy_params": {
+    "enable_jev_decision": true,
+    "enable_jev_hunter": false,
+    "enable_hunter_long": false,
+    "block_macro_bull_shorts": false,
+    "enable_dynamic_sizing": true
+  }
+}
