@@ -130,12 +130,22 @@ class StrategyMTFSniper(IStrategy):
             else self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
         )
 
-        profile = build_runtime_profile(
-            strat_cfg,
-            enable_jev_decision_cfg=want_decision,
-            enable_jev_hunter_cfg=want_hunter,
-            enable_hunter_long_cfg=want_hunter_long,
-        )
+        from strategies.mtf_sniper.core.runtime_mode import InvalidRuntimeModeError
+
+        try:
+            profile = build_runtime_profile(
+                strat_cfg,
+                enable_jev_decision_cfg=want_decision,
+                enable_jev_hunter_cfg=want_hunter,
+                enable_hunter_long_cfg=want_hunter_long,
+            )
+        except InvalidRuntimeModeError:
+            # Fail fast at strategy init / bot_start — do not silently fall back.
+            logger.error(
+                "[RuntimeMode] Invalid mtf_runtime_mode — refusing to start "
+                "(no silent fallback to a more privileged mode)."
+            )
+            raise
         self._runtime_profile = profile
         self.mtf_runtime_mode = profile.mode.value
         self.enable_jev_decision = bool(profile.enable_jev_decision)
@@ -505,20 +515,50 @@ class StrategyMTFSniper(IStrategy):
                     mask = mask & (df["enter_tag"].astype(str) == str(entry_tag))
                 hits = df.loc[mask]
                 if not hits.empty:
+                    label = hits.index[-1]
                     row = hits.iloc[-1]
-                    try:
-                        candle_index = int(df.index.get_loc(hits.index[-1]))
-                        if not isinstance(candle_index, int):
-                            candle_index = int(list(df.index).index(hits.index[-1]))
-                    except Exception:
-                        candle_index = int(len(hits) - 1)
+                    candle_index = self._dataframe_position(df, label)
+                    if candle_index is None:
+                        logger.warning(
+                            f"[CandidateID] Cannot resolve candle position for "
+                            f"{pair} label={label!r} — refusing non-canonical invent"
+                        )
+                        return None
                     ts = normalize_utc(row["date"])
                     trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
                     return make_candidate_id(pair, trade_side, ts, candle_index)
 
         return None
 
-    def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> None:
+    @staticmethod
+    def _dataframe_position(df, label) -> int | None:
+        """Absolute row position in ``df`` for ``label`` — never hits-relative."""
+        try:
+            indexer = df.index.get_indexer([label])
+            if len(indexer) and int(indexer[0]) >= 0:
+                return int(indexer[0])
+        except Exception:
+            pass
+        try:
+            loc = df.index.get_loc(label)
+            if isinstance(loc, (int,)):
+                return int(loc)
+            if isinstance(loc, slice):
+                # Duplicate labels → last occurrence in the slice
+                return int(loc.stop - 1) if loc.stop else int(loc.start)
+            # ndarray / boolean mask from duplicate labels
+            import numpy as np
+
+            arr = np.asarray(loc)
+            if arr.dtype == bool:
+                nz = np.flatnonzero(arr)
+                return int(nz[-1]) if len(nz) else None
+            return int(arr.ravel()[-1])
+        except Exception:
+            return None
+
+    def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> bool:
+        """Write + re-read verify. Returns True only when restart-safe persist succeeded."""
         from strategies.mtf_sniper.core.candidate_id import (
             CANDIDATE_ID_CUSTOM_DATA_KEY,
             CANDIDATE_ID_MISSING,
@@ -526,19 +566,34 @@ class StrategyMTFSniper(IStrategy):
         )
 
         if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
-            return
+            return False
         if not is_canonical_candidate_id(candidate_id):
             logger.warning(
                 f"[CandidateID] Refusing to persist non-canonical id={candidate_id!r}"
             )
-            return
+            return False
         try:
             trade.set_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY, candidate_id)
         except Exception as exc:
-            logger.warning(f"[CandidateID] set_custom_data failed: {exc}")
+            logger.warning(
+                f"[CandidateID] candidate_id_persistence_failed set_custom_data: {exc}"
+            )
+            return False
+        # Verify round-trip so we never claim restart-safe without durable store.
+        verified = self._read_persisted_candidate_id(trade)
+        if verified != candidate_id:
+            logger.warning(
+                f"[CandidateID] candidate_id_persistence_failed verify "
+                f"wrote={candidate_id!r} read={verified!r}"
+            )
+            return False
+        return True
 
     def _read_persisted_candidate_id(self, trade: Trade) -> str | None:
-        from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_CUSTOM_DATA_KEY
+        from strategies.mtf_sniper.core.candidate_id import (
+            CANDIDATE_ID_CUSTOM_DATA_KEY,
+            is_canonical_candidate_id,
+        )
 
         try:
             val = trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY)
@@ -546,7 +601,13 @@ class StrategyMTFSniper(IStrategy):
             return None
         if val is None or val == "":
             return None
-        return str(val)
+        cid = str(val)
+        if not is_canonical_candidate_id(cid):
+            logger.warning(
+                f"[CandidateID] Ignoring non-canonical persisted id={cid!r}"
+            )
+            return None
+        return cid
 
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
                             time_in_force: str, current_time: datetime, entry_tag: str | None,
@@ -685,8 +746,15 @@ class StrategyMTFSniper(IStrategy):
                 or self._resolve_candidate_id(pair, side, enter_tag, open_ts)
             )
             if cid:
-                self._persist_candidate_id(trade, cid)
+                # RAM bind for in-session correlation even if durable persist fails.
                 reg.bind_trade(trade_id, cid)
+                persisted = self._persist_candidate_id(trade, cid)
+                if not persisted:
+                    logger.warning(
+                        f"[CandidateID] candidate_id_persistence_failed "
+                        f"trade={trade_id} {pair} id={cid} — "
+                        f"in-session RAM bind OK, restart correlation NOT safe"
+                    )
             else:
                 logger.warning(
                     f"[CandidateID] Entry fill missing id for trade={trade_id} "

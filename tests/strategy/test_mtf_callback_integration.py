@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -10,20 +10,26 @@ import pandas as pd
 
 from strategies.mtf_sniper.core.candidate_id import (
     CANDIDATE_ID_CUSTOM_DATA_KEY,
+    CANDIDATE_ID_MISSING,
+    is_canonical_candidate_id,
     make_candidate_id,
 )
 from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
 from strategies.mtf_sniper.core.enums import TradeSide
+from strategies.mtf_sniper.core.runtime_mode import InvalidRuntimeModeError
 from strategies.mtf_sniper.execution.exit_policy import ALWAYS_ALLOW_EXIT_REASONS
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
 
 
 class _FakeTrade:
     def __init__(self, **kwargs):
+        self._fail_persist = bool(kwargs.pop("_fail_persist", False))
         self.__dict__.update(kwargs)
         self._custom = {}
 
     def set_custom_data(self, key, value):
+        if self._fail_persist:
+            raise RuntimeError("simulated custom_data failure")
         self._custom[key] = value
 
     def get_custom_data(self, key, default=None):
@@ -59,7 +65,8 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             close_profit_abs=5.0,
             exit_reason="roi",
         )
-        strat._persist_candidate_id(trade, cid)
+        ok = strat._persist_candidate_id(trade, cid)
+        self.assertTrue(ok)
         self.assertEqual(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY), cid)
 
         # Simulate restart — new empty registry
@@ -72,6 +79,83 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         self.assertTrue(ledger.record.called)
         rec = ledger.record.call_args[0][0]
         self.assertEqual(rec.candidate_id, cid)
+
+    def test_persist_returns_false_on_set_failure(self):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
+        trade = _FakeTrade(id=1, _fail_persist=True)
+        self.assertFalse(strat._persist_candidate_id(trade, cid))
+        self.assertIsNone(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY))
+
+    def test_persist_rejects_non_canonical(self):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        trade = _FakeTrade(id=1)
+        self.assertFalse(strat._persist_candidate_id(trade, "not-a-canonical-id"))
+        self.assertFalse(strat._persist_candidate_id(trade, CANDIDATE_ID_MISSING))
+
+    def test_read_persisted_rejects_non_canonical(self):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        trade = _FakeTrade(id=1)
+        trade.set_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY, "legacy_garbage_id")
+        self.assertIsNone(strat._read_persisted_candidate_id(trade))
+
+    def test_order_filled_entry_binds_ram_even_if_persist_fails(self):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat._candidate_registry = CandidateRegistry()
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
+        trade = _FakeTrade(
+            id=9,
+            is_short=True,
+            enter_tag="short_A80plus",
+            open_date_utc=ts,
+            is_open=True,
+            amount=1.0,
+            exit_side="buy",
+            _fail_persist=True,
+        )
+        strat._read_persisted_candidate_id = lambda t: None
+        strat._resolve_candidate_id = lambda *a, **k: cid
+        order = SimpleNamespace(ft_order_side="sell", filled=1.0, safe_amount=1.0)
+        strat.order_filled("BTC/USDT:USDT", trade, order, ts)
+        self.assertEqual(strat._candidate_registry.lookup_trade(9), cid)
+        self.assertIsNone(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY))
+
+    def test_resolve_uses_absolute_dataframe_index_not_hits_relative(self):
+        """hits iloc[-1] may be index 15 of 20 hits; candle_index must be DF position."""
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat._candidate_registry = CandidateRegistry()
+        strat.timeframe = "15m"
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        n = 100
+        dates = [base + timedelta(minutes=15 * i) for i in range(n)]
+        enter = [False] * n
+        tags = [""] * n
+        # Sparse hits at absolute positions 10, 40, 70 — last hit position 70
+        for pos in (10, 40, 70):
+            enter[pos] = True
+            tags[pos] = "short_A80plus"
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "enter_short": enter,
+                "enter_tag": tags,
+            }
+        )
+        strat.dp = MagicMock()
+        strat.dp.get_analyzed_dataframe.return_value = (df, None)
+        cid = strat._resolve_candidate_id(
+            "BTC/USDT:USDT",
+            "short",
+            "short_A80plus",
+            dates[70],
+        )
+        self.assertIsNotNone(cid)
+        self.assertTrue(is_canonical_candidate_id(cid))
+        # Must encode absolute index 70, not len(hits)-1 == 2
+        self.assertTrue(cid.endswith("_70"), cid)
+        self.assertFalse(cid.endswith("_2"), cid)
 
     def test_resolve_missing_returns_none_not_ad_hoc(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
@@ -86,6 +170,17 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
         self.assertIsNone(missing)
+
+
+class TestRuntimeModeStartupFailFast(unittest.TestCase):
+    def test_load_external_config_raises_on_typo_mode(self):
+        """Invalid mode must abort strategy init / bot_start — no silent default."""
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat.config = {
+            "strategy_params": {"mtf_runtime_mode": "pure_determinstic"},
+        }
+        with self.assertRaises(InvalidRuntimeModeError):
+            StrategyMTFSniper._load_external_config(strat)
 
 
 class TestRiskAuthPairStoploss(unittest.TestCase):

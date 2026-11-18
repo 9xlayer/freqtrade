@@ -2,15 +2,23 @@
 
 Freqtrade callbacks do not receive TradeCandidate metadata. Populate stores
 IDs here; confirm / entry-fill / exit-fill look them up so telemetry stays linked.
+
+Lookup rules (when ``current_time`` is provided):
+- Never return a candidate with timestamp **after** ``current_time``.
+- Never fall back to the newest entry if none match.
+- Optionally enforce a max age window so an old same-tag signal is not reused.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TradeCandidate
+
+# Default skew for confirm/reconstruct: allow small clock/candle lag, reject stale.
+DEFAULT_LOOKUP_MAX_AGE = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -23,9 +31,16 @@ class _EntryKey:
 class CandidateRegistry:
     """Bounded maps: (pair, side, tag) → candidate_id, and trade_id → candidate_id."""
 
-    def __init__(self, *, maxlen_per_key: int = 8, maxlen_trades: int = 256) -> None:
+    def __init__(
+        self,
+        *,
+        maxlen_per_key: int = 8,
+        maxlen_trades: int = 256,
+        lookup_max_age: timedelta = DEFAULT_LOOKUP_MAX_AGE,
+    ) -> None:
         self._maxlen = max(1, int(maxlen_per_key))
         self._maxlen_trades = max(1, int(maxlen_trades))
+        self._lookup_max_age = lookup_max_age
         # key → list of (candle_index, utc_ts, candidate_id) newest last
         self._store: Dict[_EntryKey, list[Tuple[int, datetime, str]]] = {}
         # trade_id → candidate_id (bound on entry fill, cleared on exit record)
@@ -55,7 +70,12 @@ class CandidateRegistry:
         side: str,
         entry_tag: Optional[str],
         current_time: Optional[datetime] = None,
+        max_age: Optional[timedelta] = None,
     ) -> Optional[str]:
+        """
+        Return the newest candidate with ``timestamp <= current_time`` inside
+        the age window. Returns ``None`` when nothing matches (no future fallback).
+        """
         key = _EntryKey(
             pair=str(pair),
             side=str(side).lower(),
@@ -66,11 +86,16 @@ class CandidateRegistry:
             return None
         if current_time is None:
             return bucket[-1][2]
+
         ct = normalize_utc(current_time)
+        age_limit = self._lookup_max_age if max_age is None else max_age
         for _idx, ts, cid in reversed(bucket):
-            if ts <= ct:
-                return cid
-        return bucket[-1][2]
+            if ts > ct:
+                continue  # never return a future candidate
+            if age_limit is not None and (ct - ts) > age_limit:
+                continue  # too old for this callback
+            return cid
+        return None
 
     def bind_trade(self, trade_id: int, candidate_id: str) -> None:
         tid = int(trade_id)
