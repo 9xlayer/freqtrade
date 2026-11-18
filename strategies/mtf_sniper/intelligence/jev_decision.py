@@ -412,7 +412,14 @@ class JevDecisionEngine:
 
     @staticmethod
     def _read_dotenv() -> dict:
-        """Load key=value pairs from .env files without writing os.environ."""
+        """
+        Load key=value pairs from .env files without writing os.environ.
+
+        Priority (first wins per key; process env still overrides in ``_cfg``):
+        1. ``./.env`` (cwd)
+        2. package-relative ``strategies/.env`` (parents[2] from this file)
+        Keys already seen are not overwritten by later files.
+        """
         out: dict = {}
         for env_path in [Path(".env"), Path(__file__).resolve().parents[2] / ".env"]:
             if not env_path.exists():

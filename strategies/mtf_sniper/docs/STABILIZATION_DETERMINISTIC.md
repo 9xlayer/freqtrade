@@ -54,6 +54,10 @@ confirm_trade_entry
 17. **Invalid runtime mode** — misspellings raise `InvalidRuntimeModeError` (no silent privilege escalation).
 18. **Decision Engine dotenv** — parsed to local dict; does not write `os.environ`.
 19. **Pair stoploss in RiskAuth** — `confirm_trade_entry` passes effective pair `stoploss` into `authorize_entry`.
+20. **Registry time window** — `CandidateRegistry.lookup` never returns a future candidate; no newest-fallback when none match; optional max-age window (default 6h).
+21. **Candle index reconstruction** — `_dataframe_position` uses absolute DF index (`get_indexer` / `get_loc`); never `len(hits)-1`.
+22. **Persist verify** — `_persist_candidate_id` returns `bool`, re-reads custom data, logs `candidate_id_persistence_failed`; read path validates canonical format.
+23. **Startup fail-fast proof** — `_load_external_config` re-raises `InvalidRuntimeModeError` (tested via strategy load path).
 
 ## Semantics: Policy vs Decision
 
@@ -87,7 +91,7 @@ Canonical `candidate_id` should match populate → confirm when registry is warm
 
 - Stop-distance-based risk budget **not** implemented (honest `sizing_method`).
 - Margin/liquidation buffer check enum exists but not fully wired to exchange margin.
-- Freqtrade callback integration tests (stake/leverage/stoploss end-to-end) still thin.
+- Full Freqtrade order lifecycle (partial fill / stoploss fill / live restart) still a verification gap vs unit callback stubs.
 - Informative merge/alignment beyond unit prefix tests still needs expansion.
 - JEV Hunter / Momentum Radar expansion remain **out of scope**.
 

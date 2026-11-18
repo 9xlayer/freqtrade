@@ -12,8 +12,10 @@
 - Old compare tree removed — use git history if needed
 - Coolify host `/data/.../config.json` may still say `strategies/active` until manually updated (image overlay covers it)
 - Optional risk work: isolated custom-stoploss ladder A/B (early BE) — not shipped; ETH pair tighten rejected by BT
-- Stabilization batch (post-bd6d2ef review): Trade custom-data candidate_id, no non-canonical fallback, Long+Short parity, invalid mode fail-fast, DecisionEngine no env mutate, pair SL in RiskAuth, callback integration tests
-- 69 unit/integration tests OK; Ep46 BT ON still +3866.60% / DD 18.89% / PF 1.71
+- Stabilization batch (post-bd6d2ef / b48aac8): Trade custom-data candidate_id, no non-canonical fallback, Long+Short parity, invalid mode fail-fast, DecisionEngine no env mutate, pair SL in RiskAuth, callback integration tests
+- Final P1 correlation batch: registry time-window (no future), absolute candle_index, persist verify bool, validate-on-read
+- `tests/strategy/test_mtf*.py`: **137 OK**; Ep46 BT ON reconfirm: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71
+- Remaining ops gap: live restart + full Freqtrade fill lifecycle (not unit-covered)
 - Hunter / Momentum Radar still out of scope
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)

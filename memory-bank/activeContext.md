@@ -44,7 +44,8 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - No global env mutation (adapter, strategy, DecisionEngine dotenv)
 - RiskAuthorization honesty + pair effective stoploss on confirm
 - Callback integration tests (persist/restart, hard exits, pair SL)
-- Ep46 BT ON regression: +3866.60% / DD 18.89% / PF 1.71 (unchanged)
+- **Final P1 batch (post-b48aac8):** registry no future/stale fallback; absolute candle_index; persist bool+verify; validate-on-read; startup fail-fast via `_load_external_config`
+- Ep46 BT ON reconfirm on this HEAD: 299 trades, **+3866.6%**, **DD 18.89%**, PF 1.71
 - Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
 
 ## Rejected opt (evidence 2026-11-18)
@@ -58,5 +59,6 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
 ## Next
+- Operational verification: bot restart with open trade; dry-run callback lifecycle
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
 - Only then consider Hunter / Momentum Radar
