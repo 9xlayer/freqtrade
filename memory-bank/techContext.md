@@ -68,8 +68,17 @@ Ledgers (when enabled): `user_data/telemetry/decision_ledger.jsonl`, `trade_ledg
 ## Dev commands
 ```bash
 .venv/bin/python -m unittest tests.strategy.test_jev_architecture
+.venv/bin/python -m unittest tests.strategy.test_telemetry_pickle
 # optional if present:
 .venv/bin/python -m unittest tests.strategy.test_execution_safety
+
+# Hyperopt (parallel OK after ledger pickle fix); Decision OFF overlay recommended
+PYTHONPATH=. JEV_MODE=native PYTHONUNBUFFERED=1 \
+.venv/bin/freqtrade hyperopt \
+  --config user_data/config.json \
+  --strategy StrategyMTFSniper --strategy-path strategies/mtf_sniper \
+  --spaces buy --hyperopt-loss SharpeHyperOptLossDaily \
+  --epochs 100 -j -2 --disable-param-export
 ```
 
 ## GitNexus + agent protocol (mirrors IWAS/getiwas)
