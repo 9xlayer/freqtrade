@@ -383,18 +383,24 @@ class JevDecisionEngine:
         fail_policy: Optional[str] = None,
     ):
         self.cache_db = cache_db
-        self._load_env()
+        # Parse .env into a local dict — never mutate process os.environ.
+        dotenv_cfg = self._read_dotenv()
         self._init_cache()
 
-        # Mode is controlled only by JEV_MODE (native | external | backtest); default native.
-        configured_mode = (mode or os.environ.get("JEV_MODE", "native")).lower()
+        def _cfg(key: str, default: str = "") -> str:
+            if key in os.environ and str(os.environ.get(key, "")).strip() != "":
+                return str(os.environ.get(key))
+            return str(dotenv_cfg.get(key, default))
+
+        # Mode: explicit ctor arg wins; else env / dotenv; default native.
+        configured_mode = (mode or _cfg("JEV_MODE", "native")).lower()
         self.mode = configured_mode if configured_mode in ("native", "external", "backtest") else "native"
 
-        self.fail_policy = (fail_policy or os.environ.get("JEV_FAIL_POLICY", "reject")).lower()
-        self.api_url = api_url or os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
-        self.api_key = api_key or os.environ.get("JEV_API_KEY")
+        self.fail_policy = (fail_policy or _cfg("JEV_FAIL_POLICY", "reject")).lower()
+        self.api_url = api_url or _cfg("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
+        self.api_key = api_key or _cfg("JEV_API_KEY", "") or None
         self.engine_version = ENGINE_VERSION
-        self.external_model_version = os.environ.get("JEV_DECISION_MODEL_VERSION", MODEL_VERSION_EXTERNAL)
+        self.external_model_version = _cfg("JEV_DECISION_MODEL_VERSION", MODEL_VERSION_EXTERNAL)
         self.prompt_version = (
             PROMPT_VERSION_EXTERNAL if self.mode == "external" else PROMPT_VERSION_NATIVE
         )
@@ -404,21 +410,25 @@ class JevDecisionEngine:
             f"EngineVer={ENGINE_VERSION}, PromptVer={self.prompt_version}"
         )
 
-    def _load_env(self):
-        if not os.environ.get("JEV_API_KEY"):
-            for env_path in [Path(".env"), Path(__file__).resolve().parents[2] / ".env"]:
-                if env_path.exists():
-                    try:
-                        with open(env_path, "r", encoding="utf-8") as f:
-                            for line in f:
-                                line = line.strip()
-                                if line and not line.startswith("#") and "=" in line:
-                                    k, v = line.split("=", 1)
-                                    k, v = k.strip(), v.strip().strip('"').strip("'")
-                                    if k not in os.environ:
-                                        os.environ[k] = v
-                    except Exception:
-                        pass
+    @staticmethod
+    def _read_dotenv() -> dict:
+        """Load key=value pairs from .env files without writing os.environ."""
+        out: dict = {}
+        for env_path in [Path(".env"), Path(__file__).resolve().parents[2] / ".env"]:
+            if not env_path.exists():
+                continue
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip('"').strip("'")
+                            if k and k not in out:
+                                out[k] = v
+            except Exception:
+                continue
+        return out
 
     def _init_cache(self):
         try:

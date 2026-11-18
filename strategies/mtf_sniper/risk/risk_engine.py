@@ -185,9 +185,10 @@ class RiskEngine:
             stage_rejected="" if approved else (stage or "portfolio"),
         )
 
+        from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_MISSING
+
         self._log_decision(
-            candidate_id=candidate_id
-            or f"{pair}_{side}_{int(current_time.timestamp())}",
+            candidate_id=candidate_id or CANDIDATE_ID_MISSING,
             current_time=current_time,
             pair=pair,
             side=side,

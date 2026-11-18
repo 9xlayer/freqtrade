@@ -38,13 +38,13 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - Mounted host config may still be stale; overlay forces correct path
 
 ## Stabilize progress
-- RuntimeMode: `pure_deterministic` | `deterministic` | `decision_native` | `decision_external`
-- Fast vs event candidate **semantic parity** + SetupComposer normalize
-- CandidateRegistry: populate → confirm → entry-fill bind → exit ledger (unbind)
-- No global `JEV_MODE` mutation (adapter + strategy startup)
-- RiskAuthorization: honest `None` for unavailable pct; `total_exposure_notional` real
-- Policy eligibility ≠ quality_grade; Decision ignores grade
-- Exit policy unit coverage present; Ep46 BT ON/OFF unchanged after fixes
+- RuntimeMode matrix + **fail-fast** on invalid mode (no silent fallback)
+- Fast/event parity: Short **and** Long + fuller Policy semantic compare
+- Candidate ID: Trade custom data persist (restart-safe) → registry cache → reconstruct → else `candidate_id_missing`
+- No global env mutation (adapter, strategy, DecisionEngine dotenv)
+- RiskAuthorization honesty + pair effective stoploss on confirm
+- Callback integration tests (persist/restart, hard exits, pair SL)
+- Ep46 BT ON regression: +3866.60% / DD 18.89% / PF 1.71 (unchanged)
 - Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
 
 ## Rejected opt (evidence 2026-11-18)
@@ -59,5 +59,4 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 
 ## Next
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
-- Optional deeper FT callback harness (live stake/SL wiring) if needed
 - Only then consider Hunter / Momentum Radar

@@ -14,6 +14,9 @@ Mode matrix (authoritative):
 ``deterministic`` keeps Decision optional so Coolify/Ep46 Decision-ON stays valid.
 Use ``pure_deterministic`` (alias ``pure``) when measuring Sniper+Policy+Risk alone.
 
+Invalid / misspelled mode names **fail fast** (ValueError) — never silently fall
+back to a more privileged mode.
+
 * Hunter still default-off this phase unless explicitly re-enabled later.
 """
 from __future__ import annotations
@@ -64,20 +67,36 @@ class RuntimeProfile:
     source: str
 
 
+class InvalidRuntimeModeError(ValueError):
+    """Raised when ``mtf_runtime_mode`` / ``MTF_RUNTIME_MODE`` is not recognized."""
+
+
 def resolve_runtime_mode(
     strat_cfg: Optional[Mapping[str, Any]] = None,
     *,
     environ: Optional[Mapping[str, str]] = None,
     default: RuntimeMode = RuntimeMode.DETERMINISTIC,
 ) -> RuntimeMode:
-    """Resolve mode from strategy_params then env ``MTF_RUNTIME_MODE``."""
+    """Resolve mode from strategy_params then env ``MTF_RUNTIME_MODE``.
+
+    Empty / missing → ``default``. Unknown non-empty value → ``InvalidRuntimeModeError``
+    (never silently map to a more privileged mode).
+    """
     env = environ if environ is not None else os.environ
     cfg = strat_cfg or {}
     raw = cfg.get("mtf_runtime_mode")
     if raw is None or str(raw).strip() == "":
         raw = env.get("MTF_RUNTIME_MODE", default.value)
     key = str(raw).strip().lower()
-    return _ALIASES.get(key, default)
+    if key == "":
+        return default
+    mode = _ALIASES.get(key)
+    if mode is None:
+        known = ", ".join(sorted(set(_ALIASES.keys())))
+        raise InvalidRuntimeModeError(
+            f"Unknown mtf_runtime_mode={raw!r}. Known aliases: {known}"
+        )
+    return mode
 
 
 def build_runtime_profile(
@@ -104,7 +123,7 @@ def build_runtime_profile(
         if val is None:
             return default
         if isinstance(val, bool):
-            return val
+            return bool(val)
         if isinstance(val, (int, float)):
             return bool(val)
         return str(val).strip().lower() in ("true", "1", "yes", "on")
