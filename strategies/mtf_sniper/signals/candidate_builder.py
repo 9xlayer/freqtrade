@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TradeCandidate, TriggerEvent
 from strategies.mtf_sniper.core.enums import RejectionReasonCode, SensorType, TradeSide
 
@@ -186,13 +186,10 @@ class CandidateBuilder:
         raw_features["sensors"] = [e.sensor_name for e in ranked]
         raw_features["sensor_types"] = {e.sensor_name: e.sensor_type.value for e in ranked}
 
-        ts = primary.timestamp
-        if ts.tzinfo is None:
-            epoch = int(ts.replace(tzinfo=timezone.utc).timestamp())
-        else:
-            epoch = int(ts.timestamp())
-
-        candidate_id = f"{primary.pair}_{primary.side.value}_{epoch}_{primary.candle_index}"
+        ts = normalize_utc(primary.timestamp)
+        candidate_id = make_candidate_id(
+            primary.pair, primary.side, ts, primary.candle_index
+        )
         return TradeCandidate(
             candidate_id=candidate_id,
             pair=primary.pair,
@@ -200,7 +197,7 @@ class CandidateBuilder:
             primary_sensor=primary.sensor_name,
             secondary_sensors=secondary,
             confluence_count=len(ranked),
-            timestamp=primary.timestamp,
+            timestamp=ts,
             candle_index=primary.candle_index,
             raw_features=raw_features,
             cooldown_bars=self.cooldown_for(primary.side),

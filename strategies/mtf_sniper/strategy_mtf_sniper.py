@@ -40,7 +40,7 @@ class StrategyMTFSniper(IStrategy):
     can_short: bool = True
     startup_candle_count: int = 400
 
-    # Default fallback flags (overridden by config.json / env vars)
+    # Default fallback flags (overridden by config.json / env vars / runtime mode)
     enable_jev_decision: bool = True
     # Live EntryPipeline ignores Hunter; keep flag false unless explicitly re-enabled.
     enable_jev_hunter: bool = False
@@ -48,6 +48,10 @@ class StrategyMTFSniper(IStrategy):
     block_macro_bull_shorts: bool = False
     enable_dynamic_sizing: bool = False
     jev_fail_policy: str = "allow"
+    mtf_runtime_mode: str = "deterministic"
+    _runtime_profile: Optional[object] = None
+    _effective_config: Optional[object] = None
+    _config_fingerprint: str = ""
     _hunter: Optional[object] = None
     _risk_engine: Optional[object] = None
     _decision_adapter: Optional[object] = None
@@ -96,42 +100,65 @@ class StrategyMTFSniper(IStrategy):
     def _load_external_config(self) -> None:
         """
         Load external config with safe boolean parsing, priority order:
-        1. `strategy_params` in config.json
-        2. Environment variables (.env / Docker Compose / Coolify)
-        3. Built-in defaults
+        1. Runtime mode profile (authoritative for AI/Hunter/Decision mode)
+        2. `strategy_params` in config.json
+        3. Environment variables (.env / Docker Compose / Coolify)
+        4. Built-in defaults
         """
+        from strategies.mtf_sniper.core.config_resolve import (
+            build_effective_config,
+            warn_pair_override_divergences,
+        )
+        from strategies.mtf_sniper.core.runtime_mode import build_runtime_profile
+
         strat_cfg = self.config.get("strategy_params", {}) if hasattr(self, "config") and self.config else {}
 
-        # 1. JEV AI Trajectory Gatekeeper
-        if "enable_jev_decision" in strat_cfg:
-            self.enable_jev_decision = self._to_bool(strat_cfg["enable_jev_decision"], True)
-        else:
-            self.enable_jev_decision = self._to_bool(os.environ.get("ENABLE_JEV_DECISION", "true"), True)
+        # Raw intent before mode clamp
+        want_decision = (
+            self._to_bool(strat_cfg["enable_jev_decision"], True)
+            if "enable_jev_decision" in strat_cfg
+            else self._to_bool(os.environ.get("ENABLE_JEV_DECISION", "true"), True)
+        )
+        want_hunter = (
+            self._to_bool(strat_cfg["enable_jev_hunter"], False)
+            if "enable_jev_hunter" in strat_cfg
+            else self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "false"), False)
+        )
+        want_hunter_long = (
+            self._to_bool(strat_cfg["enable_hunter_long"], False)
+            if "enable_hunter_long" in strat_cfg
+            else self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
+        )
 
-        # 2. JEV Hunter escalation (off in deterministic phase; EntryPipeline.live ignores it)
-        if "enable_jev_hunter" in strat_cfg:
-            self.enable_jev_hunter = self._to_bool(strat_cfg["enable_jev_hunter"], False)
-        else:
-            self.enable_jev_hunter = self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "false"), False)
+        profile = build_runtime_profile(
+            strat_cfg,
+            enable_jev_decision_cfg=want_decision,
+            enable_jev_hunter_cfg=want_hunter,
+            enable_hunter_long_cfg=want_hunter_long,
+        )
+        self._runtime_profile = profile
+        self.mtf_runtime_mode = profile.mode.value
+        self.enable_jev_decision = bool(profile.enable_jev_decision)
+        self.enable_jev_hunter = bool(profile.enable_jev_hunter)
+        self.enable_hunter_long = bool(profile.enable_hunter_long)
 
-        if "enable_hunter_long" in strat_cfg:
-            self.enable_hunter_long = self._to_bool(strat_cfg["enable_hunter_long"], False)
-        else:
-            self.enable_hunter_long = self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
+        # Force Decision engine env to native when external AI is disallowed
+        if not profile.allow_external_ai:
+            os.environ["JEV_MODE"] = profile.decision_jev_mode
 
-        # 3. Macro Bull Short Guard
+        # Macro Bull Short Guard
         if "block_macro_bull_shorts" in strat_cfg:
             self.block_macro_bull_shorts = self._to_bool(strat_cfg["block_macro_bull_shorts"], False)
         else:
             self.block_macro_bull_shorts = self._to_bool(os.environ.get("BLOCK_MACRO_BULL_SHORTS", "false"), False)
 
-        # 4. Dynamic Stake Sizing
+        # Dynamic Stake Sizing
         if "enable_dynamic_sizing" in strat_cfg:
             self.enable_dynamic_sizing = self._to_bool(strat_cfg["enable_dynamic_sizing"], False)
         else:
             self.enable_dynamic_sizing = self._to_bool(os.environ.get("ENABLE_DYNAMIC_SIZING", "false"), False)
 
-        # 5. JEV Fail Policy ('reject' / 'allow')
+        # JEV Fail Policy ('reject' / 'allow')
         if "jev_fail_policy" in strat_cfg:
             self.jev_fail_policy = str(strat_cfg["jev_fail_policy"]).lower()
         else:
@@ -142,35 +169,62 @@ class StrategyMTFSniper(IStrategy):
         else:
             self.enable_telemetry = self._to_bool(os.environ.get("ENABLE_TELEMETRY", "true"), True)
 
+        self._effective_config = build_effective_config(self, profile=profile)
+        self._config_fingerprint = self._effective_config.fingerprint()
+        for warn in warn_pair_override_divergences(self._effective_config):
+            logger.warning(f"[ConfigResolve] {warn}")
+
+    def _is_hyperopt_run(self) -> bool:
+        runmode = self.config.get("runmode") if hasattr(self, "config") and self.config else None
+        value = getattr(runmode, "value", runmode)
+        return str(value).lower() == "hyperopt"
+
     def _init_telemetry(self) -> None:
         from strategies.mtf_sniper.telemetry import DecisionLedger, TradeLedger
+
+        # Hyperopt forks workers via pickle — skip disk ledgers (locks + I/O overhead).
+        if self._is_hyperopt_run() or not bool(self.enable_telemetry):
+            self._decision_ledger = DecisionLedger(enabled=False)
+            self._trade_ledger = TradeLedger(enabled=False)
+            return
 
         user_data = Path(self.config.get("user_data_dir", "user_data"))
         ledger_dir = user_data / "telemetry"
         self._decision_ledger = DecisionLedger(
             ledger_dir / "decision_ledger.jsonl",
-            enabled=bool(self.enable_telemetry),
+            enabled=True,
         )
         self._trade_ledger = TradeLedger(
             ledger_dir / "trade_ledger.jsonl",
-            enabled=bool(self.enable_telemetry),
+            enabled=True,
         )
 
     def bot_start(self, **kwargs) -> None:
         self._load_external_config()
         self._init_telemetry()
-        # Force risk engine rebuild so it picks up decision ledger
+        # Force risk / decision rebuild with effective fingerprint
         self._risk_engine = None
+        self._decision_adapter = None
+        profile = self._runtime_profile
+        eff = self._effective_config
         logger.info(
             f"StrategyMTFSniper live v{self.strategy_version} started. "
-            f"Profile: Decision={self.enable_jev_decision}, "
-            f"Hunter={self.enable_jev_hunter} (long_promote={self.enable_hunter_long}), "
-            f"block_macro_bull_shorts={self.block_macro_bull_shorts}, "
-            f"dynamic_sizing={self.enable_dynamic_sizing}, "
+            f"runtime_mode={self.mtf_runtime_mode} "
+            f"fingerprint={self._config_fingerprint} "
+            f"Decision={self.enable_jev_decision} "
+            f"(jev_mode={getattr(profile, 'decision_jev_mode', 'native')}, "
+            f"external_ai={getattr(profile, 'allow_external_ai', False)}) "
+            f"Hunter={self.enable_jev_hunter} (long_promote={self.enable_hunter_long}) "
+            f"block_macro_bull_shorts={self.block_macro_bull_shorts} "
+            f"dynamic_sizing={self.enable_dynamic_sizing} "
             f"telemetry={self.enable_telemetry}"
         )
+        if eff is not None:
+            logger.info(f"[EffectiveConfig] {eff.to_log_dict()}")
         api_key = os.environ.get("JEV_API_KEY", "")
-        if self.enable_jev_decision or self.enable_jev_hunter:
+        if getattr(profile, "allow_external_ai", False) and (
+            self.enable_jev_decision or self.enable_jev_hunter
+        ):
             if api_key:
                 masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
                 logger.info(
@@ -179,21 +233,34 @@ class StrategyMTFSniper(IStrategy):
                 )
             else:
                 logger.warning(
-                    "[JEV] JEV_API_KEY unset — Decision/Hunter external mode unavailable "
-                    "(native/cached only)."
+                    "[JEV] JEV_API_KEY unset — external Decision/Hunter unavailable."
                 )
+        elif self.enable_jev_decision:
+            logger.info(
+                "[JEV] Deterministic/native Decision Gate only — no external AI inference."
+            )
         else:
-            logger.info("[JEV] Decision and Hunter disabled — deterministic technical path only.")
+            logger.info("[JEV] Decision and Hunter disabled — pure technical path.")
 
     def version(self) -> str | None:
-        return f"v{self.strategy_version} (parts → SetupComposer → Policy; Decision on confirm)"
+        return (
+            f"v{self.strategy_version} "
+            f"(mode={self.mtf_runtime_mode}; parts → SetupComposer → Policy; Decision on confirm)"
+        )
 
     def _get_risk_engine(self):
         if self._risk_engine is None:
             from strategies.mtf_sniper.risk.risk_engine import RiskEngine
             if self._decision_ledger is None and getattr(self, "enable_telemetry", True):
                 self._init_telemetry()
-            self._risk_engine = RiskEngine(decision_ledger=self._decision_ledger)
+            max_open = 2
+            if hasattr(self, "config") and self.config:
+                max_open = int(self.config.get("max_open_trades", 2) or 2)
+            self._risk_engine = RiskEngine(
+                decision_ledger=self._decision_ledger,
+                max_open_trades=max_open,
+                config_fingerprint=self._config_fingerprint,
+            )
         return self._risk_engine
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
@@ -219,7 +286,8 @@ class StrategyMTFSniper(IStrategy):
     ignore_roi_if_entry_signal = False
     process_only_new_candles = True
 
-    # Per-pair parameter overrides
+    # Per-pair overrides. long dist/body here mask strategy Parameter values in
+    # setups.py — HO Ep46 kept these at 3.3/0.63 (optimizer samples were ignored).
     custom_pair_params = {
         "BTC/USDT:USDT": {
             "stoploss": -0.25,
@@ -260,16 +328,17 @@ class StrategyMTFSniper(IStrategy):
     short_min_rsi_entry = DecimalParameter(20.0, 35.0, default=27.8, decimals=1, space="buy", optimize=False)
     short_cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=False)
 
-    # Long Confluence Parameters
-    long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=1.008, decimals=3, space="buy", optimize=True)
-    long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=62.4, decimals=1, space="buy", optimize=True)
-    long_lookback_resistance = IntParameter(8, 25, default=22, space="buy", optimize=True)
+    # Long Confluence Parameters (HO Ep46 effective set, 2026-11-18).
+    # body/dist defaults match custom_pair_params (those pair keys win in setups).
+    long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=0.988, decimals=3, space="buy", optimize=True)
+    long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=57.1, decimals=1, space="buy", optimize=True)
+    long_lookback_resistance = IntParameter(8, 25, default=15, space="buy", optimize=True)
     long_candle_body_ratio_min = DecimalParameter(0.40, 0.70, default=0.63, decimals=2, space="buy", optimize=True)
     long_max_dist_ema21 = DecimalParameter(1.0, 3.5, default=3.3, decimals=1, space="buy", optimize=True)
-    long_max_rsi_entry = DecimalParameter(65.0, 85.0, default=67.6, decimals=1, space="buy", optimize=True)
-    long_cooldown_candles = IntParameter(16, 96, default=18, space="buy", optimize=True)
-    long_overextended_dist_max = DecimalParameter(0.35, 1.00, default=0.59, decimals=2, space="buy", optimize=True)
-    long_block_1d_macd = BooleanParameter(default=True, space="buy", optimize=True)
+    long_max_rsi_entry = DecimalParameter(65.0, 85.0, default=68.1, decimals=1, space="buy", optimize=True)
+    long_cooldown_candles = IntParameter(16, 96, default=40, space="buy", optimize=True)
+    long_overextended_dist_max = DecimalParameter(0.35, 1.00, default=0.53, decimals=2, space="buy", optimize=True)
+    long_block_1d_macd = BooleanParameter(default=False, space="buy", optimize=True)
 
     block_4h_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     block_1d_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
@@ -333,7 +402,13 @@ class StrategyMTFSniper(IStrategy):
             from strategies.mtf_sniper.intelligence.decision_adapter import JevDecisionAdapter
 
             if self._decision_adapter is None:
-                self._decision_adapter = JevDecisionAdapter()
+                profile = self._runtime_profile
+                force_native = not bool(getattr(profile, "allow_external_ai", False))
+                mode = getattr(profile, "decision_jev_mode", "native") if profile else "native"
+                self._decision_adapter = JevDecisionAdapter(
+                    force_native=force_native,
+                    mode=mode,
+                )
             decision = self._decision_adapter
 
             analyzed_df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)

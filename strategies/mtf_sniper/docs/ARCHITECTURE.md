@@ -3,7 +3,7 @@
 
 **Invariant:** Redesign = clean layered modules. Legacy AND-mask rules are **ported into layers**, never short-circuit `apply_entry_pipeline`.
 
-**Current phase:** Deterministic sniper only. **Hunter / AI escalation OFF** on the entry path (`allow_anomaly_entries=False`, `hunter_escalation=None`). Re-enable later once this flow is stable.
+**Current phase:** Deterministic sniper only (`mtf_runtime_mode=deterministic`). **Hunter OFF** on the entry path. Decision Gate may run **native** heuristics only (no external AI). See `STABILIZATION_DETERMINISTIC.md`.
 
 ---
 

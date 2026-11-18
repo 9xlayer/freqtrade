@@ -25,9 +25,9 @@ class LongPolicyConfig:
 
     max_rejection_wick_ratio: float = 0.25
     min_close_pos_ratio: float = 0.70
-    max_rsi_entry: float = 67.6
+    max_rsi_entry: float = 68.1
     max_dist_ema21_pct: float = 3.3
-    overextended_dist_max: float = 0.59
+    overextended_dist_max: float = 0.53
     filter_wick_rejection: bool = True
     filter_pdh_ceiling: bool = True
     require_macro_bull: bool = True
@@ -74,6 +74,7 @@ class LongPolicy:
         close = float(row.get("close", 0.0) or 0.0)
 
         if is_setup_pass:
+            # Setup eligibility is independent of quality grade.
             long_score = float(
                 candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
             )
@@ -83,7 +84,7 @@ class LongPolicy:
             return PolicyEvaluationResult(
                 is_valid=True,
                 score=score,
-                quality_grade=grade if grade != "REJECT" else "A",
+                quality_grade=grade,  # honest grade; do not remap REJECT→A
                 reasons=["ACCEPT"],
                 suggested_stop_distance_pct=cfg.base_stop_distance_pct,
                 target_rr=cfg.target_rr,
@@ -92,6 +93,7 @@ class LongPolicy:
                     "entry_tag": LongSetup.A80_PLUS.value,
                     "long_score": long_score,
                     "setup_complete": True,
+                    "setup_eligible": True,
                     "mask_pass": True,
                 },
             )

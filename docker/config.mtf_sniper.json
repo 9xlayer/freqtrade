@@ -2,6 +2,7 @@
   "strategy": "StrategyMTFSniper",
   "strategy_path": "/freqtrade/strategies/mtf_sniper",
   "strategy_params": {
+    "mtf_runtime_mode": "deterministic",
     "enable_jev_decision": true,
     "enable_jev_hunter": false,
     "enable_hunter_long": false,
