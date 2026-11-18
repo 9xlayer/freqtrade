@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from pandas import DataFrame
@@ -20,17 +19,18 @@ class JevDecisionAdapter:
     """Facade over ``intelligence.jev_decision``.
 
     When ``force_native=True`` (deterministic runtime), external AI/API is
-    refused even if process env says ``JEV_MODE=external``.
+    refused even if process env says ``JEV_MODE=external``. Mode is passed
+    explicitly into the engine — this adapter does **not** mutate ``os.environ``.
     """
 
     def __init__(self, *, force_native: bool = False, mode: Optional[str] = None) -> None:
         self._extractor = CandleTrajectoryExtractor
         self._force_native = bool(force_native)
-        resolved_mode = mode
         if self._force_native:
             resolved_mode = "native"
-            # Prevent engine from reading a stale external mode from env.
-            os.environ["JEV_MODE"] = "native"
+        else:
+            resolved_mode = (mode or "native").lower()
+        # Explicit constructor arg — do not write JEV_MODE into process env.
         self._engine = JevDecisionEngine(mode=resolved_mode)
         if self._force_native and getattr(self._engine, "mode", "") == "external":
             self._engine.mode = "native"
@@ -62,7 +62,6 @@ class JevDecisionAdapter:
                 "forcing native heuristics."
             )
             self._engine.mode = "native"
-        # Spy: count only when engine would take external branch
         if getattr(self._engine, "mode", "") == "external":
             self.external_calls += 1
         return self._engine.evaluate(payload)

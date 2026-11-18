@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current focus
-**v4.4.1-deterministic** — stabilize deterministic mode (Hunter OFF by design).
+**v4.4.1-deterministic** — close P0/P1 review gaps (parity, pure mode, candidate_id lifecycle). Hunter/Radar still OFF.
 
 ## Live path
 ```
@@ -38,11 +38,13 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - Mounted host config may still be stale; overlay forces correct path
 
 ## Stabilize progress
-- RuntimeMode `deterministic` + force-native Decision (no external AI)
-- Candidate ID UTC contract; policy grade honesty; RiskAuthorization surface
+- RuntimeMode: `pure_deterministic` (Decision OFF) | `deterministic` (optional native) | external
+- Fast vs event candidate **semantic parity** test + SetupComposer normalize
+- CandidateRegistry → confirm_trade_entry uses canonical ID
+- Decision adapter no longer mutates `os.environ["JEV_MODE"]`
+- Policy eligibility ≠ quality_grade; Decision ignores grade (documented + tested)
+- Phase 8 unit + FT `lookahead-analysis`: **no bias**; Ep46 BT parity confirmed
 - Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
-- Phase 8 unit + FT `lookahead-analysis`: **no bias** (20 signals)
-- BT parity re-run confirmed Ep46 ON/OFF numbers above
 
 ## Rejected opt (evidence 2026-11-18)
 Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong baseline** (pre-Ep46 DD25.4%/PF2.18).
@@ -55,6 +57,6 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
 ## Next
-- Coolify redeploy (`:latest` base) when ready
-- Optional: isolated stoploss-ladder A/B only (do not bundle)
-- Only then consider Hunter re-enable
+- Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
+- Optional: Freqtrade callback integration tests (stake/SL); exit lifecycle
+- Only then consider Hunter / Momentum Radar
