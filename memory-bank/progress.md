@@ -12,6 +12,8 @@
 - Old compare tree removed — use git history if needed
 - Coolify host `/data/.../config.json` may still say `strategies/active` until manually updated (image overlay covers it)
 - Optional risk work: isolated custom-stoploss ladder A/B (early BE) — not shipped; ETH pair tighten rejected by BT
+- Review follow-up done: candidate fast/event parity test, `pure_deterministic`, candidate_id registry, Policy↔Decision semantics test
+- Still open before Hunter: FT callback integration + exit lifecycle coverage
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
 - Live Decision ON: 204 trades, +3462.93% (+34,629 USDT), WR 60.8%, DD 25.43%, PF 2.18

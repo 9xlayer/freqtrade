@@ -474,6 +474,53 @@ class StrategyMTFSniper(IStrategy):
             logger.warning(f"[JEV AI] Fail-safe policy is 'allow' -> Bypassing AI gate on exception: {e}")
             return True
 
+    def _resolve_candidate_id(
+        self,
+        pair: str,
+        side: str,
+        entry_tag: str | None,
+        current_time: datetime,
+    ) -> str:
+        """Prefer registry ID from populate; else reconstruct from analyzed bar."""
+        from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
+        from strategies.mtf_sniper.core.enums import TradeSide
+
+        reg = getattr(self, "_candidate_registry", None)
+        if reg is not None:
+            found = reg.lookup(
+                pair=pair, side=side, entry_tag=entry_tag, current_time=current_time
+            )
+            if found:
+                return found
+
+        # Fallback: last matching enter_* bar at/before confirm time
+        try:
+            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        except Exception:
+            df = None
+        if df is not None and not df.empty and "date" in df.columns:
+            side_l = str(side).lower()
+            col = "enter_short" if side_l == "short" else "enter_long"
+            if col in df.columns:
+                mask = (df["date"] <= current_time) & (df[col].fillna(0).astype(bool))
+                if entry_tag and "enter_tag" in df.columns:
+                    mask = mask & (df["enter_tag"].astype(str) == str(entry_tag))
+                hits = df.loc[mask]
+                if not hits.empty:
+                    row = hits.iloc[-1]
+                    # Prefer integer position in analyzed frame
+                    try:
+                        candle_index = int(df.index.get_loc(hits.index[-1]))
+                        if not isinstance(candle_index, int):
+                            candle_index = int(list(df.index).index(hits.index[-1]))
+                    except Exception:
+                        candle_index = int(len(hits) - 1)
+                    ts = normalize_utc(row["date"])
+                    trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
+                    return make_candidate_id(pair, trade_side, ts, candle_index)
+
+        return f"{pair}_{side}_{entry_tag or 'na'}_{int(current_time.timestamp())}"
+
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
                             time_in_force: str, current_time: datetime, entry_tag: str | None,
                             side: str, **kwargs) -> bool:
@@ -486,6 +533,7 @@ class StrategyMTFSniper(IStrategy):
                 return None
             return float(curr_row.iloc[-1]["close"])
 
+        candidate_id = self._resolve_candidate_id(pair, side, entry_tag, current_time)
         auth = self._get_risk_engine().authorize_entry(
             strategy_name=self.__class__.__name__,
             pair=pair,
@@ -497,7 +545,9 @@ class StrategyMTFSniper(IStrategy):
             jev_confirm=lambda: self._jev_confirm_entry(pair, side, current_time),
             entry_tag=entry_tag,
             sensors_triggered=[entry_tag] if entry_tag else [],
-            candidate_id=f"{pair}_{side}_{entry_tag or 'na'}_{int(current_time.timestamp())}",
+            candidate_id=candidate_id,
+            setup_type=str(entry_tag or ""),
+            signal_source="confirm_trade_entry",
         )
         return bool(auth.is_approved)
 

@@ -395,11 +395,40 @@ def apply_entry_pipeline(
     for idx in dataframe.index[final_long | final_short]:
         dataframe.loc[idx, "enter_tag"] = tags.loc[idx]
 
+    # Correlate Candidate → confirm_trade_entry / Risk telemetry
+    _remember_accepted_candidates(strategy, result)
+
     dataframe.attrs["mtf_sniper_live_entries"] = _summarize_live_entries(dataframe)
     dataframe.attrs["mtf_sniper_trigger_events"] = result.trigger_events
     dataframe.attrs["mtf_sniper_entry_rejected"] = result.rejected
     dataframe.attrs["mtf_sniper_hunter_promoted"] = []
+    dataframe.attrs["mtf_sniper_accepted_candidates"] = [
+        {
+            "candidate_id": c.candidate_id,
+            "candle_index": c.candle_index,
+            "side": c.side.value,
+            "entry_tag": str(pol.metadata.get("entry_tag") or ""),
+            "quality_grade": pol.quality_grade,
+            "signal_source": str((c.raw_features or {}).get("signal_source") or ""),
+        }
+        for c, pol in result.accepted
+    ]
     return dataframe
+
+
+def _remember_accepted_candidates(strategy: Any, result: EntryPipelineResult) -> None:
+    from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
+
+    reg = getattr(strategy, "_candidate_registry", None)
+    if reg is None:
+        reg = CandidateRegistry()
+        try:
+            strategy._candidate_registry = reg
+        except Exception:
+            return
+    for candidate, policy in result.accepted:
+        tag = str(policy.metadata.get("entry_tag") or policy.metadata.get("setup") or "")
+        reg.remember(candidate, tag)
 
 
 def _summarize_live_entries(dataframe: DataFrame) -> List[dict]:

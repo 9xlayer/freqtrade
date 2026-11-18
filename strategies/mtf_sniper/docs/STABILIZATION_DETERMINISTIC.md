@@ -6,24 +6,27 @@
 
 | Mode | Hunter | Decision | External AI |
 |---|---|---|---|
-| `deterministic` (default) | forced OFF | optional native heuristics | **blocked** |
+| `pure_deterministic` (alias `pure`) | forced OFF | **forced OFF** | blocked |
+| `deterministic` (alias `deterministic_native`) | forced OFF | optional native | blocked |
 | `decision_native` | forced OFF | optional native | blocked |
-| `decision_external` | still default OFF this phase | optional | allowed if `JEV_MODE=external` |
+| `decision_external` | still default OFF this phase | optional | allowed |
 
 Set via `strategy_params.mtf_runtime_mode` or env `MTF_RUNTIME_MODE`.
 
-Coolify overlay: `docker/config.mtf_sniper.json` → `"mtf_runtime_mode": "deterministic"`.
+- **Coolify / Ep46 production overlay:** `docker/config.mtf_sniper.json` → `"mtf_runtime_mode": "deterministic"` + `"enable_jev_decision": true` (native Decision ON).
+- **Sniper-only measurement:** `"mtf_runtime_mode": "pure_deterministic"` (Decision cannot affect BT/live confirm).
 
 ## Call graph (deterministic)
 
 ```
 populate_entry_trend
   → EntryPipeline.live (Hunter=None)
-      → vectorized AND parts  OR  SensorSuite events → CandidateBuilder
-      → SetupComposer (drop anomalies)
+      → vectorized AND parts  OR  SensorSuite events → CandidateBuilder → SetupComposer
       → Long/Short Policy (setup eligibility ≠ quality grade)
       → strategy cooldown → enter_*
+      → CandidateRegistry.remember(canonical candidate_id)
 confirm_trade_entry
+  → resolve candidate_id from registry (fallback: analyzed enter_* bar)
   → RiskEngine.authorize_entry
       → portfolio guards (circuit / directional / distress / max open)
       → JevDecisionAdapter(force_native=True) if enable_jev_decision
@@ -39,6 +42,20 @@ confirm_trade_entry
 5. **External Decision under “deterministic” intent** — forced native; spy-tested.
 6. **RiskAuthorization incomplete surface** — explicit sizing/exposure fields; documents that stake is **not** stop-distance-based (`sizing_method=freqtrade_proposed`).
 7. **Config divergence** — `EffectiveConfig` + warnings when pair overrides mask Parameters.
+8. **Fast vs event candidate semantics** — SetupComposer normalizes part order / confluence to match vectorized AND; integration test compares contract + Policy.
+9. **`pure_deterministic`** — Decision forced OFF for Sniper isolation measurement.
+10. **Decision adapter env side-effect** — no longer writes `os.environ["JEV_MODE"]`; mode passed to engine ctor.
+11. **Candidate ID through confirm** — `CandidateRegistry` + `_resolve_candidate_id` (no ad-hoc confirm-time ID).
+
+## Semantics: Policy vs Decision
+
+| Field | Meaning |
+|---|---|
+| `PolicyEvaluationResult.is_valid` | Setup **eligibility** (may enter pipeline) |
+| `quality_grade` | Setup **quality** (A/B/C/REJECT) — informational at Policy layer |
+| Decision native | Uses candle/macro **scores** in payload — does **not** read `quality_grade` |
+
+A setup with `is_valid=True` and `quality_grade=REJECT` can still reach `confirm_trade_entry`; Decision then applies its own score heuristics (when enabled).
 
 ## Effective configuration
 
@@ -56,12 +73,14 @@ Known intentional mask: `custom_pair_params` long/short body & dist override Par
 - `config_fingerprint`
 - `feature_snapshot` (small dict — never full DataFrames)
 
+Canonical `candidate_id` should match populate → confirm when registry is warm.
+
 ## Remaining risks / limitations
 
 - Stop-distance-based risk budget **not** implemented (honest `sizing_method`).
 - Margin/liquidation buffer check enum exists but not fully wired to exchange margin.
-- Fast-path vs event-scan full feature parity for non-part suites still falls back to event scan.
-- Look-ahead / MTF alignment suite needs dedicated Phase 8 expansion (indicator unit tests exist partially).
+- Freqtrade callback integration tests (stake/leverage/stoploss end-to-end) still thin.
+- Informative merge/alignment beyond unit prefix tests still needs expansion.
 - JEV Hunter / Momentum Radar expansion remain **out of scope**.
 
 ## Tests executed
@@ -71,7 +90,10 @@ PYTHONPATH=. .venv/bin/python -m unittest \
   tests.strategy.test_mtf_runtime_deterministic \
   tests.strategy.test_mtf_candidate_parity \
   tests.strategy.test_mtf_policy_grade_semantics \
+  tests.strategy.test_mtf_policy_decision_semantics \
   tests.strategy.test_mtf_sniper_directional \
+  tests.strategy.test_mtf_sniper_mask_parity \
   tests.strategy.test_mtf_sniper_risk \
-  tests.strategy.test_telemetry_pickle
+  tests.strategy.test_telemetry_pickle \
+  tests.strategy.test_mtf_lookahead_indicators
 ```

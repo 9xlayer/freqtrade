@@ -102,21 +102,29 @@ def _sensor_names(candidate: TradeCandidate) -> Set[str]:
 
 
 def _mark_setup_complete(candidate: TradeCandidate, recipe: SetupRecipe) -> TradeCandidate:
+    """Normalize composed candidate to match vectorized AND-path semantics."""
+    # Stable recipe order (same as EntryPipeline._candidates_for_mask part_names)
+    if recipe.name == SETUP_SNIPER_SHORT:
+        ordered_parts = list(SHORT_SNIPER_PART_NAMES)
+    elif recipe.name == SETUP_SNIPER_LONG:
+        ordered_parts = list(LONG_SNIPER_PART_NAMES)
+    else:
+        ordered_parts = sorted(recipe.required_sensors)
+
     feats = dict(candidate.raw_features or {})
     feats["setup_complete"] = True
     feats["setup_name"] = recipe.name
     feats["legacy_sniper"] = recipe.side
     feats["mask"] = f"legacy_and_{recipe.side}"
-    feats["recipe_sensors"] = sorted(recipe.required_sensors)
-    # Keep part score keys; ensure sensors list still present
-    if "sensors" not in feats:
-        feats["sensors"] = sorted(_sensor_names(candidate))
+    feats["recipe_sensors"] = list(ordered_parts)
+    feats["sensors"] = list(ordered_parts)
+    # Provenance: event path (fast path sets vectorized_and itself)
+    feats.setdefault("signal_source", "event_scan")
     return replace(
         candidate,
         primary_sensor=recipe.name,
-        secondary_sensors=[
-            s for s in feats.get("sensors", []) if s not in (recipe.name,)
-        ],
+        secondary_sensors=list(ordered_parts),
+        confluence_count=len(ordered_parts),
         raw_features=feats,
     )
 

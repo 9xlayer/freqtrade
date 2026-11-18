@@ -1,9 +1,20 @@
 """Explicit MTF Sniper runtime modes (deterministic phase vs AI-assisted).
 
-Hunter remains out of scope for this phase. Deterministic mode:
-- Forces Hunter OFF
-- Forces Decision Gate to native/backtest heuristics only (no external AI/API)
-- Preserves confirm_trade_entry + Risk Engine checks
+Hunter remains out of scope for this phase.
+
+Mode matrix (authoritative):
+
+| Mode                   | Hunter | Decision        | External AI |
+|------------------------|--------|-----------------|-------------|
+| pure_deterministic     | OFF    | OFF             | OFF         |
+| deterministic          | OFF    | optional native | OFF         |
+| decision_native        | OFF    | optional native | OFF         |
+| decision_external      | OFF*   | optional        | ON          |
+
+``deterministic`` keeps Decision optional so Coolify/Ep46 Decision-ON stays valid.
+Use ``pure_deterministic`` (alias ``pure``) when measuring Sniper+Policy+Risk alone.
+
+* Hunter still default-off this phase unless explicitly re-enabled later.
 """
 from __future__ import annotations
 
@@ -16,18 +27,26 @@ from typing import Any, Mapping, Optional
 class RuntimeMode(str, Enum):
     """Authoritative runtime modes for StrategyMTFSniper."""
 
-    DETERMINISTIC = "deterministic"
+    PURE_DETERMINISTIC = "pure_deterministic"
+    DETERMINISTIC = "deterministic"  # = deterministic_native in review naming
     DECISION_NATIVE = "decision_native"
     DECISION_EXTERNAL = "decision_external"
 
 
 _ALIASES = {
+    # Pure sniper isolation (Decision forced OFF)
+    "pure_deterministic": RuntimeMode.PURE_DETERMINISTIC,
+    "pure": RuntimeMode.PURE_DETERMINISTIC,
+    "sniper_only": RuntimeMode.PURE_DETERMINISTIC,
+    # Deterministic + optional native Decision (Coolify / Ep46 default path)
     "deterministic": RuntimeMode.DETERMINISTIC,
     "det": RuntimeMode.DETERMINISTIC,
-    "pure": RuntimeMode.DETERMINISTIC,
+    "deterministic_native": RuntimeMode.DETERMINISTIC,
+    # Explicit native Decision mode (same clamps as deterministic)
     "decision_native": RuntimeMode.DECISION_NATIVE,
     "native": RuntimeMode.DECISION_NATIVE,
     "decision": RuntimeMode.DECISION_NATIVE,
+    # External Decision allowed
     "decision_external": RuntimeMode.DECISION_EXTERNAL,
     "external": RuntimeMode.DECISION_EXTERNAL,
     "ai": RuntimeMode.DECISION_EXTERNAL,
@@ -72,8 +91,10 @@ def build_runtime_profile(
     """
     Build the effective runtime profile.
 
-    Deterministic mode never enables Hunter and never allows external Decision API.
-    Decision Gate may still run native heuristics when ``enable_jev_decision`` is true.
+    ``pure_deterministic`` forces Decision OFF (Sniper isolation).
+    ``deterministic`` / ``decision_native`` never enable Hunter and never allow
+    external Decision API; Decision Gate may still run native heuristics when
+    ``enable_jev_decision`` is true.
     """
     env = environ if environ is not None else os.environ
     cfg = strat_cfg or {}
@@ -88,7 +109,6 @@ def build_runtime_profile(
             return bool(val)
         return str(val).strip().lower() in ("true", "1", "yes", "on")
 
-    # Config/env intent (may be overridden by mode)
     want_decision = (
         enable_jev_decision_cfg
         if enable_jev_decision_cfg is not None
@@ -108,6 +128,17 @@ def build_runtime_profile(
         else _bool(cfg.get("enable_hunter_long", env.get("ENABLE_HUNTER_LONG")), False)
     )
 
+    if mode == RuntimeMode.PURE_DETERMINISTIC:
+        return RuntimeProfile(
+            mode=mode,
+            enable_jev_hunter=False,
+            enable_hunter_long=False,
+            enable_jev_decision=False,
+            decision_jev_mode="native",
+            allow_external_ai=False,
+            source="mtf_runtime_mode=pure_deterministic",
+        )
+
     if mode == RuntimeMode.DETERMINISTIC:
         return RuntimeProfile(
             mode=mode,
@@ -122,7 +153,7 @@ def build_runtime_profile(
     if mode == RuntimeMode.DECISION_NATIVE:
         return RuntimeProfile(
             mode=mode,
-            enable_jev_hunter=False,  # hunter still out of scope this phase
+            enable_jev_hunter=False,
             enable_hunter_long=False,
             enable_jev_decision=want_decision,
             decision_jev_mode="native",
@@ -130,7 +161,6 @@ def build_runtime_profile(
             source="mtf_runtime_mode=decision_native",
         )
 
-    # DECISION_EXTERNAL — still keep Hunter off unless explicitly re-enabled later
     return RuntimeProfile(
         mode=mode,
         enable_jev_hunter=bool(want_hunter),
