@@ -1,7 +1,8 @@
 """
-Short strategic policy — LIVE SensorSuite path.
+Short strategic policy — Directional 4b.
 
-Waterfall setups reuse ``DEFAULT_SHORT_HUNTER_GATES`` thresholds.
+Deterministic phase: only complete sniper setups (4a) ACCEPT.
+Anomaly soft/hard path kept behind ``allow_anomaly_entries`` (default False / AI off).
 """
 from __future__ import annotations
 
@@ -32,11 +33,13 @@ class ShortPolicyConfig:
     confluence_bonus: float = 0.10
     base_stop_distance_pct: float = 0.018
     target_rr: float = 2.0
+    # AI/Hunter branch off until deterministic sniper flow is stable
+    allow_anomaly_entries: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
 class ShortPolicy:
-    """Evaluate a SHORT TradeCandidate from the SensorSuite entry pipeline."""
+    """Evaluate a SHORT TradeCandidate from the entry pipeline."""
 
     def __init__(self, config: Optional[ShortPolicyConfig] = None) -> None:
         self.config = config or ShortPolicyConfig()
@@ -57,10 +60,48 @@ class ShortPolicy:
         hg = DEFAULT_SHORT_HUNTER_GATES
         setup = resolve_short_setup(candidate.primary_sensor, candidate.raw_features)
         is_waterfall = setup == ShortSetup.WATERFALL_COLLAPSE
+        from strategies.mtf_sniper.signals.composite_sensor import is_legacy_sniper_pass
+
+        is_setup_pass = is_legacy_sniper_pass(
+            candidate.primary_sensor, candidate.raw_features, "short"
+        )
 
         close = float(row.get("close", 0.0) or 0.0)
 
-        # --- Macro regime ---
+        if is_setup_pass:
+            short_score = float(
+                candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
+            )
+            base = min(1.0, max(0.0, short_score / 100.0)) if short_score > 0 else 0.70
+            score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
+            grade = quality_grade_from_score(score)
+            return PolicyEvaluationResult(
+                is_valid=True,
+                score=score,
+                quality_grade=grade if grade != "REJECT" else "B",
+                reasons=["ACCEPT"],
+                suggested_stop_distance_pct=cfg.base_stop_distance_pct,
+                target_rr=cfg.target_rr,
+                metadata={
+                    "setup": setup.value,
+                    "entry_tag": setup.value,
+                    "short_score": short_score,
+                    "setup_complete": True,
+                    "mask_pass": True,
+                },
+            )
+
+        if not cfg.allow_anomaly_entries:
+            return self._reject(
+                [RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value],
+                metadata={
+                    "setup": setup.value,
+                    "setup_complete": False,
+                    "deterministic_only": True,
+                },
+            )
+
+        # --- Anomaly path (re-enable with allow_anomaly_entries=True + Hunter) ---
         ema_50_1d = row.get("ema_50_1d")
         ema_200_1d = row.get("ema_200_1d")
         if cfg.block_macro_bull_shorts and ema_50_1d is not None and ema_200_1d is not None:
@@ -83,7 +124,6 @@ class ShortPolicy:
             if not is_bear_macro or is_bull_macro:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
-        # --- Candle microstructure ---
         if cfg.filter_wick_rejection:
             lower_wick = float(row.get("lower_wick_ratio", 0.0) or 0.0)
             close_pos = float(row.get("close_pos_ratio", 0.5) or 0.5)
@@ -94,7 +134,6 @@ class ShortPolicy:
             if close_pos > close_cap:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
-        # --- RSI / EMA chase ---
         rsi = float(row.get("rsi", 50.0) or 50.0)
         rsi_floor = hg.min_rsi if is_waterfall else cfg.min_rsi_entry
         if rsi < rsi_floor:
@@ -109,7 +148,6 @@ class ShortPolicy:
             if dist_pct > max_dist:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
-        # --- Floor guard ---
         sw_low = row.get("swing_low_20d_1d")
         floor_min = hg.floor_dist_min if is_waterfall else cfg.floor_dist_min
         if sw_low is not None and float(sw_low) > 0:
@@ -124,7 +162,9 @@ class ShortPolicy:
         short_score = float(
             candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
         )
-        base = min(1.0, max(0.0, short_score / 100.0)) if short_score > 0 else (0.85 if is_waterfall else 0.70)
+        base = min(1.0, max(0.0, short_score / 100.0)) if short_score > 0 else (
+            0.85 if is_waterfall else 0.70
+        )
         score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
         grade = quality_grade_from_score(score)
 

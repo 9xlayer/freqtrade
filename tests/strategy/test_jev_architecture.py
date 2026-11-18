@@ -1466,7 +1466,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
                 c.put(
                     pair, ts, "enter_short", "waterfall_collapse", 0.85 + (thread_id * 0.01),
                     JevHunterStatus.CONFIRMED.value, {"tid": thread_id},
-                    payload_hash=h, model_version="hunter-native-v2.6.2"
+                    payload_hash=h, model_version=HUNTER_MODEL_VERSION_NATIVE
                 )
             except Exception as e:
                 errors.append(e)
@@ -1479,7 +1479,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
 
         for i in range(num_threads):
             h = f"thread_payload_hash_{i}"
-            res = self.cache.get(pair, ts, model_version="hunter-native-v2.6.2", payload_hash=h)
+            res = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=h)
             self.assertIsNotNone(res, f"Lost write for payload hash {h}")
             self.assertEqual(res["raw_response"]["tid"], i)
 
@@ -1498,9 +1498,9 @@ class TestRealSqliteConcurrency(unittest.TestCase):
                 c.put(
                     pair, ts, "enter_long", "absorption_trap", 0.88,
                     JevHunterStatus.CONFIRMED.value, {"p": proc_id, "j": j},
-                    payload_hash=h, model_version="hunter-native-v2.6.2"
+                    payload_hash=h, model_version=HUNTER_MODEL_VERSION_NATIVE
                 )
-                hit = c.get(pair, ts, model_version="hunter-native-v2.6.2", payload_hash=h)
+                hit = c.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=h)
                 assert hit is not None and hit["raw_response"]["p"] == proc_id
 
         procs = [ctx.Process(target=proc_worker, args=(i, self.db_path)) for i in range(num_procs)]
@@ -1526,7 +1526,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
             try:
                 c = JevHunterCache(new_db)
                 c.put("BTC/USDT", "2026-01-01", "enter_short", "waterfall_collapse", 0.9,
-                      JevHunterStatus.CONFIRMED.value, {}, payload_hash="init_h", model_version="hunter-native-v2.6.2")
+                      JevHunterStatus.CONFIRMED.value, {}, payload_hash="init_h", model_version=HUNTER_MODEL_VERSION_NATIVE)
             except Exception as e:
                 errors.append(e)
 

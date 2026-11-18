@@ -21,13 +21,16 @@ def resolve_market_row(
     """Pick the latest analyzed bar at or before current_time."""
     if dataframe is None or getattr(dataframe, "empty", True):
         return None
-    row = dataframe.loc[dataframe["date"] == current_time]
-    if row.empty:
-        matched = dataframe.loc[dataframe["date"] <= current_time]
-        if matched.empty:
-            return None
-        return matched.iloc[-1]
-    return row.iloc[0]
+    dates = dataframe["date"]
+    # Exact match first (common in backtesting candle loop).
+    exact = dates == current_time
+    if getattr(exact, "any", lambda: False)():
+        return dataframe.loc[exact].iloc[-1]
+    # Avoid full DataFrame copies on every candle: boolean index → last True pos.
+    up_to = (dates <= current_time).to_numpy().nonzero()[0]
+    if len(up_to) == 0:
+        return None
+    return dataframe.iloc[int(up_to[-1])]
 
 
 def evaluate_custom_exit(

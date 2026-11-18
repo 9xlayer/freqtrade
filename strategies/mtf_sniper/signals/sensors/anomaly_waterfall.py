@@ -15,8 +15,8 @@ class WaterfallDropSensor(BaseSensor):
     """
     Detect sudden dump through recent swing low with elevated volume pressure.
 
-    Short-only sensor. Parity intent: waterfall_collapse wake-ups from MomentumRadar
-    short surge/breakout lineage (decisive red close below prior swing low).
+    Short-only sensor. Wakeups aligned to MomentumRadar MEGA_SURGE_SHORT
+    (vol≥4x, range≥2.2×ATR) plus decisive red breakdown through swing low.
     """
 
     name = "waterfall_drop"
@@ -24,8 +24,8 @@ class WaterfallDropSensor(BaseSensor):
     min_history = 100
 
     swing_lookback: int = 12
-    vol_ratio_min: float = 2.5
-    range_atr_min: float = 1.5
+    vol_ratio_min: float = 4.0
+    range_atr_min: float = 2.2
     body_ratio_min: float = 0.50
 
     def scan(

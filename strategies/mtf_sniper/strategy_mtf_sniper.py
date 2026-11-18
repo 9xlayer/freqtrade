@@ -20,20 +20,21 @@ try:
 except ImportError:
     import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.persistence import Order, Trade
+from strategies.mtf_sniper import STRATEGY_VERSION
 
 logger = logging.getLogger(__name__)
 
 
 class StrategyMTFSniper(IStrategy):
     """
-    MTF Sniper — SensorSuite live architecture.
+    MTF Sniper — deterministic layered entry (v4.4.0).
 
-    Entry: SensorSuite → CandidateBuilder → DirectionalTradingEngine → cooldown.
-    Risk / JEV Decision Gate / exit_policy remain on confirm/exit hooks.
+    Entry: part sensors → SetupComposer (AND recipes) → Policy → cooldown.
+    Confirm: optional JEV Decision Gate + Risk. Hunter escalation is off by default.
     """
 
     INTERFACE_VERSION = 3
-    strategy_version = "4.1.2-scoring"
+    strategy_version = STRATEGY_VERSION
 
     timeframe = "15m"
     can_short: bool = True
@@ -41,7 +42,8 @@ class StrategyMTFSniper(IStrategy):
 
     # Default fallback flags (overridden by config.json / env vars)
     enable_jev_decision: bool = True
-    enable_jev_hunter: bool = True
+    # Live EntryPipeline ignores Hunter; keep flag false unless explicitly re-enabled.
+    enable_jev_hunter: bool = False
     enable_hunter_long: bool = False
     block_macro_bull_shorts: bool = False
     enable_dynamic_sizing: bool = False
@@ -106,11 +108,11 @@ class StrategyMTFSniper(IStrategy):
         else:
             self.enable_jev_decision = self._to_bool(os.environ.get("ENABLE_JEV_DECISION", "true"), True)
 
-        # 2. JEV AI Momentum & Waterfall Hunter
+        # 2. JEV Hunter escalation (off in deterministic phase; EntryPipeline.live ignores it)
         if "enable_jev_hunter" in strat_cfg:
-            self.enable_jev_hunter = self._to_bool(strat_cfg["enable_jev_hunter"], True)
+            self.enable_jev_hunter = self._to_bool(strat_cfg["enable_jev_hunter"], False)
         else:
-            self.enable_jev_hunter = self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "true"), True)
+            self.enable_jev_hunter = self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "false"), False)
 
         if "enable_hunter_long" in strat_cfg:
             self.enable_hunter_long = self._to_bool(strat_cfg["enable_hunter_long"], False)
@@ -160,26 +162,31 @@ class StrategyMTFSniper(IStrategy):
         # Force risk engine rebuild so it picks up decision ledger
         self._risk_engine = None
         logger.info(
-            f"StrategyMTFSniper SensorSuite live v{self.strategy_version} started. "
-            f"Active Profile: JEV Decision={self.enable_jev_decision}, "
-            f"JEV Hunter escalate={self.enable_jev_hunter} "
-            f"(Long promote={self.enable_hunter_long}), "
-            f"Block Bull Shorts={self.block_macro_bull_shorts}, "
-            f"Dynamic Sizing={self.enable_dynamic_sizing}, "
-            f"Telemetry={self.enable_telemetry}"
+            f"StrategyMTFSniper live v{self.strategy_version} started. "
+            f"Profile: Decision={self.enable_jev_decision}, "
+            f"Hunter={self.enable_jev_hunter} (long_promote={self.enable_hunter_long}), "
+            f"block_macro_bull_shorts={self.block_macro_bull_shorts}, "
+            f"dynamic_sizing={self.enable_dynamic_sizing}, "
+            f"telemetry={self.enable_telemetry}"
         )
         api_key = os.environ.get("JEV_API_KEY", "")
         if self.enable_jev_decision or self.enable_jev_hunter:
             if api_key:
                 masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-                logger.info(f"[JEV AI] Engine initialized successfully! API Key detected ({masked}). Target URL: https://api.typesafe.ai/v1/systemone")
+                logger.info(
+                    f"[JEV] API key detected ({masked}). "
+                    f"URL: {os.environ.get('JEV_API_URL', 'https://api.typesafe.ai/v1/systemone')}"
+                )
             else:
-                logger.warning("[JEV AI] WARNING: JEV_API_KEY is not set in environment! Gatekeeper/Hunter will operate in mock/cached mode.")
+                logger.warning(
+                    "[JEV] JEV_API_KEY unset — Decision/Hunter external mode unavailable "
+                    "(native/cached only)."
+                )
         else:
-            logger.info("[JEV AI] JEV AI features are DISABLED via configuration. Operating in pure quantitative technical mode.")
+            logger.info("[JEV] Decision and Hunter disabled — deterministic technical path only.")
 
     def version(self) -> str | None:
-        return f"v{self.strategy_version} (Unified Risk Gate & Institutional Remediation Edition)"
+        return f"v{self.strategy_version} (parts → SetupComposer → Policy; Decision on confirm)"
 
     def _get_risk_engine(self):
         if self._risk_engine is None:
@@ -338,8 +345,16 @@ class StrategyMTFSniper(IStrategy):
                     return False
                 return True
 
-            df_up_to_now = analyzed_df.loc[analyzed_df["date"] <= current_time]
-            if len(df_up_to_now) < 16:
+            # Decision only needs lookback bars + last-row macro (not full history).
+            lookback = 32
+            up_to = (analyzed_df["date"] <= current_time).to_numpy().nonzero()[0]
+            if len(up_to) == 0:
+                df_window = analyzed_df.iloc[0:0]
+            else:
+                end_pos = int(up_to[-1])
+                start_pos = max(0, end_pos - lookback + 1)
+                df_window = analyzed_df.iloc[start_pos : end_pos + 1]
+            if len(df_window) < 16:
                 if getattr(self, "jev_fail_policy", "allow") in ("reject", "fail_closed", "safe"):
                     logger.warning(
                         f"[JEV AI] Fail-safe active -> Trade {pair} rejected: insufficient candle history (<16 bars)."
@@ -347,7 +362,7 @@ class StrategyMTFSniper(IStrategy):
                     return False
                 return True
 
-            payload = decision.build_payload(df_up_to_now, pair, side, lookback=32)
+            payload = decision.build_payload(df_window, pair, side, lookback=lookback)
             verdict = decision.evaluate(payload)
             logger.info(
                 f"Jev AI Verdict: {pair} {side.upper()} @ {current_time} -> {verdict.get('decision')} "

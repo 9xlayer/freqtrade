@@ -25,8 +25,8 @@ _PATTERN_SENSORS = frozenset(
     {
         "a80_plus",
         "swing_breakout",
-        "sniper_long_mask",
-        "sniper_short_mask",
+        "setup:sniper_short",
+        "setup:sniper_long",
     }
 )
 

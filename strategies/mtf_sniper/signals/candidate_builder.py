@@ -23,7 +23,10 @@ class CandidateBuilder:
     Rules:
     1. Same-side triggers on the same (pair, candle_index) -> MERGE into one TradeCandidate
        with confluence_count and Pattern-preferred primary_sensor.
-    2. Opposite-side triggers on the same (pair, candle_index) -> NEUTRALIZE (drop both).
+    2. Opposite-side on same bar:
+       - Both sides complete sniper recipes -> NEUTRALIZE both.
+       - Exactly one side complete -> keep that side (ignore opposite ambient parts).
+       - Neither complete -> emit both sides separately (SetupComposer drops incomplete parts).
     3. Directional cooldown: minimum separation of `cooldown_bars` between consecutive
        candidates on the same (pair, side).
     """
@@ -75,44 +78,79 @@ class CandidateBuilder:
             long_events = [e for e in group if e.side == TradeSide.LONG]
             short_events = [e for e in group if e.side == TradeSide.SHORT]
 
-            if long_events and short_events:
-                if rejected is not None:
-                    rejected.append(
-                        {
-                            "pair": pair,
-                            "candle_index": candle_index,
-                            "reason": RejectionReasonCode.CONTRADICTORY_SIGNALS.value,
-                            "sensors": [e.sensor_name for e in group],
-                        }
-                    )
-                continue
+            side_groups = self._resolve_side_groups(
+                long_events, short_events, pair, candle_index, rejected
+            )
+            for side_events in side_groups:
+                candidate = self._merge_same_side(side_events)
+                if candidate is None:
+                    continue
 
-            side_events = long_events or short_events
-            candidate = self._merge_same_side(side_events)
-            if candidate is None:
-                continue
+                cooldown_key = (candidate.pair, candidate.side)
+                cooldown_bars = self.cooldown_for(candidate.side)
+                last_idx = self._last_accepted.get(cooldown_key)
+                if last_idx is not None and (candidate.candle_index - last_idx) < cooldown_bars:
+                    if rejected is not None:
+                        rejected.append(
+                            {
+                                "pair": candidate.pair,
+                                "candle_index": candidate.candle_index,
+                                "side": candidate.side.value,
+                                "reason": RejectionReasonCode.COOLDOWN_ACTIVE.value,
+                                "last_accepted_index": last_idx,
+                                "cooldown_bars": cooldown_bars,
+                            }
+                        )
+                    continue
 
-            cooldown_key = (candidate.pair, candidate.side)
-            cooldown_bars = self.cooldown_for(candidate.side)
-            last_idx = self._last_accepted.get(cooldown_key)
-            if last_idx is not None and (candidate.candle_index - last_idx) < cooldown_bars:
-                if rejected is not None:
-                    rejected.append(
-                        {
-                            "pair": candidate.pair,
-                            "candle_index": candidate.candle_index,
-                            "side": candidate.side.value,
-                            "reason": RejectionReasonCode.COOLDOWN_ACTIVE.value,
-                            "last_accepted_index": last_idx,
-                            "cooldown_bars": cooldown_bars,
-                        }
-                    )
-                continue
-
-            self._last_accepted[cooldown_key] = candidate.candle_index
-            candidates.append(candidate)
+                self._last_accepted[cooldown_key] = candidate.candle_index
+                candidates.append(candidate)
 
         return candidates
+
+    def _resolve_side_groups(
+        self,
+        long_events: List[TriggerEvent],
+        short_events: List[TriggerEvent],
+        pair: str,
+        candle_index: int,
+        rejected: Optional[List[dict]],
+    ) -> List[List[TriggerEvent]]:
+        """Decide which side event lists become candidates on this bar."""
+        if long_events and not short_events:
+            return [long_events]
+        if short_events and not long_events:
+            return [short_events]
+        if not long_events and not short_events:
+            return []
+
+        from strategies.mtf_sniper.directional.setup_recipes import recipes_by_side
+
+        recipes = recipes_by_side()
+        long_names = {e.sensor_name for e in long_events}
+        short_names = {e.sensor_name for e in short_events}
+        long_complete = recipes["long"].is_satisfied(long_names)
+        short_complete = recipes["short"].is_satisfied(short_names)
+
+        if long_complete and short_complete:
+            if rejected is not None:
+                rejected.append(
+                    {
+                        "pair": pair,
+                        "candle_index": candle_index,
+                        "reason": RejectionReasonCode.CONTRADICTORY_SIGNALS.value,
+                        "sensors": sorted(long_names | short_names),
+                    }
+                )
+            return []
+
+        if short_complete and not long_complete:
+            return [short_events]
+        if long_complete and not short_complete:
+            return [long_events]
+
+        # Neither setup complete — keep both for composer / anomaly policy
+        return [long_events, short_events]
 
     def process_stream(
         self,
