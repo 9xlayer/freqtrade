@@ -49,6 +49,11 @@ confirm_trade_entry
 12. **Candidate ID through trade ledger** — entry `order_filled` binds `trade_id→candidate_id`; exit ledger reuses it (unbind on record).
 13. **Strategy startup** — no longer mutates global `JEV_MODE` either (adapter-only).
 14. **RiskAuthorization honesty** — `risk_budget_used_pct` / `risk_per_trade_pct` / `total_exposure_pct` are `None` when unavailable; `total_exposure_notional` always computed; pct only with `wallet_equity`.
+15. **Restart-safe Candidate ID** — entry fill persists `mtf_candidate_id` on Trade custom data; exit prefers custom data over RAM registry.
+16. **No non-canonical ID invent** — missing correlation → `candidate_id_missing` (never `{pair}_{side}_{tag}_{ts}`).
+17. **Invalid runtime mode** — misspellings raise `InvalidRuntimeModeError` (no silent privilege escalation).
+18. **Decision Engine dotenv** — parsed to local dict; does not write `os.environ`.
+19. **Pair stoploss in RiskAuth** — `confirm_trade_entry` passes effective pair `stoploss` into `authorize_entry`.
 
 ## Semantics: Policy vs Decision
 
@@ -93,6 +98,7 @@ PYTHONPATH=. .venv/bin/python -m unittest \
   tests.strategy.test_mtf_runtime_deterministic \
   tests.strategy.test_mtf_candidate_parity \
   tests.strategy.test_mtf_candidate_registry \
+  tests.strategy.test_mtf_callback_integration \
   tests.strategy.test_mtf_policy_grade_semantics \
   tests.strategy.test_mtf_policy_decision_semantics \
   tests.strategy.test_mtf_sniper_directional \

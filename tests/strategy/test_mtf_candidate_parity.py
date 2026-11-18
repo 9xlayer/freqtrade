@@ -11,6 +11,7 @@ import pandas as pd
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TriggerEvent
 from strategies.mtf_sniper.core.enums import SensorType, TradeSide
+from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
 from strategies.mtf_sniper.directional.short.setups import SHORT_SNIPER_PART_NAMES
 from strategies.mtf_sniper.execution.entry_pipeline import EntryPipeline, apply_entry_pipeline
 from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
@@ -142,8 +143,43 @@ def _force_short_sniper_bar(df: pd.DataFrame, i: int = 120) -> None:
     df.loc[i, "volume"] = 100.0
 
 
+def _force_long_sniper_bar(df: pd.DataFrame, i: int = 120) -> None:
+    """Satisfy legacy long AND-mask at index i (BTC)."""
+    lookback = 22
+    for j in range(max(0, i - lookback), i):
+        df.loc[j, "high"] = 100.0
+        df.loc[j, "close"] = 99.5
+    df.loc[i, ["open", "close", "high", "low"]] = [100.0, 103.0, 103.5, 99.8]
+    df.loc[i, "body"] = 3.0
+    df.loc[i, "total_range"] = 3.7
+    df.loc[i, "atr"] = 1.0
+    df.loc[i - 1, "close"] = 100.0
+    df.loc[i, ["ema_10", "ema_21"]] = [101.0, 100.5]
+    df.loc[i, "rsi"] = 55.0
+    df.loc[i, "upper_wick_ratio"] = 0.10
+    df.loc[i, "close_pos_ratio"] = 0.80
+    df.loc[i, "long_score"] = 85.0
+    df.loc[i, "close_1h"] = 102.0
+    df.loc[i, "ema_50_1h"] = 100.0
+    df.loc[i, "rsi_min_24_1h"] = 40.0
+    df.loc[i, "macdhist_4h"] = 0.1
+    df.loc[i, "ema_50_1d"] = 90.0
+    df.loc[i, "ema_200_1d"] = 80.0
+    df.loc[i, "macdhist_1d"] = 0.1
+    df.loc[i, "is_macro_bear_market_1d"] = 0
+    df.loc[i, "dist_from_ema_200_1d"] = 0.2
+    df.loc[i, "pdh_1d"] = 110.0
+    df.loc[i, "atr_pct"] = 50.0
+    df.loc[i, "adx_4h"] = 25.0
+    df.loc[i, "volume"] = 100.0
+
+
 def _semantic_view(cand) -> dict:
+    """Fields that must match across fast/event (excludes provenance signal_source)."""
     feats = cand.raw_features or {}
+    score_keys = sorted(
+        k for k in feats.keys() if k.endswith("_score") or k in ("short_score", "long_score")
+    )
     return {
         "candidate_id": cand.candidate_id,
         "pair": cand.pair,
@@ -155,9 +191,50 @@ def _semantic_view(cand) -> dict:
         "setup_name": feats.get("setup_name"),
         "setup_complete": bool(feats.get("setup_complete")),
         "legacy_sniper": feats.get("legacy_sniper"),
+        "mask": feats.get("mask"),
         "sensors": list(feats.get("sensors") or []),
         "recipe_sensors": list(feats.get("recipe_sensors") or []),
+        "scores": {k: float(feats.get(k) or 0.0) for k in score_keys},
     }
+
+
+def _policy_view(pol) -> dict:
+    return {
+        "is_valid": pol.is_valid,
+        "score": float(pol.score),
+        "quality_grade": pol.quality_grade,
+        "reasons": list(pol.reasons),
+        "entry_tag": pol.metadata.get("entry_tag"),
+        "setup": pol.metadata.get("setup"),
+        "setup_eligible": pol.metadata.get("setup_eligible"),
+    }
+
+
+def _assert_path_parity(self, pipe, df, pair, idx, side, part_names, expected_tag):
+    fast = pipe._candidates_from_sniper_masks(df, pair)
+    self.assertIsNotNone(fast)
+    fast_hits = [c for c in fast if c.candle_index == idx and c.side == side]
+    self.assertEqual(len(fast_hits), 1)
+
+    events = pipe.sensor_suite.scan(df, pair)
+    pipe.candidate_builder.reset()
+    raw = pipe.candidate_builder.process(events)
+    event = pipe.setup_composer.compose(raw)
+    event_hits = [c for c in event if c.candle_index == idx and c.side == side]
+    self.assertEqual(len(event_hits), 1)
+
+    f, e = fast_hits[0], event_hits[0]
+    self.assertEqual(_semantic_view(f), _semantic_view(e))
+    self.assertEqual((f.raw_features or {}).get("signal_source"), "vectorized_and")
+    self.assertEqual((e.raw_features or {}).get("signal_source"), "event_scan")
+    self.assertEqual(f.secondary_sensors, list(part_names))
+
+    row = df.iloc[idx].to_dict()
+    pol_f = pipe.engine.evaluate(f, row)
+    pol_e = pipe.engine.evaluate(e, row)
+    self.assertEqual(_policy_view(pol_f), _policy_view(pol_e))
+    self.assertTrue(pol_f.is_valid)
+    self.assertEqual(pol_f.metadata.get("entry_tag"), expected_tag)
 
 
 class TestCandidateIdContract(unittest.TestCase):
@@ -209,37 +286,33 @@ class TestFastVsEventCandidateParity(unittest.TestCase):
         strat = _make_strategy()
         df = _full_df()
         _force_short_sniper_bar(df, 120)
-        pair = "BTC/USDT:USDT"
         pipe = EntryPipeline.live(strat)
+        _assert_path_parity(
+            self,
+            pipe,
+            df,
+            "BTC/USDT:USDT",
+            120,
+            TradeSide.SHORT,
+            SHORT_SNIPER_PART_NAMES,
+            "short_A80plus",
+        )
 
-        fast = pipe._candidates_from_sniper_masks(df, pair)
-        self.assertIsNotNone(fast)
-        fast_hits = [c for c in fast if c.candle_index == 120 and c.side == TradeSide.SHORT]
-        self.assertEqual(len(fast_hits), 1)
-
-        # Event path: SensorSuite → Builder → Composer (bypass vectorized AND)
-        events = pipe.sensor_suite.scan(df, pair)
-        pipe.candidate_builder.reset()
-        raw = pipe.candidate_builder.process(events)
-        event = pipe.setup_composer.compose(raw)
-        event_hits = [c for c in event if c.candle_index == 120 and c.side == TradeSide.SHORT]
-        self.assertEqual(len(event_hits), 1)
-
-        f, e = fast_hits[0], event_hits[0]
-        self.assertEqual(_semantic_view(f), _semantic_view(e))
-        # Provenance may differ; both must be explicit
-        self.assertEqual((f.raw_features or {}).get("signal_source"), "vectorized_and")
-        self.assertEqual((e.raw_features or {}).get("signal_source"), "event_scan")
-        self.assertEqual(f.secondary_sensors, list(SHORT_SNIPER_PART_NAMES))
-
-        row = df.iloc[120].to_dict()
-        pol_f = pipe.engine.evaluate(f, row)
-        pol_e = pipe.engine.evaluate(e, row)
-        self.assertEqual(pol_f.is_valid, pol_e.is_valid)
-        self.assertEqual(pol_f.quality_grade, pol_e.quality_grade)
-        self.assertEqual(pol_f.metadata.get("entry_tag"), pol_e.metadata.get("entry_tag"))
-        self.assertTrue(pol_f.is_valid)
-        self.assertEqual(pol_f.metadata.get("entry_tag"), "short_A80plus")
+    def test_long_setup_contract_and_policy_parity(self):
+        strat = _make_strategy()
+        df = _full_df()
+        _force_long_sniper_bar(df, 120)
+        pipe = EntryPipeline.live(strat)
+        _assert_path_parity(
+            self,
+            pipe,
+            df,
+            "BTC/USDT:USDT",
+            120,
+            TradeSide.LONG,
+            LONG_SNIPER_PART_NAMES,
+            "long_A80plus",
+        )
 
     def test_apply_entry_registers_canonical_id(self):
         strat = _make_strategy()

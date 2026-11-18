@@ -5,8 +5,14 @@ import os
 import unittest
 from unittest.mock import patch
 
-from strategies.mtf_sniper.core.runtime_mode import RuntimeMode, build_runtime_profile
+from strategies.mtf_sniper.core.runtime_mode import (
+    InvalidRuntimeModeError,
+    RuntimeMode,
+    build_runtime_profile,
+    resolve_runtime_mode,
+)
 from strategies.mtf_sniper.intelligence.decision_adapter import JevDecisionAdapter
+from strategies.mtf_sniper.intelligence.jev_decision import JevDecisionEngine
 
 
 class TestRuntimeMode(unittest.TestCase):
@@ -79,6 +85,15 @@ class TestRuntimeMode(unittest.TestCase):
         profile = build_runtime_profile({"mtf_runtime_mode": "deterministic_native"})
         self.assertEqual(profile.mode, RuntimeMode.DETERMINISTIC)
 
+    def test_invalid_mode_fails_fast(self):
+        with self.assertRaises(InvalidRuntimeModeError):
+            resolve_runtime_mode({"mtf_runtime_mode": "pure_determinstic"})
+        with self.assertRaises(InvalidRuntimeModeError):
+            build_runtime_profile(
+                {"mtf_runtime_mode": "pure_determinstic", "enable_jev_decision": True},
+                enable_jev_decision_cfg=True,
+            )
+
 
 class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
     def test_force_native_blocks_external_engine_branch(self):
@@ -124,6 +139,18 @@ class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
                 os.environ.pop("JEV_MODE", None)
             else:
                 os.environ["JEV_MODE"] = prev
+
+    def test_decision_engine_dotenv_does_not_mutate_environ(self):
+        prev = dict(os.environ)
+        try:
+            # Ensure a key we can detect is absent before init
+            os.environ.pop("JEV_DECISION_MODEL_VERSION", None)
+            before = dict(os.environ)
+            JevDecisionEngine(mode="native")
+            self.assertEqual(os.environ, before)
+        finally:
+            os.environ.clear()
+            os.environ.update(prev)
 
 
 if __name__ == "__main__":

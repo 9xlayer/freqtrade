@@ -478,8 +478,8 @@ class StrategyMTFSniper(IStrategy):
         side: str,
         entry_tag: str | None,
         current_time: datetime,
-    ) -> str:
-        """Prefer registry ID from populate; else reconstruct from analyzed bar."""
+    ) -> str | None:
+        """Registry → reconstruct from analyzed enter bar. Never invent non-canonical IDs."""
         from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
         from strategies.mtf_sniper.core.enums import TradeSide
 
@@ -491,7 +491,7 @@ class StrategyMTFSniper(IStrategy):
             if found:
                 return found
 
-        # Fallback: last matching enter_* bar at/before confirm time
+        # Reconstruct canonical ID from last matching enter_* bar
         try:
             df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         except Exception:
@@ -506,7 +506,6 @@ class StrategyMTFSniper(IStrategy):
                 hits = df.loc[mask]
                 if not hits.empty:
                     row = hits.iloc[-1]
-                    # Prefer integer position in analyzed frame
                     try:
                         candle_index = int(df.index.get_loc(hits.index[-1]))
                         if not isinstance(candle_index, int):
@@ -517,11 +516,43 @@ class StrategyMTFSniper(IStrategy):
                     trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
                     return make_candidate_id(pair, trade_side, ts, candle_index)
 
-        return f"{pair}_{side}_{entry_tag or 'na'}_{int(current_time.timestamp())}"
+        return None
+
+    def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> None:
+        from strategies.mtf_sniper.core.candidate_id import (
+            CANDIDATE_ID_CUSTOM_DATA_KEY,
+            CANDIDATE_ID_MISSING,
+            is_canonical_candidate_id,
+        )
+
+        if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
+            return
+        if not is_canonical_candidate_id(candidate_id):
+            logger.warning(
+                f"[CandidateID] Refusing to persist non-canonical id={candidate_id!r}"
+            )
+            return
+        try:
+            trade.set_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY, candidate_id)
+        except Exception as exc:
+            logger.warning(f"[CandidateID] set_custom_data failed: {exc}")
+
+    def _read_persisted_candidate_id(self, trade: Trade) -> str | None:
+        from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_CUSTOM_DATA_KEY
+
+        try:
+            val = trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY)
+        except Exception:
+            return None
+        if val is None or val == "":
+            return None
+        return str(val)
 
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
                             time_in_force: str, current_time: datetime, entry_tag: str | None,
                             side: str, **kwargs) -> bool:
+        from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_MISSING
+
         def _get_price(other_pair: str, ts: datetime) -> float | None:
             df_other, _ = self.dp.get_analyzed_dataframe(other_pair, self.timeframe)
             if df_other is None or df_other.empty:
@@ -532,6 +563,12 @@ class StrategyMTFSniper(IStrategy):
             return float(curr_row.iloc[-1]["close"])
 
         candidate_id = self._resolve_candidate_id(pair, side, entry_tag, current_time)
+        if not candidate_id:
+            logger.warning(
+                f"[CandidateID] Missing at confirm {pair} {side} tag={entry_tag} "
+                f"@ {current_time} — logging as {CANDIDATE_ID_MISSING}"
+            )
+        pair_cfg = self._get_pair_params(pair)
         auth = self._get_risk_engine().authorize_entry(
             strategy_name=self.__class__.__name__,
             pair=pair,
@@ -543,9 +580,10 @@ class StrategyMTFSniper(IStrategy):
             jev_confirm=lambda: self._jev_confirm_entry(pair, side, current_time),
             entry_tag=entry_tag,
             sensors_triggered=[entry_tag] if entry_tag else [],
-            candidate_id=candidate_id,
+            candidate_id=candidate_id or CANDIDATE_ID_MISSING,
             setup_type=str(entry_tag or ""),
             signal_source="confirm_trade_entry",
+            default_stoploss=float(pair_cfg.get("stoploss", self.stoploss)),
         )
         return bool(auth.is_approved)
 
@@ -637,13 +675,23 @@ class StrategyMTFSniper(IStrategy):
         reg = self._get_candidate_registry()
 
         if not is_exit_fill:
-            # Entry fill — lock canonical ID to this trade for exit ledger.
+            # Entry fill — persist on Trade custom data (restart-safe) + RAM bind.
+            from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_MISSING
+
             open_ts = getattr(trade, "open_date_utc", None) or current_time
             cid = (
-                reg.lookup_trade(trade_id)
+                self._read_persisted_candidate_id(trade)
+                or reg.lookup_trade(trade_id)
                 or self._resolve_candidate_id(pair, side, enter_tag, open_ts)
             )
-            reg.bind_trade(trade_id, cid)
+            if cid:
+                self._persist_candidate_id(trade, cid)
+                reg.bind_trade(trade_id, cid)
+            else:
+                logger.warning(
+                    f"[CandidateID] Entry fill missing id for trade={trade_id} "
+                    f"{pair} {side} — will record {CANDIDATE_ID_MISSING} on exit"
+                )
             return
 
         # Skip partial exits while the position remains open.
@@ -701,11 +749,21 @@ class StrategyMTFSniper(IStrategy):
             if pnl_usdt is None and close_rate > 0 and hasattr(trade, "calc_profit"):
                 pnl_usdt = trade.calc_profit(close_rate)
 
+            from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_MISSING
+
             open_ts = getattr(trade, "open_date_utc", None) or current_time
+            # Prefer Trade custom data (survives restart) over RAM registry.
             candidate_id = (
-                reg.lookup_trade(trade_id)
+                self._read_persisted_candidate_id(trade)
+                or reg.lookup_trade(trade_id)
                 or self._resolve_candidate_id(pair, side, enter_tag, open_ts)
+                or CANDIDATE_ID_MISSING
             )
+            if candidate_id == CANDIDATE_ID_MISSING:
+                logger.warning(
+                    f"[CandidateID] Exit ledger correlation missing for trade={trade_id} "
+                    f"{pair} {side}"
+                )
             open_date = trade.open_date_utc.isoformat() if trade.open_date_utc else ""
             close_date = (
                 trade.close_date_utc.isoformat()
