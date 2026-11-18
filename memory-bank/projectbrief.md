@@ -4,9 +4,9 @@
 Freqtrade-based **crypto futures quantitative trading suite** focused on BTC/USDT:USDT and ETH/USDT:USDT, leverage target **10x**, base timeframe **15m** with MTF context **1H / 4H / 1D**.
 
 Primary product surface:
-- `strategies/active/StrategyMTFSniper.py` — bi-directional LONG + SHORT
-- `strategies/active/StrategyMTFShortSniper.py` — short-only variant
-- JEV modules: `jev_entry_hunter.py` (candidate proposer) + `jev_decision.py` (confirm/veto gate)
+- `strategies/mtf_sniper/strategy_mtf_sniper.py` — bi-directional LONG + SHORT (SensorSuite live)
+- JEV Decision: `strategies/mtf_sniper/intelligence/jev_decision.py`
+- Archived: `strategies/archive/short_sniper/` (former short-only monolith)
 
 Repo branch of record for deploy work: **`pi-deploy`**.
 

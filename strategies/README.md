@@ -205,12 +205,12 @@ flowchart TD
 
 ### Các Lệnh CLI Chuẩn
 > [!NOTE]
-> `user_data/config.json` đã được bổ sung `"strategy_path": "strategies/active"` để Freqtrade tự động tải chiến lược và thông số JSON. Bạn có thể chạy lệnh trực tiếp hoặc truyền tham số `--strategy-path` tường minh:
+> Live path: `strategies/mtf_sniper` (SensorSuite v4). Cần `PYTHONPATH=.` khi chạy local.
 
 ```bash
-# 1. Chạy Backtest chuẩn với đường dẫn chiến lược tường minh:
-.venv/bin/freqtrade backtesting --config user_data/config.json --strategy-path strategies/active --strategy StrategyMTFSniper --timerange 20220101-20261109
+# 1. Backtest:
+PYTHONPATH=. .venv/bin/freqtrade backtesting --config user_data/config.json --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper --timerange 20220101-20261116
 
-# 2. Chạy Dry-Run (Paper Trading) trên sàn:
-.venv/bin/freqtrade trade --config user_data/config.json --strategy-path strategies/active --strategy StrategyMTFSniper
+# 2. Dry-Run / trade:
+PYTHONPATH=. .venv/bin/freqtrade trade --config user_data/config.json --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper
 ```

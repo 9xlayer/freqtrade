@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     container_name: freqtrade
     environment:
+      - PYTHONPATH=/freqtrade
       - JEV_API_KEY=${JEV_API_KEY}
       - JEV_API_URL=${JEV_API_URL:-https://api.typesafe.ai/v1/systemone}
       - JEV_MODE=${JEV_MODE:-native}
@@ -33,5 +34,5 @@ services:
       --logfile /freqtrade/user_data/logs/freqtrade.log
       --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
       --config /freqtrade/user_data/config.json
-      --strategy-path /freqtrade/strategies/active
+      --strategy-path /freqtrade/strategies/mtf_sniper
       --strategy StrategyMTFSniper
