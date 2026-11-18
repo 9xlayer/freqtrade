@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current focus
-**v4.4.0-deterministic** — validated AND-mask parity + BT perf cleanup.
+**v4.4.1-deterministic** — stabilize deterministic mode (Hunter OFF by design).
 
 ## Live path
 ```
@@ -12,11 +12,12 @@ EntryPipeline.live:
 Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 ```
 
-## Evidence (re-run 2026-11-18, `504bb31`)
-- 5Y Decision ON: 204 trades, +3463%, DD 25.4%, WR 60.8%
-- 5Y Decision OFF: 224 trades, +4858%, DD 32.7%, WR 61.6%
+## Evidence (2026-11-18)
+- **Shipped HO Ep46** long params (body/dist stay pair-override 0.63/3.3)
+- 5Y Decision ON: 299 trades, **+3867%**, **DD 18.9%**
+- 5Y Decision OFF: 320 trades, **+5097%**, **DD 18.9%**
+- Prior defaults: ON +3463%/DD25.4% · OFF +4858%/DD32.7%
 - Does **not** reproduce report Run1 (+10,854%) — Hunter frozen path removed by design
-- Beats report Run2 native (+1,966%) on PnL with Hunter off + SensorSuite
 
 ## Versions
 - Single hub: `strategies/mtf_sniper/__init__.py`
@@ -36,6 +37,13 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - Compose command: dual `--config` + `--strategy-path …/mtf_sniper`
 - Mounted host config may still be stale; overlay forces correct path
 
+## Stabilize progress
+- RuntimeMode `deterministic` + force-native Decision (no external AI)
+- Candidate ID UTC contract; policy grade honesty; RiskAuthorization surface
+- Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
+- Still open: full MTF look-ahead suite, stop-distance sizing, BT parity re-run after commit
+
 ## Next
-- Redeploy Coolify with `--build` and verify `list-strategies` in container
-- Re-enable Hunter/anomaly behind flags after more live soak.
+- Commit stabilize batches; Coolify redeploy (`:latest` base)
+- Phase 8 look-ahead tests + BT parity report vs pre-Ep46 baseline
+- Only then consider Hunter re-enable
