@@ -1,4 +1,4 @@
-"""Phase 1 — runtime modes + deterministic Decision must not call external AI."""
+"""Runtime mode matrix + Decision adapter isolation (no global env mutation)."""
 from __future__ import annotations
 
 import os
@@ -49,6 +49,36 @@ class TestRuntimeMode(unittest.TestCase):
         self.assertEqual(profile.mode, RuntimeMode.PURE_DETERMINISTIC)
         self.assertFalse(profile.enable_jev_decision)
 
+    def test_decision_native_blocks_external(self):
+        profile = build_runtime_profile(
+            {"mtf_runtime_mode": "decision_native", "enable_jev_decision": True},
+            enable_jev_decision_cfg=True,
+        )
+        self.assertEqual(profile.mode, RuntimeMode.DECISION_NATIVE)
+        self.assertTrue(profile.enable_jev_decision)
+        self.assertEqual(profile.decision_jev_mode, "native")
+        self.assertFalse(profile.allow_external_ai)
+        self.assertFalse(profile.enable_jev_hunter)
+
+    def test_decision_external_allows_ai_keeps_hunter_off_by_default(self):
+        profile = build_runtime_profile(
+            {
+                "mtf_runtime_mode": "decision_external",
+                "enable_jev_decision": True,
+                "enable_jev_hunter": False,
+            },
+            enable_jev_decision_cfg=True,
+            enable_jev_hunter_cfg=False,
+        )
+        self.assertEqual(profile.mode, RuntimeMode.DECISION_EXTERNAL)
+        self.assertTrue(profile.allow_external_ai)
+        self.assertEqual(profile.decision_jev_mode, "external")
+        self.assertFalse(profile.enable_jev_hunter)
+
+    def test_deterministic_native_alias(self):
+        profile = build_runtime_profile({"mtf_runtime_mode": "deterministic_native"})
+        self.assertEqual(profile.mode, RuntimeMode.DETERMINISTIC)
+
 
 class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
     def test_force_native_blocks_external_engine_branch(self):
@@ -74,6 +104,21 @@ class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
                 )
                 spy_ext.assert_not_called()
             self.assertEqual(adapter.external_calls, 0)
+        finally:
+            if prev is None:
+                os.environ.pop("JEV_MODE", None)
+            else:
+                os.environ["JEV_MODE"] = prev
+
+    def test_two_adapters_do_not_cross_contaminate_modes(self):
+        prev = os.environ.get("JEV_MODE")
+        try:
+            os.environ["JEV_MODE"] = "external"
+            native = JevDecisionAdapter(force_native=True, mode="native")
+            external = JevDecisionAdapter(force_native=False, mode="external")
+            self.assertEqual(native.mode, "native")
+            self.assertEqual(external.mode, "external")
+            self.assertEqual(os.environ.get("JEV_MODE"), "external")
         finally:
             if prev is None:
                 os.environ.pop("JEV_MODE", None)

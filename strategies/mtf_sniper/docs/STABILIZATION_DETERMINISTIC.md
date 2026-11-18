@@ -46,6 +46,9 @@ confirm_trade_entry
 9. **`pure_deterministic`** — Decision forced OFF for Sniper isolation measurement.
 10. **Decision adapter env side-effect** — no longer writes `os.environ["JEV_MODE"]`; mode passed to engine ctor.
 11. **Candidate ID through confirm** — `CandidateRegistry` + `_resolve_candidate_id` (no ad-hoc confirm-time ID).
+12. **Candidate ID through trade ledger** — entry `order_filled` binds `trade_id→candidate_id`; exit ledger reuses it (unbind on record).
+13. **Strategy startup** — no longer mutates global `JEV_MODE` either (adapter-only).
+14. **RiskAuthorization honesty** — `risk_budget_used_pct` / `risk_per_trade_pct` / `total_exposure_pct` are `None` when unavailable; `total_exposure_notional` always computed; pct only with `wallet_equity`.
 
 ## Semantics: Policy vs Decision
 
@@ -89,11 +92,13 @@ Canonical `candidate_id` should match populate → confirm when registry is warm
 PYTHONPATH=. .venv/bin/python -m unittest \
   tests.strategy.test_mtf_runtime_deterministic \
   tests.strategy.test_mtf_candidate_parity \
+  tests.strategy.test_mtf_candidate_registry \
   tests.strategy.test_mtf_policy_grade_semantics \
   tests.strategy.test_mtf_policy_decision_semantics \
   tests.strategy.test_mtf_sniper_directional \
   tests.strategy.test_mtf_sniper_mask_parity \
   tests.strategy.test_mtf_sniper_risk \
+  tests.strategy.test_mtf_sniper_exit_policy \
   tests.strategy.test_telemetry_pickle \
   tests.strategy.test_mtf_lookahead_indicators
 ```
