@@ -10,7 +10,7 @@
 ## Important paths
 | Path | Role |
 |---|---|
-| `strategies/active/` | Live strategies + JEV modules |
+| `strategies/mtf_sniper/` | Live SensorSuite strategy + JEV Decision |
 | `user_data/config.json` | Runtime config (pairs, stake, strategy_params) |
 | `docker-compose.yml` | Env wiring into container |
 | `.env` | Secrets + mode (gitignored) |
@@ -44,16 +44,17 @@ JEV_HUNTER_MODEL_VERSION=jev-latest   # optional override
 
 ## Backtest recipe (offline / native)
 ```bash
-JEV_MODE=native JEV_FAIL_POLICY=allow \
+PYTHONPATH=. JEV_MODE=native JEV_FAIL_POLICY=allow ENABLE_TELEMETRY=true \
 .venv/bin/freqtrade backtesting \
   --config user_data/config.json \
   --strategy StrategyMTFSniper \
-  --strategy-path strategies/active \
+  --strategy-path strategies/mtf_sniper \
   --timerange 20220101-20261116 \
   --breakdown year \
   --cache none
 ```
 Needs network once for Binance `load_markets` even with local OHLCV.
+Ledgers (when enabled): `user_data/telemetry/decision_ledger.jsonl`, `trade_ledger.jsonl`.
 
 ## Dev commands
 ```bash

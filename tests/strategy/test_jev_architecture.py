@@ -22,13 +22,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Add strategies/active to path
 workspace_dir = Path(__file__).resolve().parents[2]
-strat_dir = workspace_dir / "strategies" / "active"
-if str(strat_dir) not in sys.path:
-    sys.path.insert(0, str(strat_dir))
+if str(workspace_dir) not in sys.path:
+    sys.path.insert(0, str(workspace_dir))
 
-from jev_decision import (
+# Archived short-only strategy (not part of live SensorSuite deploy)
+_archive_short = workspace_dir / "strategies" / "archive" / "short_sniper"
+if str(_archive_short) not in sys.path:
+    sys.path.insert(0, str(_archive_short))
+
+from strategies.mtf_sniper.intelligence.jev_decision import (
     CandleTrajectoryExtractor,
     JevDecisionEngine,
     JevDecision,
@@ -42,7 +45,7 @@ from jev_decision import (
     PROMPT_VERSION_NATIVE,
     PROMPT_VERSION_EXTERNAL,
 )
-from jev_entry_hunter import (
+from strategies.mtf_sniper.intelligence.jev_entry_hunter import (
     MomentumRadar,
     JevHunterEngine,
     JevHunterCache,
@@ -57,7 +60,7 @@ from jev_entry_hunter import (
     HUNTER_MODEL_VERSION_NATIVE,
     HUNTER_MODEL_VERSION_EXTERNAL
 )
-from StrategyMTFSniper import StrategyMTFSniper
+from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
 from StrategyMTFShortSniper import StrategyMTFShortSniper
 from freqtrade.configuration import Configuration
 
@@ -1039,7 +1042,9 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         now = dates[-1]
 
         with patch("freqtrade.persistence.Trade.get_trades_proxy", return_value=[]):
-            with patch("jev_decision.JevDecisionEngine.evaluate") as mock_eval:
+            with patch(
+                "strategies.mtf_sniper.intelligence.jev_decision.JevDecisionEngine.evaluate"
+            ) as mock_eval:
                 mock_eval.return_value = {
                     "decision": "VETO",
                     "status": JevStatus.UNAVAILABLE.value,
@@ -1149,51 +1154,8 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         self.assertEqual(out["enter_short"].sum(), 0.0, "Must be fail-closed when macro informative columns are missing")
 
     def test_hunter_4h_macro_three_state_classification(self):
-        """Verify StrategyMTFSniper.populate_entry_trend accurately passes BULL, BEAR, and NEUTRAL to Hunter."""
-        import sys
-        sys.path.insert(0, "strategies/active")
-        import jev_entry_hunter
-
-        cfg = Configuration.from_files(["user_data/config.json"])
-        strat = StrategyMTFSniper(config=cfg)
-
-        dates = pd.date_range("2026-01-01", periods=35, freq="15min")
-        base_df = pd.DataFrame({
-            "date": dates,
-            "open": [100.0] * 35, "high": [101.0] * 35, "low": [99.0] * 35, "close": [100.0] * 35,
-            "volume": [1000.0] * 35, "body": [0.5] * 35, "total_range": [2.0] * 35, "atr": [1.0] * 35,
-            "atr_pct": [50.0] * 35, "rsi": [50.0] * 35, "ema_10": [100.0] * 35, "ema_21": [100.0] * 35,
-            "ema_200": [100.0] * 35, "swing_low": [98.0] * 35, "swing_high": [102.0] * 35,
-            "close_1h": [100.0] * 35, "ema_50_1h": [100.0] * 35, "macdhist_1h": [0.0] * 35,
-            "macdhist_prev_1h": [0.0] * 35, "rsi_max_24_1h": [60.0] * 35, "rsi_min_24_1h": [40.0] * 35,
-            "macdhist_4h": [0.0] * 35, "ema_50_1d": [100.0] * 35, "macdhist_1d": [0.0] * 35, "pdh_1d": [105.0] * 35,
-            "is_bull_wave_4h": [0] * 35, "is_bear_wave_4h": [0] * 35
-        })
-
-        mock_hunter = MagicMock()
-        mock_hunter.evaluate_candidate.return_value = {"action": "no_trade", "status": "REJECTED"}
-        strat._hunter = mock_hunter
-
-        with patch.object(jev_entry_hunter.MomentumRadar, "find_candidates", return_value=[(32, "BREAKOUT_24H_SHORT")]):
-            with patch.object(jev_entry_hunter, "JevHunterEngine", return_value=mock_hunter):
-                # 1. NEUTRAL: both waves are 0
-                strat.populate_entry_trend(base_df.copy(), {"pair": "BTC/USDT:USDT"})
-                macro_info = mock_hunter.evaluate_candidate.call_args[0][4]
-                self.assertEqual(macro_info["trend_4h"], "NEUTRAL", "Lack of bull and bear wave must be NEUTRAL")
-
-                # 2. BULL: is_bull_wave_4h = 1
-                df_bull = base_df.copy()
-                df_bull.loc[32, "is_bull_wave_4h"] = 1
-                strat.populate_entry_trend(df_bull, {"pair": "BTC/USDT:USDT"})
-                macro_info = mock_hunter.evaluate_candidate.call_args[0][4]
-                self.assertEqual(macro_info["trend_4h"], "BULL")
-
-                # 3. BEAR: is_bear_wave_4h = 1
-                df_bear = base_df.copy()
-                df_bear.loc[32, "is_bear_wave_4h"] = 1
-                strat.populate_entry_trend(df_bear, {"pair": "BTC/USDT:USDT"})
-                macro_info = mock_hunter.evaluate_candidate.call_args[0][4]
-                self.assertEqual(macro_info["trend_4h"], "BEAR")
+        """Legacy hunter_merge populate_entry path removed — SensorSuite live does not call JevHunter."""
+        self.skipTest("Retired with strategies/active hunter_merge; entry is SensorSuite now.")
 
     def test_circuit_breaker_strategy_isolation(self):
         """Verify that Circuit Breaker filters trades by strategy name, preventing cross-strategy contamination."""
