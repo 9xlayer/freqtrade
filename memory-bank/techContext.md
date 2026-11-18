@@ -21,7 +21,7 @@
 ## Config knobs
 ### `user_data/config.json` → `strategy_params`
 - `enable_jev_decision` (default true)
-- `enable_jev_hunter` (default true)
+- `enable_jev_hunter` (default **false** — deterministic phase; live pipeline ignores Hunter)
 - `enable_dynamic_sizing` (config may be true; sizing still not full risk-budget)
 
 ### Environment (must be in compose `environment:` to reach container)
@@ -32,8 +32,8 @@ JEV_MODE=native|external|backtest
 JEV_FAIL_POLICY=allow|reject|...
 JEV_CONFIRM_THRESHOLD=0.60
 ENABLE_JEV_DECISION=true
-ENABLE_JEV_HUNTER=true
-JEV_HUNTER_MODEL_VERSION=jev-latest   # optional override
+ENABLE_JEV_HUNTER=false
+JEV_HUNTER_MODEL_VERSION=jev-latest   # optional override when Hunter re-enabled
 ```
 
 **Note:** Compose `.env` only substitutes `${VAR}` — it does **not** auto-inject all keys into the container.

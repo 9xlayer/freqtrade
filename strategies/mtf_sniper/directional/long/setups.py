@@ -17,15 +17,31 @@ class LongSetup(str, Enum):
 
 def resolve_long_setup(primary_sensor: str, raw_features: dict) -> LongSetup:
     """Map sensor lineage to a stable entry_tag-compatible setup id."""
-    if primary_sensor == "a80_plus" or "long_score" in raw_features:
-        score = float(raw_features.get("long_score", 0.0) or 0.0)
-        if score >= 80.0 or primary_sensor == "a80_plus":
-            return LongSetup.A80_PLUS
-    if primary_sensor in ("volume_surge", "volatility_expansion", "swing_breakout"):
-        # Hunter-style breakout lineage; final tag applied after JEV in P2/P3
-        if primary_sensor == "swing_breakout":
-            return LongSetup.SWING_BREAKOUT
+    from strategies.mtf_sniper.signals.composite_sensor import (
+        candidate_includes_sensor,
+        is_legacy_sniper_pass,
+    )
+
+    if is_legacy_sniper_pass(primary_sensor, raw_features, "long"):
+        return LongSetup.A80_PLUS
+    if primary_sensor == "a80_plus":
+        return LongSetup.A80_PLUS
+    if primary_sensor == "swing_breakout":
+        return LongSetup.SWING_BREAKOUT
+    if primary_sensor in ("volume_surge", "volatility_expansion"):
         return LongSetup.BREAKOUT_EXPANSION
+    if candidate_includes_sensor(primary_sensor, raw_features, "volume_surge") or (
+        candidate_includes_sensor(primary_sensor, raw_features, "volatility_expansion")
+    ):
+        return LongSetup.BREAKOUT_EXPANSION
+    if "long_score" in raw_features and primary_sensor not in (
+        "volume_surge",
+        "volatility_expansion",
+        "waterfall_drop",
+    ):
+        score = float(raw_features.get("long_score", 0.0) or 0.0)
+        if score >= 80.0:
+            return LongSetup.A80_PLUS
     return LongSetup.UNKNOWN
 
 
@@ -40,7 +56,16 @@ def quality_grade_from_score(score: float) -> str:
 
 
 
-def build_raw_sniper_long_mask(
+# Stable part ids — SetupComposer recipe sniper_long = ALL of these
+LONG_SNIPER_PART_NAMES = (
+    "long_structure",
+    "long_mtf",
+    "long_macro",
+    "long_safety",
+)
+
+
+def build_long_sniper_parts(
     strategy: Any,
     dataframe: DataFrame,
     pair_cfg: dict,
@@ -48,8 +73,12 @@ def build_raw_sniper_long_mask(
     data_ready: pd.Series,
     cond_volatility_safe: pd.Series,
     cond_sideway_safe: pd.Series,
-) -> Tuple[pd.Series, pd.Series]:
-    """Return (raw_long_mask, pdh_safe_mask) matching active StrategyMTFSniper."""
+) -> Tuple[dict[str, pd.Series], pd.Series]:
+    """
+    Legacy long AND-mask split into named parts (old StrategyMTFSniper parity).
+
+    Full mask == AND of every part. Returns (parts, pdh_safe_mask).
+    """
     l_max_dist = pair_cfg.get("long_max_dist_ema21", strategy.long_max_dist_ema21.value)
     l_body_ratio = pair_cfg.get("long_candle_body_ratio_min", strategy.long_candle_body_ratio_min.value)
 
@@ -63,6 +92,17 @@ def build_raw_sniper_long_mask(
     swing_high = dataframe["high"].shift(1).rolling(l_lookback).max()
     is_breakout_major = (dataframe["close"] > swing_high) & (dataframe["close"].shift(1) <= swing_high)
     is_above_emas = (dataframe["close"] > dataframe["ema_10"]) & (dataframe["close"] > dataframe["ema_21"])
+
+    cond_candle_shape_long = (
+        (dataframe["upper_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
+        & (dataframe["close_pos_ratio"] >= strategy.min_close_pos_ratio_long.value)
+        if (
+            strategy.filter_wick_rejection.value
+            and "upper_wick_ratio" in dataframe.columns
+            and "close_pos_ratio" in dataframe.columns
+        )
+        else pd.Series(True, index=dataframe.index)
+    )
 
     cond_1h_long_pos = dataframe["close_1h"] >= (dataframe["ema_50_1h"] * strategy.long_loc_tolerance_1h.value)
     cond_1h_long_exhaustion = dataframe["rsi_min_24_1h"] <= strategy.long_max_1h_rsi_exhaustion.value
@@ -103,17 +143,6 @@ def build_raw_sniper_long_mask(
         & (dataframe["rsi"] <= strategy.long_max_rsi_entry.value)
     )
 
-    cond_candle_shape_long = (
-        (dataframe["upper_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
-        & (dataframe["close_pos_ratio"] >= strategy.min_close_pos_ratio_long.value)
-        if (
-            strategy.filter_wick_rejection.value
-            and "upper_wick_ratio" in dataframe.columns
-            and "close_pos_ratio" in dataframe.columns
-        )
-        else pd.Series(True, index=dataframe.index)
-    )
-
     if "pdh_1d" in dataframe.columns and strategy.filter_pdh_ceiling.value:
         cond_pdh_safe_long = ~(
             (dataframe["close"] < dataframe["pdh_1d"])
@@ -130,25 +159,50 @@ def build_raw_sniper_long_mask(
         else pd.Series(False, index=dataframe.index)
     )
 
-    raw = (
-        is_decisive_green
-        & is_breakout_major
-        & is_above_emas
-        & cond_1h_long
-        & cond_4h_long
-        & cond_1d_long
-        & cond_macro_safe_long
-        & cond_overextended_safe
-        & cond_sideway_safe
-        & cond_not_chasing_long
-        & cond_volatility_safe
-        & cond_candle_shape_long
-        & cond_pdh_safe_long
-        & cond_score_long
-        & (dataframe["volume"] > 0)
-        & data_ready
+    parts = {
+        "long_structure": (
+            is_decisive_green
+            & is_breakout_major
+            & is_above_emas
+            & cond_candle_shape_long
+            & (dataframe["volume"] > 0)
+        ),
+        "long_mtf": cond_1h_long & cond_4h_long & cond_1d_long,
+        "long_macro": cond_macro_safe_long & cond_overextended_safe,
+        "long_safety": (
+            cond_sideway_safe
+            & cond_volatility_safe
+            & cond_not_chasing_long
+            & cond_pdh_safe_long
+            & cond_score_long
+            & data_ready
+        ),
+    }
+    return parts, cond_pdh_safe_long
+
+
+def build_raw_sniper_long_mask(
+    strategy: Any,
+    dataframe: DataFrame,
+    pair_cfg: dict,
+    *,
+    data_ready: pd.Series,
+    cond_volatility_safe: pd.Series,
+    cond_sideway_safe: pd.Series,
+) -> Tuple[pd.Series, pd.Series]:
+    """Full legacy long mask == AND of ``build_long_sniper_parts``."""
+    parts, cond_pdh_safe_long = build_long_sniper_parts(
+        strategy,
+        dataframe,
+        pair_cfg,
+        data_ready=data_ready,
+        cond_volatility_safe=cond_volatility_safe,
+        cond_sideway_safe=cond_sideway_safe,
     )
-    return raw, cond_pdh_safe_long
+    mask = parts[LONG_SNIPER_PART_NAMES[0]]
+    for name in LONG_SNIPER_PART_NAMES[1:]:
+        mask = mask & parts[name]
+    return mask, cond_pdh_safe_long
 
 
 def tag_long_sniper(dataframe: DataFrame, raw_mask: pd.Series) -> pd.Series:

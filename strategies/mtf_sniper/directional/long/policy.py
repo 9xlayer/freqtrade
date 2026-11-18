@@ -1,7 +1,8 @@
 """
-Long strategic policy — LIVE SensorSuite path.
+Long strategic policy — Directional 4b.
 
-Hunterish setups reuse ``DEFAULT_LONG_HUNTER_GATES`` thresholds.
+Deterministic phase: only complete sniper setups (4a) ACCEPT.
+Anomaly path behind ``allow_anomaly_entries`` (default False / AI off).
 """
 from __future__ import annotations
 
@@ -35,13 +36,13 @@ class LongPolicyConfig:
     confluence_bonus: float = 0.10
     base_stop_distance_pct: float = 0.018
     target_rr: float = 2.0
-    # When False, hunter/breakout lineages are rejected
     enable_hunter_long: bool = False
+    allow_anomaly_entries: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
 class LongPolicy:
-    """Evaluate a LONG TradeCandidate from the SensorSuite entry pipeline."""
+    """Evaluate a LONG TradeCandidate from the entry pipeline."""
 
     def __init__(self, config: Optional[LongPolicyConfig] = None) -> None:
         self.config = config or LongPolicyConfig()
@@ -62,18 +63,55 @@ class LongPolicy:
         hg = DEFAULT_LONG_HUNTER_GATES
         setup = resolve_long_setup(candidate.primary_sensor, candidate.raw_features)
         is_hunterish = setup in (LongSetup.BREAKOUT_EXPANSION, LongSetup.SWING_BREAKOUT)
+        from strategies.mtf_sniper.signals.composite_sensor import is_legacy_sniper_pass
 
-        # --- Macro regime ---
+        is_setup_pass = is_legacy_sniper_pass(
+            candidate.primary_sensor, candidate.raw_features, "long"
+        )
+
         ema_50_1d = row.get("ema_50_1d")
         ema_200_1d = row.get("ema_200_1d")
         close = float(row.get("close", 0.0) or 0.0)
+
+        if is_setup_pass:
+            long_score = float(
+                candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
+            )
+            base = min(1.0, max(0.0, long_score / 100.0)) if long_score > 0 else 0.80
+            score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
+            grade = quality_grade_from_score(score)
+            return PolicyEvaluationResult(
+                is_valid=True,
+                score=score,
+                quality_grade=grade if grade != "REJECT" else "A",
+                reasons=["ACCEPT"],
+                suggested_stop_distance_pct=cfg.base_stop_distance_pct,
+                target_rr=cfg.target_rr,
+                metadata={
+                    "setup": LongSetup.A80_PLUS.value,
+                    "entry_tag": LongSetup.A80_PLUS.value,
+                    "long_score": long_score,
+                    "setup_complete": True,
+                    "mask_pass": True,
+                },
+            )
+
+        if not cfg.allow_anomaly_entries:
+            return self._reject(
+                [RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value],
+                metadata={
+                    "setup": setup.value,
+                    "setup_complete": False,
+                    "deterministic_only": True,
+                },
+            )
+
         if cfg.require_macro_bull and ema_50_1d is not None and ema_200_1d is not None:
             in_bear = close < float(ema_200_1d) or close < float(ema_50_1d)
             macro_bear_flag = float(row.get("is_macro_bear_market_1d", 0) or 0) == 1
             if in_bear or macro_bear_flag:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
-        # --- Candle microstructure ---
         if cfg.filter_wick_rejection:
             upper_wick = float(row.get("upper_wick_ratio", 0.0) or 0.0)
             close_pos = float(row.get("close_pos_ratio", 0.5) or 0.5)
@@ -84,7 +122,6 @@ class LongPolicy:
             if close_pos < close_floor:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
-        # --- RSI / EMA chase ---
         rsi = float(row.get("rsi", 50.0) or 50.0)
         rsi_cap = hg.max_rsi if is_hunterish else cfg.max_rsi_entry
         if rsi > rsi_cap:
@@ -102,13 +139,11 @@ class LongPolicy:
             if float(row["dist_from_ema_200_1d"]) > overext_cap:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
-        # --- PDH ceiling ---
         if cfg.filter_pdh_ceiling and "pdh_1d" in row and row.get("pdh_1d") is not None:
             pdh = float(row["pdh_1d"])
             if close < pdh and close >= pdh * 0.997:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
-        # --- Score gate (A80 path) ---
         long_score = float(
             candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
         )
@@ -118,7 +153,6 @@ class LongPolicy:
         if is_hunterish and not cfg.enable_hunter_long:
             reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
 
-        # --- Score with confluence bonus ---
         base = min(1.0, max(0.0, long_score / 100.0)) if long_score > 0 else 0.70
         if is_hunterish:
             base = 0.85

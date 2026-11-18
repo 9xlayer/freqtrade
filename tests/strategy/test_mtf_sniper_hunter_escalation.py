@@ -1,4 +1,4 @@
-"""Unit tests for soft-reject → JEV Hunter escalation."""
+"""Unit tests for soft-reject → JEV Hunter escalation + post-AI gates."""
 from __future__ import annotations
 
 import unittest
@@ -78,6 +78,32 @@ def _df(n: int = 50) -> pd.DataFrame:
     )
 
 
+def _promote_row(**overrides: Any) -> Dict[str, Any]:
+    """Row that clears legacy short waterfall post-AI gates."""
+    row: Dict[str, Any] = {
+        "close": 100.0,
+        "open": 101.0,
+        "high": 101.2,
+        "low": 99.5,
+        "lower_wick_ratio": 0.10,
+        "close_pos_ratio": 0.20,
+        "ema_21": 100.5,
+        "rsi": 40.0,
+        "swing_low_20d_1d": 90.0,
+        "atr_pct": 55.0,
+        "adx_4h": 25.0,
+        "bb_width_4h": 0.05,
+        "is_bear_wave_4h": 1,
+        "is_bull_wave_4h": 0,
+        "is_macro_bear_market_1d": 1,
+        "is_macro_bull_run_1d": 0,
+        "macdhist_4h": -0.5,
+        "ema_50_1d": 110.0,
+    }
+    row.update(overrides)
+    return row
+
+
 class _FakeHunter:
     def __init__(self, verdict: Dict[str, Any]) -> None:
         self.verdict = verdict
@@ -129,7 +155,7 @@ class TestHunterEscalationGateway(unittest.TestCase):
         gw = HunterEscalationGateway(fake, _gw_config(allow_long_promotion=False))
         cand = _candidate(TradeSide.SHORT, idx=40)
         soft = _reject(RejectionReasonCode.REJECT_LOWER_WICK_REJECTION.value)
-        out = gw.evaluate(cand, soft, _df(), {"close": 100.0, "is_bear_wave_4h": 1})
+        out = gw.evaluate(cand, soft, _df(), _promote_row())
         self.assertEqual(out.outcome, "promoted")
         self.assertIsNotNone(out.promoted)
         assert out.promoted is not None
@@ -137,12 +163,66 @@ class TestHunterEscalationGateway(unittest.TestCase):
         self.assertEqual(out.promoted.metadata["entry_tag"], "jev_hunter_waterfall_collapse")
         self.assertEqual(fake.calls, 1)
 
+    def test_post_gate_rejects_low_confidence(self):
+        fake = _FakeHunter(
+            {
+                "action": "enter_short",
+                "setup_type": "waterfall_collapse",
+                "confidence": 0.70,
+                "status": "CONFIRMED",
+            }
+        )
+        gw = HunterEscalationGateway(fake, _gw_config())
+        cand = _candidate(TradeSide.SHORT)
+        soft = _reject(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
+        out = gw.evaluate(cand, soft, _df(), _promote_row())
+        self.assertEqual(out.outcome, "post_gate_rejected")
+        self.assertIn("CONF_BELOW_THRESHOLD", out.gate_reasons or [])
+        self.assertEqual(fake.calls, 1)
+
+    def test_post_gate_rejects_sideway(self):
+        fake = _FakeHunter(
+            {
+                "action": "enter_short",
+                "setup_type": "waterfall_collapse",
+                "confidence": 0.90,
+                "status": "CONFIRMED",
+            }
+        )
+        gw = HunterEscalationGateway(fake, _gw_config())
+        cand = _candidate(TradeSide.SHORT)
+        soft = _reject(RejectionReasonCode.REJECT_LOWER_WICK_REJECTION.value)
+        out = gw.evaluate(
+            cand, soft, _df(), _promote_row(adx_4h=10.0, bb_width_4h=0.01)
+        )
+        self.assertEqual(out.outcome, "post_gate_rejected")
+        self.assertIn("SIDEWAY_UNSAFE", out.gate_reasons or [])
+
+    def test_rejects_non_waterfall_setup(self):
+        fake = _FakeHunter(
+            {
+                "action": "enter_short",
+                "setup_type": "other_setup",
+                "confidence": 0.95,
+                "status": "CONFIRMED",
+            }
+        )
+        gw = HunterEscalationGateway(fake, _gw_config())
+        out = gw.evaluate(
+            _candidate(TradeSide.SHORT),
+            _reject(RejectionReasonCode.REJECT_LOWER_WICK_REJECTION.value),
+            _df(),
+            _promote_row(),
+        )
+        self.assertEqual(out.outcome, "post_gate_rejected")
+        self.assertIn("SETUP_NOT_WATERFALL", out.gate_reasons or [])
+
     def test_hard_reject_skips_hunter(self):
         fake = _FakeHunter({"action": "enter_short", "status": "CONFIRMED", "confidence": 0.9})
         gw = HunterEscalationGateway(fake, _gw_config())
         cand = _candidate(TradeSide.SHORT)
         hard = _reject(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
-        out = gw.evaluate(cand, hard, _df(), {"close": 100.0})
+        out = gw.evaluate(cand, hard, _df(), _promote_row())
         self.assertEqual(out.outcome, "hard_or_ineligible")
         self.assertEqual(fake.calls, 0)
 
@@ -158,25 +238,9 @@ class TestHunterEscalationGateway(unittest.TestCase):
         gw = HunterEscalationGateway(fake, _gw_config(allow_long_promotion=False))
         cand = _candidate(TradeSide.LONG, primary="swing_breakout")
         soft = _reject(RejectionReasonCode.REJECT_RSI_OVEREXTENDED.value)
-        out = gw.evaluate(cand, soft, _df(), {"close": 100.0})
+        out = gw.evaluate(cand, soft, _df(), _promote_row())
         self.assertEqual(out.outcome, "hard_or_ineligible")
         self.assertEqual(fake.calls, 0)
-
-    def test_low_confidence_rejected(self):
-        fake = _FakeHunter(
-            {
-                "action": "enter_short",
-                "setup_type": "waterfall_collapse",
-                "confidence": 0.2,
-                "status": "CONFIRMED",
-            }
-        )
-        gw = HunterEscalationGateway(fake, _gw_config(min_confidence=0.60))
-        cand = _candidate(TradeSide.SHORT)
-        soft = _reject(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
-        out = gw.evaluate(cand, soft, _df(), {"close": 100.0})
-        self.assertEqual(out.outcome, "hunter_rejected")
-        self.assertEqual(fake.calls, 1)
 
     def test_event_trigger_mapping(self):
         self.assertEqual(
@@ -214,7 +278,6 @@ class TestEntryPipelineHunterWire(unittest.TestCase):
         )
         gw = HunterEscalationGateway(fake, _gw_config())
 
-        # One-shot sensor → soft ShortPolicy → Hunter promote via gateway.
         from strategies.mtf_sniper.core.contracts import TriggerEvent
         from strategies.mtf_sniper.core.enums import SensorType
         from strategies.mtf_sniper.signals.base_sensor import BaseSensor
@@ -239,7 +302,11 @@ class TestEntryPipelineHunterWire(unittest.TestCase):
 
         n = 50
         df = _df(n)
-        # CandidateBuilder needs more columns? process uses events only mostly
+        # Attach promote-safe columns so pipeline row lookup clears post gates.
+        for k, v in _promote_row().items():
+            if k not in df.columns:
+                df[k] = v
+
         engine = DirectionalTradingEngine(
             long_policy=QuietLongPolicy(),
             short_policy=AlwaysSoftShortPolicy(),

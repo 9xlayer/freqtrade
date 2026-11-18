@@ -25,12 +25,18 @@ from pandas import DataFrame
 
 logger = logging.getLogger(__name__)
 
-# Engine Versioning
-ENGINE_VERSION = "2.6.2"
-MODEL_VERSION_NATIVE = "native-system1-v2.6.2"
-MODEL_VERSION_EXTERNAL = os.environ.get("JEV_DECISION_MODEL_VERSION", "jev-latest")
-PROMPT_VERSION_NATIVE = "decision-native-v2.6.2"
-PROMPT_VERSION_EXTERNAL = "decision-external-prompt-v2.6.2-trend-follow"
+# Version hub: strategies.mtf_sniper.__init__ (single bump site).
+from strategies.mtf_sniper import (
+    DECISION_ENGINE_VERSION as ENGINE_VERSION,
+    DECISION_MODEL_VERSION_EXTERNAL_DEFAULT,
+    DECISION_MODEL_VERSION_NATIVE as MODEL_VERSION_NATIVE,
+    DECISION_PROMPT_VERSION_EXTERNAL as PROMPT_VERSION_EXTERNAL,
+    DECISION_PROMPT_VERSION_NATIVE as PROMPT_VERSION_NATIVE,
+)
+
+MODEL_VERSION_EXTERNAL = os.environ.get(
+    "JEV_DECISION_MODEL_VERSION", DECISION_MODEL_VERSION_EXTERNAL_DEFAULT
+)
 
 
 def _parse_unit_interval(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -445,13 +451,17 @@ class JevDecisionEngine:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                # Migrate legacy payload_hash-PK tables that lack cache_key identity columns.
+                # Migrate any legacy table that lacks cache_key identity columns.
                 cols = {
                     r[1] for r in conn.execute("PRAGMA table_info(jev_gatekeeper_verdicts)").fetchall()
                 }
-                if "cache_key" not in cols and "payload_hash" in cols:
-                    logger.info("[JevDecisionEngine] Migrating gatekeeper cache to cache_key identity schema...")
-                    conn.execute("ALTER TABLE jev_gatekeeper_verdicts RENAME TO jev_gatekeeper_verdicts_legacy")
+                if "cache_key" not in cols:
+                    logger.info(
+                        "[JevDecisionEngine] Migrating gatekeeper cache to cache_key identity schema..."
+                    )
+                    conn.execute(
+                        "ALTER TABLE jev_gatekeeper_verdicts RENAME TO jev_gatekeeper_verdicts_legacy"
+                    )
                     conn.execute("""
                         CREATE TABLE jev_gatekeeper_verdicts (
                             cache_key TEXT PRIMARY KEY,

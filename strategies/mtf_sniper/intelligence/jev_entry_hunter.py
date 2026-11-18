@@ -1,14 +1,8 @@
 """
-Jev Active Entry Hunter (Stage-1 Radar + Stage-2 Jev Decision Engine)
-=====================================================================
-Kiến trúc AI-Driven Alpha:
-1. Stage-1 (MomentumRadar): Quét các sự kiện bùng nổ xung lực / bứt phá trong <1ms.
-2. Stage-2 (JevHunterEngine): Đọc 32 nến (8 giờ) + Neo vĩ mô và phán quyết:
-   - "enter_short": Sóng xả tự do (waterfall), phá vỡ hỗ trợ.
-   - "enter_long": Bùng nổ tăng trưởng hoặc bắt đáy hấp thụ thanh lý.
-   - "no_trade": Bẫy rút chân, nhiễu dao động.
-3. Persistent SQLite Cache: Tự động lưu phán quyết theo (pair, timestamp, engine_version),
-   đảm bảo backtest tất định (deterministic), tiết kiệm 100% chi phí token API.
+Jev Entry Hunter — optional escalation path (live OFF in v4.4.0-deterministic).
+
+Kept for later re-enable behind ``enable_jev_hunter`` / EntryPipeline hunter gateway.
+Stage-1 MomentumRadar + Stage-2 JevHunterEngine + SQLite cache.
 """
 
 import os
@@ -28,12 +22,18 @@ from pandas import DataFrame
 
 logger = logging.getLogger(__name__)
 
-# Versioning
-HUNTER_ENGINE_VERSION = "2.6.2"
-HUNTER_MODEL_VERSION_NATIVE = "hunter-native-v2.6.2"
+# Version hub: strategies.mtf_sniper.__init__ (single bump site).
+from strategies.mtf_sniper import (
+    HUNTER_ENGINE_VERSION,
+    HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT,
+    HUNTER_MODEL_VERSION_NATIVE,
+)
+
 # Typesafe only exposes aliases like jev-latest (resolves e.g. jev-1.14.0).
 # Dedicated names such as jev-hunter-v1.0 return HTTP 400 Unknown model.
-HUNTER_MODEL_VERSION_EXTERNAL = os.environ.get("JEV_HUNTER_MODEL_VERSION", "jev-latest")
+HUNTER_MODEL_VERSION_EXTERNAL = os.environ.get(
+    "JEV_HUNTER_MODEL_VERSION", HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT
+)
 # Mutable / floating aliases must not be used as durable cache keys.
 _MUTABLE_MODEL_ALIASES = frozenset(
     {
@@ -311,15 +311,18 @@ class JevHunterCache:
                             PRIMARY KEY (pair, timestamp, engine_version, model_version, payload_hash)
                         )
                     """)
-                    conn.execute("""
-                        INSERT OR IGNORE INTO jev_hunter_verdicts_v3 
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO jev_hunter_verdicts_v3
                         (pair, timestamp, engine_version, model_version, payload_hash, action, setup_type, confidence, status, raw_response, created_at)
-                        SELECT pair, timestamp, engine_version, 
-                               COALESCE(model_version, 'hunter-native-v2.6.2'),
+                        SELECT pair, timestamp, engine_version,
+                               COALESCE(model_version, ?),
                                COALESCE(NULLIF(payload_hash, ''), 'no_hash'),
                                action, setup_type, confidence, status, raw_response, created_at
                         FROM jev_hunter_verdicts
-                    """)
+                        """,
+                        (HUNTER_MODEL_VERSION_NATIVE,),
+                    )
                     conn.execute("DROP TABLE jev_hunter_verdicts")
                     conn.execute("ALTER TABLE jev_hunter_verdicts_v3 RENAME TO jev_hunter_verdicts")
                 conn.commit()
@@ -824,7 +827,7 @@ Radar Event: {event_trigger}
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "Freqtrade-Jev-Hunter/2.6.2"
+                "User-Agent": f"Freqtrade-Jev-Hunter/{HUNTER_ENGINE_VERSION}"
             }
             req = urllib.request.Request(self.api_url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=8.0) as resp:

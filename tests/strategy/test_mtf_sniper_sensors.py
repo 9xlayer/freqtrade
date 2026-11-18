@@ -86,14 +86,20 @@ class TestVolumeSurgeSensor(unittest.TestCase):
 
 
 class TestVolatilityExpansionSensor(unittest.TestCase):
-    def test_range_expansion_without_volume_surge(self):
+    def test_range_expansion_with_breakout_volume_floor(self):
         df = _base_df()
-        # Range = 3.0, ATR = 1.0 => 3.0x; volume only 2x (not surge)
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 200.0]
+        # Range = 3.0×ATR; vol ~2.5x SMA20 (BREAKOUT floor) but below MEGA_SURGE 4x
+        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 280.0]
         events = VolatilityExpansionSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].side, TradeSide.SHORT)
         self.assertGreaterEqual(events[0].raw_metrics["range_atr_ratio"], 2.2)
+
+    def test_range_expansion_rejects_low_volume(self):
+        df = _base_df()
+        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 200.0]
+        events = VolatilityExpansionSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
+        self.assertEqual(events, [])
 
 
 class TestSwingBreakoutSensor(unittest.TestCase):
@@ -121,7 +127,8 @@ class TestWaterfallDropSensor(unittest.TestCase):
     def test_waterfall_through_swing_low(self):
         df = _base_df()
         # Flat history then decisive dump through swing_low_12
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 96.0, 100.0, 95.5, 400.0]
+        # vol must clear MEGA_SURGE floor vs SMA20 (incl. current bar)
+        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 96.0, 100.0, 95.5, 520.0]
         events = WaterfallDropSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].side, TradeSide.SHORT)
@@ -180,10 +187,16 @@ class TestCandidateBuilder(unittest.TestCase):
         self.assertEqual(len(c.secondary_sensors), 2)
 
     def test_opposite_side_neutralize(self):
-        events = [
-            _event("volume_surge", SensorType.ANOMALY, TradeSide.LONG, 105),
-            _event("waterfall_drop", SensorType.ANOMALY, TradeSide.SHORT, 105),
-        ]
+        # Incomplete anomalies on both sides are kept for composer (not neutralized).
+        # Neutralize only when BOTH sides are complete sniper recipes.
+        from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
+        from strategies.mtf_sniper.directional.short.setups import SHORT_SNIPER_PART_NAMES
+
+        events = []
+        for name in LONG_SNIPER_PART_NAMES:
+            events.append(_event(name, SensorType.PATTERN, TradeSide.LONG, 105))
+        for name in SHORT_SNIPER_PART_NAMES:
+            events.append(_event(name, SensorType.PATTERN, TradeSide.SHORT, 105))
         rejected: list = []
         builder = CandidateBuilder(cooldown_bars=12)
         candidates = builder.process(events, rejected=rejected)

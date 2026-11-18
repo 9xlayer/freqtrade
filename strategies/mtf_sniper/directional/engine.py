@@ -1,7 +1,7 @@
 """
-DirectionalTradingEngine — LIVE entry evaluator.
+DirectionalTradingEngine — LIVE entry evaluator (step 4 facade).
 
-Routes TradeCandidates from SensorSuite/CandidateBuilder to Long/Short policy.
+4a SetupComposer annotates recipes; 4b Long/Short Policy decides ACCEPT.
 """
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from typing import Any, List, Mapping, Optional, Sequence, Tuple
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate
 from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.long.policy import LongPolicy, LongPolicyConfig
+from strategies.mtf_sniper.directional.setup_composer import SetupComposer
 from strategies.mtf_sniper.directional.short.policy import ShortPolicy, ShortPolicyConfig
 
 
 class DirectionalTradingEngine:
     """
-    Strategic brain: route TradeCandidate by side -> policy evaluation.
+    Strategic brain: optional compose → route by side → policy evaluation.
 
     Does NOT authorize risk or call JEV; returns PolicyEvaluationResult only.
     """
@@ -26,9 +27,11 @@ class DirectionalTradingEngine:
         short_policy: Optional[ShortPolicy] = None,
         long_config: Optional[LongPolicyConfig] = None,
         short_config: Optional[ShortPolicyConfig] = None,
+        setup_composer: Optional[SetupComposer] = None,
     ) -> None:
         self.long_policy = long_policy or LongPolicy(long_config)
         self.short_policy = short_policy or ShortPolicy(short_config)
+        self.setup_composer = setup_composer or SetupComposer()
 
     def evaluate(
         self,

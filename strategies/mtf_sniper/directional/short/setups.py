@@ -19,19 +19,43 @@ class ShortSetup(str, Enum):
 
 def resolve_short_setup(primary_sensor: str, raw_features: dict) -> ShortSetup:
     """Map sensor lineage + short_score to entry_tag-compatible setup id."""
-    if primary_sensor == "waterfall_drop":
-        return ShortSetup.WATERFALL_COLLAPSE
-    if primary_sensor == "a80_plus" or "short_score" in raw_features:
+    from strategies.mtf_sniper.signals.composite_sensor import (
+        candidate_includes_sensor,
+        is_legacy_sniper_pass,
+    )
+
+    # 4a complete sniper recipe (or mono mask diagnostics)
+    if is_legacy_sniper_pass(primary_sensor, raw_features, "short"):
         score = float(raw_features.get("short_score", 0.0) or 0.0)
-        if score >= 80.0 or primary_sensor == "a80_plus":
+        if score >= 80.0:
             return ShortSetup.A80_PLUS
         if score >= 65.0:
             return ShortSetup.B65_PLUS
         return ShortSetup.C_SUB65
+
+    if primary_sensor == "waterfall_drop":
+        return ShortSetup.WATERFALL_COLLAPSE
+    if primary_sensor == "a80_plus":
+        return ShortSetup.A80_PLUS
     if primary_sensor == "swing_breakout":
         return ShortSetup.SWING_BREAKOUT
     if primary_sensor in ("volume_surge", "volatility_expansion"):
         return ShortSetup.WATERFALL_COLLAPSE
+
+    # Hunter-style composites built from anomaly atomics (no sniper mask child)
+    if candidate_includes_sensor(primary_sensor, raw_features, "volume_surge") or (
+        candidate_includes_sensor(primary_sensor, raw_features, "volatility_expansion")
+        or candidate_includes_sensor(primary_sensor, raw_features, "waterfall_drop")
+    ):
+        return ShortSetup.WATERFALL_COLLAPSE
+
+    if "short_score" in raw_features and not str(primary_sensor).startswith("composite_"):
+        score = float(raw_features.get("short_score", 0.0) or 0.0)
+        if score >= 80.0:
+            return ShortSetup.A80_PLUS
+        if score >= 65.0:
+            return ShortSetup.B65_PLUS
+        return ShortSetup.C_SUB65
     return ShortSetup.UNKNOWN
 
 
@@ -46,7 +70,16 @@ def quality_grade_from_score(score: float) -> str:
 
 
 
-def build_raw_sniper_short_mask(
+# Stable part ids — SetupComposer recipe sniper_short = ALL of these
+SHORT_SNIPER_PART_NAMES = (
+    "short_structure",
+    "short_mtf",
+    "short_macro_floor",
+    "short_safety",
+)
+
+
+def build_short_sniper_parts(
     strategy: Any,
     dataframe: DataFrame,
     pair: str,
@@ -55,8 +88,12 @@ def build_raw_sniper_short_mask(
     data_ready: pd.Series,
     cond_volatility_safe: pd.Series,
     cond_sideway_safe: pd.Series,
-) -> pd.Series:
-    """Return raw short sniper mask matching active StrategyMTFSniper."""
+) -> dict[str, pd.Series]:
+    """
+    Legacy short AND-mask split into named parts (old StrategyMTFSniper parity).
+
+    Full mask == AND of every part. Parts are independently composable.
+    """
     s_max_dist = pair_cfg.get("short_max_dist_ema21", strategy.short_max_dist_ema21.value)
     s_body_ratio = pair_cfg.get("short_candle_body_ratio_min", strategy.short_candle_body_ratio_min.value)
 
@@ -70,6 +107,17 @@ def build_raw_sniper_short_mask(
         dataframe["close"].shift(1) >= dataframe["swing_low"]
     )
     is_below_emas = (dataframe["close"] < dataframe["ema_10"]) & (dataframe["close"] < dataframe["ema_21"])
+
+    cond_candle_shape_short = (
+        (dataframe["lower_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
+        & (dataframe["close_pos_ratio"] <= strategy.max_close_pos_ratio_short.value)
+        if (
+            strategy.filter_wick_rejection.value
+            and "lower_wick_ratio" in dataframe.columns
+            and "close_pos_ratio" in dataframe.columns
+        )
+        else pd.Series(True, index=dataframe.index)
+    )
 
     cond_1h_short_pos = (
         (dataframe["close_1h"] >= (dataframe["ema_50_1h"] * strategy.short_loc_tolerance_1h.value))
@@ -91,6 +139,12 @@ def build_raw_sniper_short_mask(
     else:
         cond_4h_di_short = pd.Series(True, index=dataframe.index)
 
+    cond_1d_short = (
+        (dataframe["is_bull_wave_1d"].fillna(0) == 0)
+        if (strategy.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns)
+        else pd.Series(True, index=dataframe.index)
+    )
+
     is_in_macro_bull = (
         (dataframe["close"] > dataframe["ema_50_1d"]) & (dataframe["close"] > dataframe["ema_200_1d"])
         if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns)
@@ -105,11 +159,6 @@ def build_raw_sniper_short_mask(
         (dataframe["is_macro_bull_run_1d"].fillna(0) == 0)
         if "is_macro_bull_run_1d" in dataframe.columns
         else pd.Series(False, index=dataframe.index)
-    )
-    cond_1d_short = (
-        (dataframe["is_bull_wave_1d"].fillna(0) == 0)
-        if (strategy.block_1d_counter_wave.value and "is_bull_wave_1d" in dataframe.columns)
-        else pd.Series(True, index=dataframe.index)
     )
     cond_floor_safe = (
         ((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035
@@ -127,35 +176,46 @@ def build_raw_sniper_short_mask(
         & (dataframe["rsi"] >= strategy.short_min_rsi_entry.value)
     )
 
-    cond_candle_shape_short = (
-        (dataframe["lower_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
-        & (dataframe["close_pos_ratio"] <= strategy.max_close_pos_ratio_short.value)
-        if (
-            strategy.filter_wick_rejection.value
-            and "lower_wick_ratio" in dataframe.columns
-            and "close_pos_ratio" in dataframe.columns
-        )
-        else pd.Series(True, index=dataframe.index)
-    )
+    return {
+        "short_structure": (
+            is_decisive_red
+            & is_breakdown_major
+            & is_below_emas
+            & cond_candle_shape_short
+            & (dataframe["volume"] > 0)
+        ),
+        "short_mtf": cond_1h_short & cond_4h_short & cond_4h_di_short & cond_1d_short,
+        "short_macro_floor": cond_macro_safe_short & cond_floor_safe & cond_capitulation_safe,
+        "short_safety": (
+            cond_sideway_safe & cond_volatility_safe & cond_not_chasing_short & data_ready
+        ),
+    }
 
-    return (
-        is_decisive_red
-        & is_breakdown_major
-        & is_below_emas
-        & cond_1h_short
-        & cond_4h_short
-        & cond_4h_di_short
-        & cond_macro_safe_short
-        & cond_1d_short
-        & cond_floor_safe
-        & cond_capitulation_safe
-        & cond_sideway_safe
-        & cond_not_chasing_short
-        & cond_volatility_safe
-        & cond_candle_shape_short
-        & (dataframe["volume"] > 0)
-        & data_ready
+
+def build_raw_sniper_short_mask(
+    strategy: Any,
+    dataframe: DataFrame,
+    pair: str,
+    pair_cfg: dict,
+    *,
+    data_ready: pd.Series,
+    cond_volatility_safe: pd.Series,
+    cond_sideway_safe: pd.Series,
+) -> pd.Series:
+    """Full legacy short mask == AND of ``build_short_sniper_parts``."""
+    parts = build_short_sniper_parts(
+        strategy,
+        dataframe,
+        pair,
+        pair_cfg,
+        data_ready=data_ready,
+        cond_volatility_safe=cond_volatility_safe,
+        cond_sideway_safe=cond_sideway_safe,
     )
+    mask = parts[SHORT_SNIPER_PART_NAMES[0]]
+    for name in SHORT_SNIPER_PART_NAMES[1:]:
+        mask = mask & parts[name]
+    return mask
 
 
 def tag_short_sniper(dataframe: DataFrame, raw_mask: pd.Series) -> pd.Series:

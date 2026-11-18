@@ -16,7 +16,8 @@ class VolatilityExpansionSensor(BaseSensor):
     Detect candles with anomalous range expansion relative to ATR.
 
     Direction is inferred from candle body (green -> LONG, red -> SHORT).
-    Volume is recorded but not required (unlike VolumeSurgeSensor).
+    Requires BREAKOUT_24H-style volume floor (vol≥2.5x) so range-only noise
+    does not soft-escalate into Hunter.
     """
 
     name = "volatility_expansion"
@@ -24,6 +25,7 @@ class VolatilityExpansionSensor(BaseSensor):
     min_history = 100
 
     range_atr_min: float = 2.2
+    vol_ratio_min: float = 2.5
     # Exclude pure volume-surge candles to reduce duplicate blips when both fire
     exclude_if_volume_surge: bool = False
     vol_ratio_surge: float = 4.0
@@ -51,7 +53,9 @@ class VolatilityExpansionSensor(BaseSensor):
 
         is_red = dataframe["close"] < dataframe["open"]
         is_green = dataframe["close"] > dataframe["open"]
-        is_expansion = range_ratio >= self.range_atr_min
+        is_expansion = (range_ratio >= self.range_atr_min) & (
+            vol_ratio >= self.vol_ratio_min
+        )
 
         if self.exclude_if_volume_surge:
             is_expansion = is_expansion & (vol_ratio < self.vol_ratio_surge)
