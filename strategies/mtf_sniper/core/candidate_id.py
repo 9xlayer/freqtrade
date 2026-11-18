@@ -1,8 +1,9 @@
 """Stable candidate identity helpers shared by fast-path and builder path."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import pandas as pd
 
@@ -13,6 +14,16 @@ CANDIDATE_ID_CUSTOM_DATA_KEY = "mtf_candidate_id"
 # Explicit sentinel when correlation cannot be reconstructed (never invent a
 # non-canonical timestamp ID).
 CANDIDATE_ID_MISSING = "candidate_id_missing"
+
+_VALID_SIDES = frozenset({"long", "short"})
+
+
+@dataclass(frozen=True)
+class ParsedCandidateId:
+    pair: str
+    side: str
+    epoch: int
+    candle_index: int
 
 
 def normalize_utc(ts: Union[datetime, pd.Timestamp, Any]) -> datetime:
@@ -37,18 +48,68 @@ def make_candidate_id(
 
         ``{pair}_{side}_{utc_epoch}_{candle_index}``
     """
-    side_v = side.value if isinstance(side, TradeSide) else str(side)
+    side_v = side.value if isinstance(side, TradeSide) else str(side).lower()
     ts = normalize_utc(timestamp)
     epoch = int(ts.timestamp())
     return f"{pair}_{side_v}_{epoch}_{int(candle_index)}"
 
 
-def is_canonical_candidate_id(candidate_id: str) -> bool:
-    """True when ID matches ``{pair}_{side}_{utc_epoch}_{candle_index}``."""
+def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
+    """
+    Parse ``{pair}_{side}_{utc_epoch}_{candle_index}``.
+
+    ``pair`` may contain underscores; ``side`` must be ``long`` or ``short``.
+    """
     if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
-        return False
+        return None
     parts = str(candidate_id).rsplit("_", 2)
-    if len(parts) < 3:
+    if len(parts) != 3:
+        return None
+    prefix, epoch_s, idx_s = parts
+    if not epoch_s.isdigit() or not idx_s.lstrip("-").isdigit():
+        return None
+    # Split ``{pair}_{side}`` from the right — side is always the last token.
+    pair_side = prefix.rsplit("_", 1)
+    if len(pair_side) != 2:
+        return None
+    pair, side = pair_side
+    side_l = side.lower()
+    if side_l not in _VALID_SIDES:
+        return None
+    if not pair or "/" not in pair:
+        # Require a market-style pair (e.g. BTC/USDT or BTC/USDT:USDT).
+        return None
+    return ParsedCandidateId(
+        pair=pair,
+        side=side_l,
+        epoch=int(epoch_s),
+        candle_index=int(idx_s),
+    )
+
+
+def is_canonical_candidate_id(candidate_id: str) -> bool:
+    """True when ID matches ``{pair}_{side}_{utc_epoch}_{candle_index}`` with valid side."""
+    return parse_candidate_id(candidate_id) is not None
+
+
+def candidate_id_matches_trade(
+    candidate_id: str,
+    *,
+    pair: Optional[str] = None,
+    side: Optional[Union[TradeSide, str]] = None,
+) -> bool:
+    """
+    Canonical parse plus optional pair/side context checks.
+
+    When ``pair`` / ``side`` are provided, both must match the parsed ID.
+    """
+    parsed = parse_candidate_id(candidate_id)
+    if parsed is None:
         return False
-    epoch_s, idx_s = parts[-2], parts[-1]
-    return epoch_s.isdigit() and idx_s.lstrip("-").isdigit()
+    if pair is not None and parsed.pair != str(pair):
+        return False
+    if side is not None:
+        side_l = side.value if isinstance(side, TradeSide) else str(side).lower()
+        if parsed.side != side_l:
+            return False
+    return True

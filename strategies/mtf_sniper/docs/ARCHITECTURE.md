@@ -1,167 +1,165 @@
 # MTF Sniper — System Architecture
-**Package:** `strategies/mtf_sniper/` · **Version:** see `strategies/mtf_sniper/__init__.py` (`STRATEGY_VERSION`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
 
-**Invariant:** Redesign = clean layered modules. Legacy AND-mask rules are **ported into layers**, never short-circuit `apply_entry_pipeline`.
+**Package:** `strategies/mtf_sniper/` · **Version:** `STRATEGY_VERSION` in `__init__.py` (currently `4.4.1-deterministic`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
 
-**Current phase:** Deterministic sniper only (`mtf_runtime_mode=deterministic`). **Hunter OFF** on the entry path. Decision Gate may run **native** heuristics only (no external AI). See `STABILIZATION_DETERMINISTIC.md`.
+**Invariant:** Layered modules. Legacy AND-mask rules are ported into layers; live entry always goes through `EntryPipeline` (never a strategy-facade short-circuit of Policy).
+
+**Current phase:** Deterministic sniper (`mtf_runtime_mode=deterministic`). **Hunter OFF** on the live entry path (`EntryPipeline.live` forces `hunter_escalation=None`). Decision Gate may run **native** heuristics. See `STABILIZATION_DETERMINISTIC.md`.
+
+**Source of truth:** this file + `DATA_CONTRACTS.md` describe **implemented** runtime. Historical migration notes live in `MIGRATION_PLAN.md` (P0–P4 archive).
 
 ---
 
-## 0. Hệ thống mới là gì?
+## 0. Facade vs modules
 
-Freqtrade gọi strategy theo vòng nến. `StrategyMTFSniper` là facade:
+Freqtrade calls the strategy; `StrategyMTFSniper` is a thin facade:
 
-| Hook Freqtrade | Việc strategy làm | Module thật |
+| Hook Freqtrade | Strategy role | Module |
 |---|---|---|
-| `populate_indicators_*` | Tính MTF features | `market/indicators.py` |
-| `populate_entry_trend` | Sinh tín hiệu vào lệnh | `execution/entry_pipeline.py` |
-| `confirm_trade_entry` | Decision + Risk authorize | `jev_decision` + `risk/` |
-| `custom_stoploss` / `custom_exit` | SL ladder / exit rules | `risk/stoploss_ladder`, `execution/exit_policy` |
+| `populate_indicators_*` | MTF features | `market/indicators.py` |
+| `populate_entry_trend` | Entry signals | `execution/entry_pipeline.py` |
+| `confirm_trade_entry` | Decision + Risk **authorize** | `intelligence/` + `risk/` |
+| `custom_stoploss` / `custom_exit` | SL ladder / exit | `risk/stoploss_ladder`, `execution/exit_policy` |
+| `order_filled` | Candidate ID persist + Trade Ledger | `core/candidate_*`, `telemetry/` |
 
-**Nguyên tắc tín hiệu:**
+**Signal principles:**
 
-1. **Sensor** chỉ bắn **tín hiệu đơn** (part / anomaly) — chưa phải strategy, chưa `enter_*`.
-2. **Directional 4a SetupComposer** thu thập sensor cùng bar, match **recipe ALL** = rule AND-mask cũ.
-3. **Đủ một bộ** → gắn `setup:sniper_*` → **4b Policy** grade/tag → ACCEPT → entry.
-4. **Thiếu bộ** → không entry.
-
-Đường đi: **Sensor → Builder → SetupComposer → Policy → Entry → Decision → Risk**.
+1. **Sensors** emit **part facts** only — never write `enter_*` / size / call JEV.
+2. A complete sniper recipe (ALL-4 parts) becomes a `TradeCandidate` with `setup:sniper_*`.
+3. **Policy** decides **eligibility** (`is_valid`) and attaches a **quality grade** (informational).
+4. Incomplete parts ≠ entry.
 
 ---
 
-## 1. Pipeline tổng thể
+## 1. Two implementation paths, one contract
+
+`ARCHITECTURE` historically showed a single Sensor→Builder→Composer chain. Live code has **two** implementations that must yield the **same** `TradeCandidate` / Policy contract:
 
 ```mermaid
 flowchart TB
   market["1 Market indicators"]
 
-  subgraph sens ["2 SensorSuite - part facts only"]
-    pShort["Parts SHORT: structure / mtf / macro_floor / safety"]
-    pLong["Parts LONG: structure / mtf / macro / safety"]
+  subgraph fast ["Fast path — vectorized AND"]
+    partsCache["Cached Sniper Parts"]
+    andMask["Vectorized AND masks"]
+    candFast["TradeCandidate + setup:sniper_*"]
+    partsCache --> andMask --> candFast
   end
 
-  builder["3 CandidateBuilder - merge same bar"]
-
-  subgraph dirEng ["4 Directional Engine"]
-    recipes["Setup recipes: sniper_short/long ALL-4"]
-    composer["4a SetupComposer"]
-    subgraph pol ["4b Policy"]
-      shortPol["ShortPolicy"]
-      longPol["LongPolicy"]
-    end
-    setups["setups - resolve entry_tag"]
+  subgraph event ["Event path — layered"]
+    suite["SensorSuite.scan parts"]
+    builder["CandidateBuilder"]
+    composer["SetupComposer"]
+    candEvent["TradeCandidate + setup:sniper_*"]
+    suite --> builder --> composer --> candEvent
   end
 
-  hunterOff["5 Hunter OFF - deterministic phase"]
-  entry["6-8 Cooldown / Decision / Risk / enter"]
-  dropNode["DROP"]
+  subgraph dirEng ["Directional Policy"]
+    shortPol["ShortPolicy"]
+    longPol["LongPolicy"]
+  end
 
-  market --> sens
-  pShort --> builder
-  pLong --> builder
-  builder --> composer
-  recipes --> composer
-  composer -->|"complete set setup:sniper"| pol
-  composer -->|"incomplete set dropped"| dropNode
-  pol --> setups
-  shortPol -->|"setup ACCEPT"| entry
-  longPol -->|"setup ACCEPT"| entry
-  shortPol -->|"non-setup"| dropNode
-  longPol -->|"non-setup"| dropNode
-  hunterOff -.->|"disabled"| dropNode
+  cooldown["Strategy cooldown / conflict"]
+  enterCols["enter_* + CandidateRegistry.remember"]
+  confirm["confirm_trade_entry"]
+  decision["JEV Decision optional"]
+  risk["RiskEngine authorize"]
+  hunterOff["Hunter OFF — pipeline ignores gateway"]
+
+  market --> fast
+  market --> event
+  candFast --> dirEng
+  candEvent --> dirEng
+  shortPol -->|"is_valid setup"| cooldown
+  longPol -->|"is_valid setup"| cooldown
+  cooldown --> enterCols --> confirm
+  confirm --> decision --> risk
+  hunterOff -.->|"not wired"| dirEng
 ```
 
----
-
-## 2. Workflow từng bước
-
-### Bước 1 — Market / indicators
-
-`populate_indicators_*` ghi feature MTF lên dataframe. Chưa quyết định trade.
-
-### Bước 2 — SensorSuite (detection only)
-
-`SensorSuite.live(strategy)` đăng ký **flat**:
-
-| Sensor | Loại | Emit khi |
+| Path | When | Layers executed |
 |---|---|---|
-| `short_structure` / `short_mtf` / `short_macro_floor` / `short_safety` | Part PATTERN | Slice AND-mask short |
-| `long_structure` / `long_mtf` / `long_macro` / `long_safety` | Part PATTERN | Slice AND-mask long |
+| **Fast** | Preferred when part sensors match live suite | Parts → AND masks → `TradeCandidate` **directly** → Policy |
+| **Event** | Fallback / when suite ≠ part-only set | SensorSuite → Builder → SetupComposer → Policy |
 
-Anomaly (`volume_surge` / `volatility_expansion` / `waterfall_drop`) **không** đăng ký live — không xuống Builder/Policy. Còn trong `SensorSuite.hunter()` / `full()` cho lúc bật lại AI.
-
-Part builders: `directional/*/setups.py` (`build_*_sniper_parts`). Mono `sniper_*_mask` = AND(parts) — diagnostics only.
-
-**Cấm** sensor ghi `enter_*` / size / gọi JEV.
-
-### Bước 3 — CandidateBuilder
-
-Cùng bar + cùng side → merge `sensors[]`. Opposite side: chỉ neutralize khi **cả hai** đủ recipe sniper; nếu đúng một side đủ bộ thì giữ side đó (bỏ ambient parts phía kia). Live builder cooldown = 0 (strategy `apply_cooldown` owns spacing).
-
-### Bước 4 — Directional Engine
-
-| Phần | Module | Việc |
-|---|---|---|
-| Setup recipes | `directional/setup_recipes.py` | `sniper_short` / `sniper_long` = frozenset 4 parts |
-| **4a SetupComposer** | `directional/setup_composer.py` | Đủ bộ → `primary_sensor=setup:sniper_*`, `setup_complete=True`. Incomplete part-only → drop |
-| **4b Short/Long Policy** | `directional/*/policy.py` | Setup complete → grade + `entry_tag` ACCEPT. Non-setup → reject (`deterministic_only`) |
-| setups resolve | `directional/*/setups.py` | Map → `short_A80plus` / B65 / C / `long_A80plus` |
-| Engine facade | `directional/engine.py` | Route theo side |
-
-**Parity AND-mask cũ:** đủ 4 parts trên bar ⇔ `build_raw_sniper_*_mask`.
-
-### Bước 5 — Hunter / Anomaly (OFF)
-
-Anomaly không có trên `SensorSuite.live`. Entry pipeline `hunter_escalation=None`. Composer drop mọi candidate không đủ recipe.
-
-### Bước 6–8 — Cooldown, Decision, Risk
-
-Strategy cooldown + conflict → `enter_*`. `confirm_trade_entry` vẫn có Decision Gate + Risk (tách khỏi Hunter entry escalation).
+Fast path **does not** call `CandidateBuilder` / `SetupComposer`. That is intentional (BT cost). Changes to Builder/Composer logic **must** keep fast-path construction + `tests/strategy/test_mtf_candidate_parity.py` green.
 
 ---
 
-## 3. Ví dụ deterministic sniper short
+## 2. Policy: eligibility ≠ quality grade
 
-1. Nến 15m: 4 part short đều fire → Builder merge `sensors=[short_structure,…]`.
-2. SetupComposer: recipe ALL thỏa → `setup:sniper_short`, `short_score=85`.
-3. ShortPolicy ACCEPT → `entry_tag=short_A80plus`.
-4. Cooldown OK → `enter_short=1`.
+| Field | Meaning |
+|---|---|
+| `PolicyEvaluationResult.is_valid` | Setup **eligibility** (may proceed to cooldown / `enter_*`) |
+| `quality_grade` | Quality label — **does not** alone reject an eligible setup |
+| Decision Gate | Uses candle/macro scores — **does not** read `quality_grade` |
 
-Thiếu một part → Composer drop / không setup → không entry.
-
----
-
-## 4. Tầng & module
-
-| Tầng | Vai trò | Module |
-|---|---|---|
-| 1. Market | Indicators MTF | `market/indicators.py` |
-| 2. Sensors | Fact đơn (parts + anomaly) | `signals/sensor_suite.py`, `signals/sensors/` |
-| 3. Builder | Merge / neutralize | `signals/candidate_builder.py` |
-| 4a. Composer | Recipe ALL = strategy cũ | `directional/setup_composer.py`, `setup_recipes.py` |
-| 4b. Policy | ACCEPT setup / reject khác | `directional/*/policy.py` |
-| 5. Hunter | **Disabled** this phase | `hunter_escalation.py` (kept for later) |
-| 6. Entry | Cooldown + conflict | `execution/entry_pipeline.py` |
-| 7–8. Decision / Risk | Confirm · size · SL · exit | `intelligence/jev_decision.py`, `risk/` |
-
-`CompositeSensor` vẫn tồn tại cho thí nghiệm anomaly; **không** dùng làm live sniper wrapper.
+A developer must **not** treat `quality_grade=REJECT` as “drop candidate” at Policy. See `STABILIZATION_DETERMINISTIC.md`.
 
 ---
 
-## 5. Sensor vs Directional
+## 3. Confirm → Decision → Risk (honest scope)
 
-| | Sensor | Directional 4a+4b |
+```
+confirm_trade_entry
+  → resolve candidate_id (registry → DF fallback w/ max-age → else missing)
+  → RiskEngine.authorize_entry
+       → portfolio guards (circuit / directional / distress / max open)
+       → optional JevDecisionAdapter
+       → RiskAuthorization
+  → strategy returns bool(auth.is_approved) only
+```
+
+**RiskEngine today** = portfolio **authorization gate** + stoploss ladder helper.
+
+| Does | Does **not** (yet) |
+|---|---|
+| Max open / circuit / directional lock / distress | Stop-distance risk budgeting |
+| Echo stake/leverage/SL metadata on `RiskAuthorization` | Drive Freqtrade stake/leverage from `auth.*` |
+| `custom_stoploss` → `get_stoploss()` | Own exchange SL placement outside FT callbacks |
+
+`sizing_method="freqtrade_proposed"`; `risk_budget_used_pct` / `risk_per_trade_pct` stay `None` until implemented. Details: `DATA_CONTRACTS.md` §3.5.
+
+---
+
+## 4. Candidate ID lifecycle
+
+```
+populate → CandidateRegistry.remember
+confirm / order_filled → lookup(registry, max-age 6h)
+                      → else reconstruct from analyzed enter_* (same max-age)
+                      → else candidate_id_missing
+entry fill → Trade.set_custom_data(mtf_candidate_id) + RAM bind
+exit fill  → prefer custom data → ledger
+```
+
+Never invent non-canonical IDs. Persisted IDs must match Trade pair/side.
+
+---
+
+## 5. Module map
+
+| Layer | Role | Module |
 |---|---|---|
-| Emit | Tín hiệu đơn | — |
-| Combine | Không | Recipe ALL trên `sensors[]` |
-| Quyết định entry | Không | Policy ACCEPT setup only |
-| AND-mask cũ | Mỗi điều kiện = 1 part | Đủ bộ = mask |
+| Market | MTF indicators | `market/indicators.py` |
+| Sensors | Part (+ anomaly catalog) facts | `signals/sensor_suite.py`, `signals/sensors/` |
+| Builder | Merge / neutralize (event path) | `signals/candidate_builder.py` |
+| Composer | Recipe ALL (event path) | `directional/setup_composer.py`, `setup_recipes.py` |
+| Policy | Eligibility + grade/tag | `directional/*/policy.py` |
+| Fast masks | Vectorized AND → candidate | `execution/entry_pipeline.py` |
+| Hunter | **Not wired** on live | `hunter_escalation.py` (kept) |
+| Entry | Cooldown + conflict + registry | `execution/entry_pipeline.py` |
+| Decision / Risk | Confirm · authorize · SL · exit | `intelligence/`, `risk/` |
+| Identity | Canonical ID + registry | `core/candidate_id.py`, `candidate_registry.py` |
+
+Anomaly sensors exist in `SensorSuite.hunter()` / `full()` for future re-enable — **not** on `SensorSuite.live()`.
 
 ---
 
 ## 6. Do not regress
 
-- Một `EntryPipeline` path — không short-circuit layers.
-- Part AND == mono mask (tests).
+- Both fast and event paths feed the **same** Policy contract; parity tests required.
 - Incomplete parts ≠ `enter_*`.
-- Open/Closed: thêm recipe/part qua directional + part sensor; không nhét mask vào strategy facade.
+- Hunter stays off the live pipeline until an explicit re-enable project.
+- Open/Closed: new recipes/parts via directional + sensors — not masks in the strategy facade.
+- Contracts in `DATA_CONTRACTS.md` must match `core/contracts.py` (see contract tests).

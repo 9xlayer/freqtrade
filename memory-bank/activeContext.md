@@ -45,7 +45,8 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - RiskAuthorization honesty + pair effective stoploss on confirm
 - Callback integration tests (persist/restart, hard exits, pair SL)
 - **Final P1 batch (post-b48aac8):** registry no future/stale fallback; absolute candle_index; persist bool+verify; validate-on-read; startup fail-fast via `_load_external_config`
-- Ep46 BT ON reconfirm on this HEAD: 299 trades, **+3866.6%**, **DD 18.89%**, PF 1.71
+- **Correlation hardening (post-2eb6607):** DF fallback max-age; stronger canonical parse + pair/side match; LocalTrade persist lifecycle tests
+- Ep46 BT ON reconfirm on `2eb6607`: 299 trades, **+3866.6%**, **DD 18.89%**, PF 1.71
 - Docs: `strategies/mtf_sniper/docs/STABILIZATION_DETERMINISTIC.md`
 
 ## Rejected opt (evidence 2026-11-18)
@@ -58,7 +59,12 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Retargeted broken `user_data/strategies/*` symlinks away from deleted `strategies/active/`
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
+## Docs alignment (in progress / working tree)
+- `DATA_CONTRACTS.md` / `ARCHITECTURE.md` / `MIGRATION_PLAN.md` / `P4_*` synced to dual-path + honest RiskAuth
+- Contract tests: `test_mtf_data_contracts.py`
+
 ## Next
+- Commit docs+hardening batch when ready
 - Operational verification: bot restart with open trade; dry-run callback lifecycle
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
 - Only then consider Hunter / Momentum Radar

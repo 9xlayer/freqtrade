@@ -48,6 +48,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         trade = _FakeTrade(
             id=7,
+            pair="BTC/USDT:USDT",
             is_short=True,
             enter_tag="short_A80plus",
             open_date_utc=ts,

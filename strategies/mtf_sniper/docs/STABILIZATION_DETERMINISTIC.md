@@ -18,20 +18,31 @@ Set via `strategy_params.mtf_runtime_mode` or env `MTF_RUNTIME_MODE`.
 
 ## Call graph (deterministic)
 
+Two **implementation** paths share one Policy contract (see `ARCHITECTURE.md`):
+
 ```
 populate_entry_trend
-  → EntryPipeline.live (Hunter=None)
-      → vectorized AND parts  OR  SensorSuite events → CandidateBuilder → SetupComposer
+  → EntryPipeline.live (always hunter_escalation=None — hard-disabled on live)
+      Fast:  cached Sniper Parts → vectorized AND → TradeCandidate
+      Event: SensorSuite → CandidateBuilder → SetupComposer → TradeCandidate
       → Long/Short Policy (setup eligibility ≠ quality grade)
       → strategy cooldown → enter_*
       → CandidateRegistry.remember(canonical candidate_id)
 confirm_trade_entry
-  → resolve candidate_id from registry (fallback: analyzed enter_* bar)
+  → resolve candidate_id:
+       registry.lookup (max-age 6h, no future)
+       → else DataFrame enter_* reconstruct (same max-age 6h)
+       → else candidate_id_missing
   → RiskEngine.authorize_entry
       → portfolio guards (circuit / directional / distress / max open)
       → JevDecisionAdapter(force_native=True) if enable_jev_decision
-      → explicit RiskAuthorization (+ fingerprint)
+      → RiskAuthorization (gate only; stake/leverage echoes not applied to order)
 ```
+
+### Hunter config vs execution
+
+`RuntimeProfile.enable_jev_hunter` may be `True` under `decision_external` if config requests it.
+**Live entry still forces `hunter_escalation=None`.** Treat startup `Hunter=True` as config intent only — pipeline does not escalate. Prefer keeping Hunter flags false until an explicit re-enable project.
 
 ## Defects fixed in this pass
 
@@ -58,6 +69,9 @@ confirm_trade_entry
 21. **Candle index reconstruction** — `_dataframe_position` uses absolute DF index (`get_indexer` / `get_loc`); never `len(hits)-1`.
 22. **Persist verify** — `_persist_candidate_id` returns `bool`, re-reads custom data, logs `candidate_id_persistence_failed`; read path validates canonical format.
 23. **Startup fail-fast proof** — `_load_external_config` re-raises `InvalidRuntimeModeError` (tested via strategy load path).
+24. **DataFrame fallback max-age** — reconstruct path uses the same `DEFAULT_LOOKUP_MAX_AGE` as registry (no arbitrarily old signal).
+25. **Persisted ID context check** — `parse_candidate_id` / `candidate_id_matches_trade` validate side + pair; read/persist reject mismatches.
+26. **`_dataframe_position`** — `get_loc` first (last duplicate), absolute row only; covered for Range/Datetime/sparse/duplicate indexes.
 
 ## Semantics: Policy vs Decision
 
@@ -99,6 +113,8 @@ Canonical `candidate_id` should match populate → confirm when registry is warm
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m unittest \
+  tests.strategy.test_mtf_data_contracts \
+  tests.strategy.test_mtf_candidate_id_hardening \
   tests.strategy.test_mtf_runtime_deterministic \
   tests.strategy.test_mtf_candidate_parity \
   tests.strategy.test_mtf_candidate_registry \

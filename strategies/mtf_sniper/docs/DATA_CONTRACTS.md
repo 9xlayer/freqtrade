@@ -1,208 +1,148 @@
-# MTF SNIPER QUANTITATIVE TRADING ENGINE
-## Data Contracts & Type Definitions Specification
-### Location: `strategies/mtf_sniper/docs/DATA_CONTRACTS.md` · Version: 3.2
+# MTF Sniper — Data Contracts
+
+**Package:** `strategies/mtf_sniper/` · **Source of truth:** `core/contracts.py`, `core/enums.py`, `core/candidate_id.py`  
+**Version:** matches `STRATEGY_VERSION` in `__init__.py` (currently `4.4.1-deterministic`)
+
+This document mirrors **implemented** schemas. Target / future designs are marked explicitly and are **not** live behavior.
+
+All inter-module dataclasses are `frozen=True`.
 
 ---
 
-## 1. Overview
+## 1. Enumerations (`core/enums.py`)
 
-This document specifies the exact schemas, enumerations, and dataclasses used across all subsystems of the Unified Trading Engine. All inter-module communication is strictly typed and immutable (`frozen=True`) to guarantee zero side-effects.
+| Enum | Values |
+|---|---|
+| `TradeSide` | `long`, `short` |
+| `SensorType` | `anomaly`, `pattern` |
+| `MarketRegime` | `bull_expansion`, `bull_pullback`, `bear_capitulation`, `bear_relief`, `choppy_ranging`, `volatility_squeeze` |
+| `DecisionAction` | `confirm`, `veto`, `hold` |
+| `RejectionReasonCode` | Sensor/Builder, Directional, JEV AI, Risk codes (see source) |
 
 ---
 
-## 2. Core Enumerations (`core/enums.py`)
+## 2. Candidate identity (`core/candidate_id.py`)
 
-```python
-from enum import Enum
+Canonical format:
 
-class TradeSide(str, Enum):
-    """Direction of the trade."""
-    LONG = "long"
-    SHORT = "short"
-
-class SensorType(str, Enum):
-    """Classification of the market sensor."""
-    ANOMALY = "anomaly"      # Volatility / volume spikes, extreme price displacement
-    PATTERN = "pattern"      # Technical confluence, EMA formations, breakout structures
-
-class MarketRegime(str, Enum):
-    """Macro and intermediate market regime classification."""
-    BULL_EXPANSION = "bull_expansion"      # Strong uptrend above EMA 50/200 1D, expanding volatility
-    BULL_PULLBACK = "bull_pullback"        # Bullish macro with 4H/1H retrace
-    BEAR_CAPITULATION = "bear_capitulation"# Violent sell-off below key daily moving averages
-    BEAR_RELIEF = "bear_relief"            # Bear market counter-trend bounce
-    CHOPPY_RANGING = "choppy_ranging"      # Low ADX, compressed Bollinger Bands, high false-breakout risk
-    VOLATILITY_SQUEEZE = "volatility_squeeze" # Pre-breakout compression zone
-
-class DecisionAction(str, Enum):
-    """Verdict issued by strategic policy or AI gatekeeper."""
-    CONFIRM = "confirm"
-    VETO = "veto"
-    HOLD = "hold"
-
-class RejectionReasonCode(str, Enum):
-    """Standardized rejection reason codes for telemetry and audit."""
-    # Sensor & Builder reasons
-    COOLDOWN_ACTIVE = "COOLDOWN_ACTIVE"
-    CONTRADICTORY_SIGNALS = "CONTRADICTORY_SIGNALS"
-    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
-    
-    # Directional Engine reasons
-    REJECT_REGIME_INCOMPATIBLE = "REJECT_REGIME_INCOMPATIBLE"
-    REJECT_UPPER_WICK_REJECTION = "REJECT_UPPER_WICK_REJECTION"
-    REJECT_LOWER_WICK_REJECTION = "REJECT_LOWER_WICK_REJECTION"
-    REJECT_CLOSE_POSITION_WEAK = "REJECT_CLOSE_POSITION_WEAK"
-    REJECT_RSI_OVEREXTENDED = "REJECT_RSI_OVEREXTENDED"
-    REJECT_EMA_DISTANCE_TOO_FAR = "REJECT_EMA_DISTANCE_TOO_FAR"
-    REJECT_SCORE_BELOW_THRESHOLD = "REJECT_SCORE_BELOW_THRESHOLD"
-    
-    # JEV AI reasons
-    AI_VETO_CHOPPY_REGIME = "AI_VETO_CHOPPY_REGIME"
-    AI_VETO_LOW_CONFIDENCE = "AI_VETO_LOW_CONFIDENCE"
-    AI_FAIL_SAFE_REJECT = "AI_FAIL_SAFE_REJECT"
-    
-    # Risk Engine reasons
-    RISK_CIRCUIT_BREAKER_ACTIVE = "RISK_CIRCUIT_BREAKER_ACTIVE"
-    RISK_DIRECTIONAL_LOCK = "RISK_DIRECTIONAL_LOCK"
-    RISK_PORTFOLIO_DISTRESSED = "RISK_PORTFOLIO_DISTRESSED"
-    RISK_INSUFFICIENT_LIQUIDATION_BUFFER = "RISK_INSUFFICIENT_LIQUIDATION_BUFFER"
-    RISK_EXPOSURE_LIMIT_EXCEEDED = "RISK_EXPOSURE_LIMIT_EXCEEDED"
+```text
+{pair}_{side}_{utc_epoch}_{candle_index}
 ```
 
----
+Examples: `BTC/USDT:USDT_short_1717243200_42`
 
-## 3. Data Contracts (`core/contracts.py`)
+| Helper | Role |
+|---|---|
+| `make_candidate_id` | Build canonical ID |
+| `parse_candidate_id` | Parse → `ParsedCandidateId(pair, side, epoch, candle_index)` |
+| `is_canonical_candidate_id` | Structural validity (side ∈ {long,short}, pair contains `/`) |
+| `candidate_id_matches_trade` | Optional pair/side context match |
+| `CANDIDATE_ID_MISSING` | Sentinel when correlation cannot be reconstructed |
+| `CANDIDATE_ID_CUSTOM_DATA_KEY` | `"mtf_candidate_id"` on Trade custom data |
 
-### 3.1. Sensor Trigger Event
-Emitted by an individual sensor when a threshold or pattern condition is detected on the current candle.
+**Not valid:** `{pair}_{side}_{epoch}` (missing candle index), ad-hoc tag/timestamp IDs, or IDs that fail pair/side match on read.
 
-```python
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-from strategies.mtf_sniper.core.enums import TradeSide, SensorType, MarketRegime, DecisionAction
-
-@dataclass(frozen=True)
-class TriggerEvent:
-    sensor_name: str                      # e.g., "volume_surge", "a80_plus"
-    sensor_type: SensorType               # ANOMALY or PATTERN
-    side: TradeSide                       # LONG or SHORT
-    pair: str                             # e.g., "BTC/USDT:USDT"
-    timestamp: datetime                   # Candle timestamp
-    candle_index: int                     # Positional row index in analyzed dataframe
-    raw_metrics: Dict[str, Any]           # Snapshot: close, volume_ratio, rsi, atr
-```
+Correlation window: `DEFAULT_LOOKUP_MAX_AGE` = **6 hours** (shared by `CandidateRegistry.lookup` and DataFrame reconstruct fallback).
 
 ---
 
-### 3.2. Trade Candidate (Merged & Deduplicated)
-Produced by `CandidateBuilder` after merging agreeing sensors, resolving conflicts, and applying directional cooldown.
+## 3. Contracts (`core/contracts.py`)
 
-```python
-@dataclass(frozen=True)
-class TradeCandidate:
-    candidate_id: str                     # Format: {pair}_{side}_{timestamp_epoch}
-    pair: str
-    side: TradeSide
-    primary_sensor: str                   # Dominant trigger (Pattern > Anomaly)
-    secondary_sensors: List[str]         # Other sensors that triggered simultaneously
-    confluence_count: int                 # Total number of sensors agreeing (>= 1)
-    timestamp: datetime
-    candle_index: int
-    raw_features: Dict[str, Any]          # Full feature snapshot at trigger time
-    cooldown_bars: int = 12
-```
+### 3.1 `TriggerEvent` (frozen)
+
+| Field | Type | Notes |
+|---|---|---|
+| `sensor_name` | `str` | e.g. `short_structure` |
+| `sensor_type` | `SensorType` | |
+| `side` | `TradeSide` | |
+| `pair` | `str` | |
+| `timestamp` | `datetime` | Candle time |
+| `candle_index` | `int` | Absolute row in analyzed DF |
+| `raw_metrics` | `Dict[str, Any]` | Snapshot metrics |
+
+### 3.2 `TradeCandidate` (frozen)
+
+| Field | Type | Notes |
+|---|---|---|
+| `candidate_id` | `str` | Canonical — see §2 |
+| `pair` | `str` | |
+| `side` | `TradeSide` | |
+| `primary_sensor` | `str` | e.g. `setup:sniper_short` after composer / fast path |
+| `secondary_sensors` | `List[str]` | |
+| `confluence_count` | `int` | |
+| `timestamp` | `datetime` | |
+| `candle_index` | `int` | |
+| `raw_features` | `Dict[str, Any]` | |
+| `cooldown_bars` | `int` | default `12` |
+
+Produced by **either** the vectorized fast path **or** SensorSuite → Builder → SetupComposer (same contract; see `ARCHITECTURE.md`).
+
+### 3.3 `PolicyEvaluationResult` (frozen)
+
+| Field | Type | Semantics |
+|---|---|---|
+| `is_valid` | `bool` | **Setup eligibility** — may continue toward `enter_*` |
+| `score` | `float` | Quality score |
+| `quality_grade` | `str` | Quality label (`A+`/`A`/`B`/`C`/`REJECT`) — **informational** at Policy |
+| `reasons` | `List[str]` | e.g. `ACCEPT` |
+| `suggested_stop_distance_pct` | `float` | |
+| `target_rr` | `float` | |
+| `metadata` | `Dict[str, Any]` | Includes `entry_tag` when accepted |
+
+**Invariant:** `is_valid=True` with `quality_grade=REJECT` can still reach `confirm_trade_entry`. Decision Gate does **not** read `quality_grade`.
+
+### 3.4 `DecisionVerdict` (frozen)
+
+| Field | Type |
+|---|---|
+| `action` | `DecisionAction` |
+| `score` | `float` |
+| `confidence` | `float` |
+| `veto_reasons` | `List[str]` |
+| `model_version` | `Optional[str]` |
+| `payload_hash` | `str` |
+| `timestamp` | `datetime` |
+
+### 3.5 `RiskAuthorization` (frozen) — authorization gate, not sizing authority
+
+| Field | Type | Live meaning |
+|---|---|---|
+| `is_approved` | `bool` | Only field `confirm_trade_entry` currently consumes |
+| `stake_amount` | `float` | Echo of Freqtrade-proposed stake (metadata) |
+| `leverage` | `float` | Echo / cap metadata |
+| `stoploss_rate` | `float` | Pair/default SL rate used in auth context |
+| `rejection_reasons` | `List[str]` | |
+| `risk_budget_used_pct` | `Optional[float]` | **`None`** until stop-distance budgeting exists |
+| `risk_per_trade_pct` | `Optional[float]` | **`None`** until implemented |
+| `stop_distance_pct` | `float` | |
+| `max_open_positions` | `int` | |
+| `open_positions` | `int` | |
+| `directional_open` | `int` | |
+| `total_exposure_notional` | `float` | `sum(stake * leverage)` |
+| `total_exposure_pct` | `Optional[float]` | Only when `wallet_equity` known |
+| `wallet_equity` | `Optional[float]` | |
+| `sizing_method` | `str` | Default `"freqtrade_proposed"` |
+| `config_fingerprint` | `str` | |
+| `stage_rejected` | `str` | `entry\|portfolio\|sizing\|leverage\|stoploss\|""` |
+
+**Not implemented (do not document as live):** stop-distance risk budgeting; RiskEngine driving exchange stake/leverage from `auth.stake_amount` / `auth.leverage`. Stoploss updates still flow through Freqtrade `custom_stoploss` → `RiskEngine.get_stoploss()`.
+
+### 3.6 Telemetry
+
+**`TelemetryDecisionRecord`** (frozen) — base decision fields plus:
+
+- `setup_type`, `signal_source`, `policy_version`
+- `config_fingerprint`
+- `feature_snapshot` (small dict — never full DataFrames)
+
+**`TelemetryTradeRecord`** (frozen) — trade outcome + MFE/MAE; `candidate_id` must be canonical or `candidate_id_missing`.
 
 ---
 
-### 3.3. Policy Evaluation Result
-Returned by `DirectionalTradingEngine` (`LongPolicy` or `ShortPolicy`) after comprehensive strategic evaluation.
+## 4. Contract tests
 
-```python
-@dataclass
-class PolicyEvaluationResult:
-    is_valid: bool                        # True if passed all policy criteria
-    score: float                          # Quality score in range [0.0, 1.0]
-    quality_grade: str                    # "A+", "A", "B", or "REJECT"
-    reasons: List[str]                    # Informational reason codes
-    suggested_stop_distance_pct: float   # Suggested stop distance (e.g. 0.018 for 1.8%)
-    target_rr: float                      # Expected risk-to-reward ratio (e.g. 2.0)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-```
+Structural field / ID checks live in:
 
----
-
-### 3.4. JEV AI Decision Verdict
-Returned by the `JevDecisionAdapter` representing the final intelligence layer verdict.
-
-```python
-@dataclass
-class DecisionVerdict:
-    action: DecisionAction                # CONFIRM or VETO
-    score: float                          # AI confidence / trajectory score
-    confidence: float                     # Model certainty
-    veto_reasons: List[str]               # Reason codes if vetoed
-    model_version: Optional[str]          # Resolved model (e.g. "jev-1.14.0")
-    payload_hash: str                     # SHA-256 hash of the 32-bar trajectory payload
-    timestamp: datetime                   # Timestamp of evaluation
-```
-
----
-
-### 3.5. Risk Authorization
-Returned by the `UnifiedRiskEngine` giving final execution authorization.
-
-```python
-@dataclass
-class RiskAuthorization:
-    is_approved: bool                     # True if trade is approved for execution
-    stake_amount: float                   # Allocated capital in quote currency (USDT)
-    leverage: float                       # Allocated leverage (max 10.0x)
-    stoploss_rate: float                  # Exact stoploss rate (e.g. -0.018)
-    rejection_reasons: List[str]          # Empty if approved, otherwise rejection codes
-    risk_budget_used_pct: float = 0.02    # Risk budget percentage applied (e.g. 2%)
-```
-
----
-
-### 3.6. Telemetry Records (`telemetry/`)
-Data structures persisted to the Decision and Trade Ledgers for performance auditability.
-
-```python
-@dataclass
-class TelemetryDecisionRecord:
-    candidate_id: str
-    timestamp: str
-    pair: str
-    side: str
-    sensors_triggered: List[str]
-    confluence_count: int
-    market_regime: str
-    policy_score: float
-    quality_grade: str
-    policy_verdict: str
-    ai_verdict: str
-    ai_confidence: float
-    ai_model_version: Optional[str]
-    risk_approved: bool
-    final_action: str                     # "ENTER" or "REJECT"
-    final_reasons: List[str]
-
-@dataclass
-class TelemetryTradeRecord:
-    trade_id: int
-    candidate_id: str
-    pair: str
-    side: str
-    open_date: str
-    close_date: str
-    open_rate: float
-    close_rate: float
-    stake_amount: float
-    leverage: float
-    pnl_usdt: float
-    pnl_pct: float
-    max_favorable_excursion: float       # MFE (peak profit ratio achieved)
-    max_adverse_excursion: float         # MAE (maximum drawdown suffered)
-    exit_reason: str
-```
+- `tests/strategy/test_mtf_data_contracts.py`
+- `tests/strategy/test_mtf_candidate_id_hardening.py`
+- `tests/strategy/test_mtf_candidate_parity.py`
