@@ -172,6 +172,54 @@ class TestRiskEngine(unittest.TestCase):
         self.assertEqual(called["n"], 1)
         self.assertFalse(auth.is_approved)
 
+    def test_authorize_exposure_honest_without_equity(self):
+        engine = RiskEngine(max_open_trades=2)
+        now = datetime(2024, 1, 10, tzinfo=timezone.utc)
+        open_t = _trade(stake_amount=100.0, leverage=10.0, is_short=False)
+        auth = engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="long",
+            current_time=now,
+            closed_trades=[],
+            open_trades=[open_t],
+            get_price=lambda p, t: 100.0,
+            jev_confirm=lambda: True,
+            proposed_stake=50.0,
+            max_stake=50.0,
+            max_leverage=10.0,
+        )
+        self.assertTrue(auth.is_approved)
+        self.assertEqual(auth.sizing_method, "freqtrade_proposed")
+        self.assertIsNone(auth.risk_budget_used_pct)
+        self.assertIsNone(auth.risk_per_trade_pct)
+        self.assertIsNone(auth.total_exposure_pct)
+        self.assertIsNone(auth.wallet_equity)
+        # open 100*10 + new 50*10
+        self.assertAlmostEqual(auth.total_exposure_notional, 1500.0, places=6)
+
+    def test_authorize_exposure_pct_when_equity_known(self):
+        engine = RiskEngine()
+        now = datetime(2024, 1, 10, tzinfo=timezone.utc)
+        auth = engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="long",
+            current_time=now,
+            closed_trades=[],
+            open_trades=[],
+            get_price=lambda p, t: 100.0,
+            jev_confirm=lambda: True,
+            proposed_stake=100.0,
+            max_stake=100.0,
+            max_leverage=10.0,
+            wallet_equity=2000.0,
+        )
+        self.assertTrue(auth.is_approved)
+        self.assertEqual(auth.wallet_equity, 2000.0)
+        self.assertAlmostEqual(auth.total_exposure_notional, 1000.0, places=6)
+        self.assertAlmostEqual(auth.total_exposure_pct or 0.0, 0.5, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -141,10 +141,8 @@ class StrategyMTFSniper(IStrategy):
         self.enable_jev_decision = bool(profile.enable_jev_decision)
         self.enable_jev_hunter = bool(profile.enable_jev_hunter)
         self.enable_hunter_long = bool(profile.enable_hunter_long)
-
-        # Force Decision engine env to native when external AI is disallowed
-        if not profile.allow_external_ai:
-            os.environ["JEV_MODE"] = profile.decision_jev_mode
+        # Decision mode is passed explicitly to JevDecisionAdapter — do not mutate
+        # process-global os.environ["JEV_MODE"] (cross-strategy / multi-instance safe).
 
         # Macro Bull Short Guard
         if "block_macro_bull_shorts" in strat_cfg:
@@ -613,18 +611,39 @@ class StrategyMTFSniper(IStrategy):
     # =========================================================================
     # 12. TELEMETRY — trade ledger on closed fills
     # =========================================================================
+    def _get_candidate_registry(self):
+        from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
+
+        reg = getattr(self, "_candidate_registry", None)
+        if reg is None:
+            reg = CandidateRegistry()
+            self._candidate_registry = reg
+        return reg
+
     def order_filled(
         self, pair: str, trade: Trade, order: Order, current_time: datetime, **kwargs
     ) -> None:
         """
-        Persist trade outcomes on exit fills.
+        Bind candidate_id on entry fills; persist trade outcomes on exit fills.
 
         Note: in backtesting, order_filled runs *before* trade.close(), so
         trade.is_open is still True. Detect exits via order side instead.
         """
         exit_side = getattr(trade, "exit_side", None)
         is_exit_fill = order.ft_order_side in (exit_side, "stoploss")
+        side = "short" if trade.is_short else "long"
+        enter_tag = getattr(trade, "enter_tag", None) or ""
+        trade_id = int(getattr(trade, "id", 0) or 0)
+        reg = self._get_candidate_registry()
+
         if not is_exit_fill:
+            # Entry fill — lock canonical ID to this trade for exit ledger.
+            open_ts = getattr(trade, "open_date_utc", None) or current_time
+            cid = (
+                reg.lookup_trade(trade_id)
+                or self._resolve_candidate_id(pair, side, enter_tag, open_ts)
+            )
+            reg.bind_trade(trade_id, cid)
             return
 
         # Skip partial exits while the position remains open.
@@ -643,7 +662,6 @@ class StrategyMTFSniper(IStrategy):
         if self._trade_ledger is None:
             return
 
-        trade_id = int(getattr(trade, "id", 0) or 0)
         recorded = getattr(self, "_trade_ledger_recorded_ids", None)
         if recorded is None:
             recorded = set()
@@ -654,7 +672,6 @@ class StrategyMTFSniper(IStrategy):
         try:
             from strategies.mtf_sniper.core.contracts import TelemetryTradeRecord
 
-            side = "short" if trade.is_short else "long"
             open_rate = float(trade.open_rate or 0.0)
             close_rate = float(
                 trade.close_rate
@@ -684,8 +701,11 @@ class StrategyMTFSniper(IStrategy):
             if pnl_usdt is None and close_rate > 0 and hasattr(trade, "calc_profit"):
                 pnl_usdt = trade.calc_profit(close_rate)
 
-            enter_tag = getattr(trade, "enter_tag", None) or ""
-            candidate_id = f"{pair}_{side}_{enter_tag or 'na'}_{trade_id}"
+            open_ts = getattr(trade, "open_date_utc", None) or current_time
+            candidate_id = (
+                reg.lookup_trade(trade_id)
+                or self._resolve_candidate_id(pair, side, enter_tag, open_ts)
+            )
             open_date = trade.open_date_utc.isoformat() if trade.open_date_utc else ""
             close_date = (
                 trade.close_date_utc.isoformat()
@@ -713,5 +733,6 @@ class StrategyMTFSniper(IStrategy):
                 )
             )
             recorded.add(trade_id)
+            reg.unbind_trade(trade_id)
         except Exception as exc:
             logger.warning(f"[TradeLedger] Failed to record closed trade {pair}: {exc}")

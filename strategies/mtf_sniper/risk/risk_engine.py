@@ -75,6 +75,7 @@ class RiskEngine:
         max_leverage: float = 10.0,
         default_stoploss: float = -0.28,
         stop_distance_pct: float = 0.0,
+        wallet_equity: Optional[float] = None,
     ) -> RiskAuthorization:
         reasons: list[str] = []
         stage = ""
@@ -134,7 +135,7 @@ class RiskEngine:
             )
             lev = resolve_leverage(max_leverage)
 
-        # Exposure estimate (notional / rough): stake * leverage when known
+        # Notional exposure = sum(stake * leverage). Pct only if equity known.
         total_exposure = 0.0
         for t in open_trades:
             try:
@@ -146,19 +147,39 @@ class RiskEngine:
         if approved:
             total_exposure += float(stake) * float(lev or 1.0)
 
+        equity: Optional[float] = None
+        if wallet_equity is not None:
+            try:
+                eq = float(wallet_equity)
+                if eq > 0:
+                    equity = eq
+            except (TypeError, ValueError):
+                equity = None
+        exposure_pct: Optional[float] = (
+            (total_exposure / equity) if equity is not None else None
+        )
+        # Stop-distance risk budget is not implemented — leave None (unavailable).
+        risk_per_trade: Optional[float] = None
+        if stop_distance_pct and float(stop_distance_pct) > 0 and equity is not None:
+            # Only claim per-trade risk when an explicit stop distance was supplied
+            # AND we sized from it (we do not today). Keep None until that lands.
+            risk_per_trade = None
+
         auth = RiskAuthorization(
             is_approved=approved,
             stake_amount=float(stake),
             leverage=float(lev) if approved else 0.0,
             stoploss_rate=float(default_stoploss) if approved else 0.0,
             rejection_reasons=list(reasons),
-            risk_budget_used_pct=0.02,
-            risk_per_trade_pct=0.0,  # stop-distance sizing NOT implemented
+            risk_budget_used_pct=None,
+            risk_per_trade_pct=risk_per_trade,
             stop_distance_pct=float(stop_distance_pct or 0.0),
             max_open_positions=int(self.max_open_trades),
             open_positions=open_n,
             directional_open=int(directional_open),
-            total_exposure_pct=0.0,  # absolute notional tracked separately for now
+            total_exposure_notional=float(total_exposure),
+            total_exposure_pct=exposure_pct,
+            wallet_equity=equity,
             sizing_method="freqtrade_proposed",
             config_fingerprint=self.config_fingerprint,
             stage_rejected="" if approved else (stage or "portfolio"),

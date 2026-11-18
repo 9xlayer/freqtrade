@@ -69,8 +69,13 @@ class RiskAuthorization:
 
     Stages (documented separately): entry eligibility → portfolio authorization
     → position sizing → leverage → stop-loss. Fields below make approved values
-    and rejection reasons explicit. Stop-distance-based stake sizing is NOT
-    claimed unless ``sizing_method`` says so.
+    and rejection reasons explicit.
+
+    Honesty rules:
+    - ``None`` means unavailable / not computed (never invent placeholders).
+    - ``sizing_method="freqtrade_proposed"`` = stake comes from FT proposed_stake
+      (+ optional tag multiplier), NOT stop-distance risk budgeting.
+    - ``total_exposure_notional`` = sum(stake * leverage); pct only when equity known.
     """
 
     is_approved: bool
@@ -78,15 +83,17 @@ class RiskAuthorization:
     leverage: float
     stoploss_rate: float
     rejection_reasons: List[str]
-    risk_budget_used_pct: float = 0.02
-    # Explicit portfolio / sizing surface (Phase 4)
-    risk_per_trade_pct: float = 0.0
+    # Optional metrics — None = unavailable (do not invent 0.02 / 0.0 placeholders)
+    risk_budget_used_pct: Optional[float] = None
+    risk_per_trade_pct: Optional[float] = None
     stop_distance_pct: float = 0.0
     max_open_positions: int = 0
     open_positions: int = 0
     directional_open: int = 0
-    total_exposure_pct: float = 0.0
-    sizing_method: str = "freqtrade_proposed"  # not stop-distance unless set
+    total_exposure_notional: float = 0.0
+    total_exposure_pct: Optional[float] = None
+    wallet_equity: Optional[float] = None
+    sizing_method: str = "freqtrade_proposed"
     config_fingerprint: str = ""
     stage_rejected: str = ""  # entry|portfolio|sizing|leverage|stoploss|""
 
