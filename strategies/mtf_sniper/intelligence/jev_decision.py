@@ -38,6 +38,129 @@ MODEL_VERSION_EXTERNAL = os.environ.get(
     "JEV_DECISION_MODEL_VERSION", DECISION_MODEL_VERSION_EXTERNAL_DEFAULT
 )
 
+def _external_confirm_instructions(side: str) -> str:
+    """Side-aware System-1 confirm prompt (optimal richctx)."""
+    side_u = (side or "").upper()
+    if side_u == "SHORT":
+        return (
+            "MTF Sniper SHORT candidate (waterfall / downside impulse). "
+            "Score how well this sequence supports a high-probability SHORT continuation: "
+            "impulsive downside body, expanding sell pressure / volume, closes accepting lower, "
+            "and failed or weak opposing absorption on the upside. "
+            "Do NOT require a multi-day bear trend or clean HTF downtrend — sniper shorts often "
+            "fire as collapse / breakdown bursts inside broader two-sided markets. "
+            "Score low when candles are truly two-sided chop with no downside close bias, "
+            "or when strong bullish rejection clearly invalidates the short trigger. "
+            "Use the metric legend, close_pos/vol on the trigger bar, and macro context as evidence."
+        )
+    if side_u == "LONG":
+        return (
+            "MTF Sniper LONG candidate (breakout / upside expansion). "
+            "Score how well this sequence supports a high-probability LONG continuation: "
+            "impulsive upside body, expanding buy pressure / volume, closes accepting higher, "
+            "and failed or weak opposing supply on the downside. "
+            "Prefer breakout / expansion over mean-reversion bounces. "
+            "Score low when candles are truly two-sided chop with no upside close bias, "
+            "or when strong bearish rejection clearly invalidates the long trigger. "
+            "Use the metric legend, close_pos/vol on the trigger bar, and macro context as evidence."
+        )
+    return (
+        f"Score whether this sequence confirms a high-probability {side_u or 'directional'} "
+        "continuation with expanding pressure and without decisive opposing rejection. "
+        "Score low for genuine two-sided chop or clear invalidation of the trigger."
+    )
+
+
+def _external_regime_criteria() -> Dict[str, str]:
+    """Regime labels used by external Decision (hard-veto still applies to choppy)."""
+    return {
+        "trend_expansion": (
+            "Directional impulse — upside breakout/expansion OR downside waterfall/collapse "
+            "with volume confirmation and accepting closes"
+        ),
+        "pullback_setup": (
+            "Orderly retracement toward dynamic support/resistance with declining opposing volume"
+        ),
+        "choppy_ranging": (
+            "True two-sided overlap with no directional close bias — not a single wick on an "
+            "otherwise impulsive sniper candle"
+        ),
+    }
+
+
+def _format_external_state(
+    *,
+    pair: str,
+    side: str,
+    current_price: float,
+    seq: List[Dict[str, Any]],
+    macro: Dict[str, Any],
+    candle_limit: int = 12,
+) -> str:
+    """Build Typesafe ``state`` text with metric legend + richer trajectory/macro."""
+    side_u = (side or "").upper()
+    setup_role = (
+        "SHORT sniper (waterfall / downside impulse)"
+        if side_u == "SHORT"
+        else (
+            "LONG sniper (breakout / upside expansion)"
+            if side_u == "LONG"
+            else f"{side_u or 'directional'} candidate"
+        )
+    )
+    lens = macro.get(
+        "short_score" if side_u == "SHORT" else "long_score",
+        50.0,
+    )
+    ema_dist = macro.get("ema_50_1h_dist_pct", macro.get("ema50_1h_dist_pct", 0.0))
+
+    legend = (
+        "Metric legend (read before scoring):\n"
+        "- body: |close-open|/range in [0,1]; >=0.55 with vol>=1.2x often impulsive\n"
+        "- lw/uw: lower/upper wick share of range in [0,1]; adverse wick fights the trade side\n"
+        "- close_pos: close location in range [0,1]; SHORT prefers <=0.40, LONG >=0.60\n"
+        "- range_pct: (high-low)/close * 100; pct: open->close %\n"
+        "- vol: volume / 20-bar SMA; rsi: 15m RSI\n"
+        "- Labels: trigger=last closed bar; T-n=n bars before trigger"
+    )
+
+    window = seq[-candle_limit:] if seq else []
+    lines: List[str] = []
+    n = len(window)
+    for i, c in enumerate(window):
+        label = "trigger" if i == n - 1 else f"T-{n - 1 - i}"
+        lines.append(
+            f"[{label}] body:{float(c.get('body_ratio', 0)):.2f} "
+            f"lw:{float(c.get('lower_wick', 0)):.2f} uw:{float(c.get('upper_wick', 0)):.2f} "
+            f"close_pos:{float(c.get('close_pos', 0.5)):.2f} "
+            f"range_pct:{float(c.get('range_pct', 0)):.2f} pct:{float(c.get('pct_change', 0)):.2f} "
+            f"vol:{float(c.get('vol_ratio', c.get('volume_ratio', 0))):.2f}x "
+            f"rsi:{float(c.get('rsi', 50)):.1f}"
+        )
+    candles_str = "\n".join(lines) if lines else "(no candle trajectory)"
+
+    return f"""Asset: {pair} (Futures 10x)
+Strategy role: MTF Sniper confirm gate — {setup_role}
+Proposed Trade: {side_u}
+Current Price: {current_price}
+Timeframe trigger: 15m | Informative: 1H / 4H / 1D
+
+{legend}
+
+Recent Candle Trajectory (last {len(window)} of {len(seq)} bars):
+{candles_str}
+
+Macro & Filter Context:
+- 4H Trend: {macro.get('trend_4h', 'NEUTRAL')} (context only; do not veto solely for HTF disagreement)
+- 4H ADX: {float(macro.get('adx_4h', 20.0)):.1f}
+- 1H EMA50 Distance: {float(ema_dist):.2f}%
+- 1H MACD hist: {float(macro.get('macdhist_1h', 0.0)):.4f}
+- 1H RSI: {float(macro.get('rsi_1h', 50.0)):.1f}
+- 1D floor(20d) distance: {float(macro.get('floor_20d_dist_pct', 0.0)):.2f}%
+- ATR Volatility Percentile: {float(macro.get('atr_percentile', 50.0)):.1f}%
+- AI Lens Confluence Score ({'short' if side_u == 'SHORT' else 'long'}): {float(lens):.1f}
+"""
+
 
 def _parse_unit_interval(value: Any, default: Optional[float] = None) -> Optional[float]:
     """Parse a finite float in [0, 1]. Returns default/None on invalid input."""
@@ -50,12 +173,27 @@ def _parse_unit_interval(value: Any, default: Optional[float] = None) -> Optiona
     return parsed
 
 
+def _external_weight_ai() -> float:
+    """Weight for AI noul probability in hybrid score (default 0.10)."""
+    raw = os.environ.get("JEV_DECISION_WEIGHT_AI", "0.10")
+    val = _parse_unit_interval(raw, default=0.10)
+    return 0.10 if val is None else val
+
+
+def _external_choppy_penalty() -> float:
+    """Penalty for choppy/ranging market regime in hybrid score (default 0.10)."""
+    raw = os.environ.get("JEV_DECISION_CHOPPY_PENALTY", "0.10")
+    val = _parse_unit_interval(raw, default=0.10)
+    return 0.10 if val is None else val
+
+
 def _external_confirm_threshold() -> Optional[float]:
     """
-    External confirm threshold (native uses 0.70).
+    Confirm threshold for Decision Gate.
     Must be finite and inside [0, 1]; invalid env values yield None (fail closed).
+    Defaults to 0.70 for hybrid evaluation.
     """
-    raw = os.environ.get("JEV_CONFIRM_THRESHOLD", "0.60")
+    raw = os.environ.get("JEV_CONFIRM_THRESHOLD", "0.70")
     return _parse_unit_interval(raw, default=None)
 
 
@@ -523,7 +661,37 @@ class JevDecisionEngine:
         threshold = _external_confirm_threshold()
         if threshold is None:
             return "invalid"
-        return f"{threshold:.4f}"
+        w_ai = _external_weight_ai()
+        cp = _external_choppy_penalty()
+        return f"{threshold:.4f}_w{w_ai:.2f}_cp{cp:.2f}_runway"
+
+    def _lookup_raw_external(self, p_hash: str) -> Optional[Dict[str, Any]]:
+        """Look up previously cached raw external AI response for this payload and prompt version."""
+        if not self.cache_db or not p_hash or self.cache_db == ":memory:":
+            return None
+        prompt_v = getattr(self, "prompt_version", PROMPT_VERSION_NATIVE)
+        try:
+            with sqlite3.connect(self.cache_db, timeout=5.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT raw_response
+                       FROM jev_gatekeeper_verdicts
+                       WHERE payload_hash=? AND prompt_version=? AND status='SUCCESS'
+                         AND raw_response IS NOT NULL AND raw_response != ''
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (p_hash, prompt_v),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        raw = json.loads(row[0])
+                        if isinstance(raw, dict) and "answers" in raw:
+                            return raw
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"Raw external cache lookup bypassed: {e}")
+        return None
 
     def _build_cache_key(self, payload_hash: str) -> str:
         return build_decision_cache_key(
@@ -631,10 +799,20 @@ class JevDecisionEngine:
         if self.mode == "native" or self.mode == "backtest":
             verdict = self._evaluate_native_sequence(payload)
         elif self.mode == "external":
-            if not self.api_key:
+            native_verdict = self._evaluate_native_sequence(payload)
+            native_conf = float(native_verdict.get("confidence", 0.50))
+            native_reasons = list(native_verdict.get("reasons", []))
+
+            raw_cached = (
+                self._lookup_raw_external(p_hash)
+                if os.environ.get("JEV_REUSE_RAW_CACHE") == "1"
+                else None
+            )
+
+            if not self.api_key and raw_cached is None:
                 logger.warning("External mode active but JEV_API_KEY not configured. Enforcing fail policy.")
                 if self.fail_policy == "fallback_native":
-                    verdict = self._evaluate_native_sequence(payload)
+                    verdict = native_verdict
                     verdict["source"] = "native_fallback"
                 else:
                     return make_verdict(
@@ -646,11 +824,16 @@ class JevDecisionEngine:
                         source="policy_gate"
                     )
             else:
-                verdict = self._call_external_jev(payload)
+                verdict = self._call_external_jev(
+                    payload,
+                    native_conf=native_conf,
+                    native_reasons=native_reasons,
+                    cached_raw=raw_cached,
+                )
                 if verdict.get("status") != JevStatus.SUCCESS.value:
                     if self.fail_policy == "fallback_native":
                         logger.info("External API unavailable, falling back to Native Quant Evaluator.")
-                        verdict = self._evaluate_native_sequence(payload)
+                        verdict = native_verdict
                         verdict["source"] = "native_fallback"
                     elif self.fail_policy in ("allow", "safe"):
                         logger.info("External API unavailable, fail policy allows pass-through.")
@@ -704,192 +887,198 @@ class JevDecisionEngine:
 
         return verdict
 
-    def _call_external_jev(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_external_jev(
+        self,
+        payload: Dict[str, Any],
+        native_conf: float = 0.50,
+        native_reasons: Optional[List[str]] = None,
+        cached_raw: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
-        Gửi payload tới endpoint Jev System-1 Cloud (TypeSafe).
-        Khắc phục hoàn toàn lỗi mapping: current_price và ema_50_1h_dist_pct.
-        Xử lý timeout, HTTP error, malformed JSON thành UNAVAILABLE dứt khoát.
+        Gửi payload tới endpoint Jev System-1 Cloud (TypeSafe) và tính toán Hybrid Score.
+        AI noul đóng vai trò tham số hiệu chỉnh (weight_ai) thay vì gác cổng nhị phân.
         """
         side = payload.get("side", JevSide.NONE.value).upper()
         pair = payload.get("pair", "UNKNOWN")
         current_price = payload.get("current_price", 0.0)
         seq = payload.get("trajectory_sequence", [])
         macro = payload.get("macro_context", {})
-
-        candles_summary = []
-        for i, c in enumerate(seq[-6:]):
-            c_type = "trigger" if i == len(seq[-6:]) - 1 else f"T-{len(seq[-6:]) - 1 - i}"
-            candles_summary.append(
-                f"[{c_type}] body:{c.get('body_ratio', 0):.2f}, "
-                f"lw:{c.get('lower_wick', 0):.2f}, uw:{c.get('upper_wick', 0):.2f}, "
-                f"vol:{c.get('vol_ratio', 0):.2f}x, rsi:{c.get('rsi', 0):.1f}"
-            )
-        candles_str = "\n".join(candles_summary)
-
-        # Sửa mapping chuẩn: ema_50_1h_dist_pct
-        ema_dist = macro.get("ema_50_1h_dist_pct", macro.get("ema50_1h_dist_pct", 0.0))
-
-        state_text = f"""Asset: {pair} (Futures 10x)
-Proposed Trade: {side}
-Current Price: {current_price}
-
-Recent Candle Trajectory:
-{candles_str}
-
-Macro & Filter Context:
-- 4H Trend: {macro.get('trend_4h', 'NEUTRAL')}
-- 1H EMA50 Distance: {ema_dist:.2f}%
-- ATR Volatility Percentile: {macro.get('atr_percentile', 50.0):.1f}%
-- AI Lens Confluence Score: {macro.get('short_score' if side == 'SHORT' else 'long_score', 50.0):.1f}
-"""
-
         model_id = getattr(self, "external_model_version", MODEL_VERSION_EXTERNAL)
-        req_body = {
-            "model": model_id,
-            "state": state_text,
-            "questions": {
-                "confirm_trade": {
-                    "type": "noul",
-                    "instructions": (
-                        f"Does this sequence confirm a high-probability trend-following {side.lower()} continuation "
-                        f"with expanding directional pressure and without significant opposing rejection? "
-                        f"Score low if the regime is choppy/ranging or the move lacks follow-through."
-                    ),
-                },
-                "market_regime": {
-                    "type": "choice",
-                    "instructions": "What is the immediate market regime demonstrated by this candle sequence?",
-                    "criteria": {
-                        "trend_expansion": "Impulsive breakout or expanding trend with volume confirmation",
-                        "pullback_setup": "Orderly retracement towards dynamic support/resistance with declining volume",
-                        "choppy_ranging": "Overlapping candles, large opposing rejection wicks, or erratic volatility"
-                    }
-                }
-            }
-        }
 
-        try:
-            data = json.dumps(req_body).encode("utf-8")
-            headers = {
-                "Content-Type": "application/json",
-                "User-Agent": f"Freqtrade-Jev/{ENGINE_VERSION}"
-            }
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-            timeout_val = float(os.environ.get("JEV_API_TIMEOUT", "2.0"))
-            req = urllib.request.Request(self.api_url, data=data, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout_val) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-
-            answers = result.get("answers")
-            if not isinstance(answers, dict):
-                return make_verdict(
-                    decision=JevDecision.VETO,
-                    side=side,
-                    confidence=0.0,
-                    market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=["External API response missing or invalid answers structure"],
-                    source="external",
-                    status=JevStatus.INVALID,
-                    raw_response=result if isinstance(result, dict) else {"raw": result},
-                )
-
-            confirm_trade = answers.get("confirm_trade")
-            market_regime_ans = answers.get("market_regime")
-            if not isinstance(confirm_trade, dict) or "noul" not in confirm_trade:
-                return make_verdict(
-                    decision=JevDecision.VETO,
-                    side=side,
-                    confidence=0.0,
-                    market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=["External API response missing confirm_trade.noul"],
-                    source="external",
-                    status=JevStatus.INVALID,
-                    raw_response=result,
-                )
-            if not isinstance(market_regime_ans, dict) or "choice" not in market_regime_ans:
-                return make_verdict(
-                    decision=JevDecision.VETO,
-                    side=side,
-                    confidence=0.0,
-                    market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=["External API response missing market_regime.choice"],
-                    source="external",
-                    status=JevStatus.INVALID,
-                    raw_response=result,
-                )
-
-            noul_conf = _parse_unit_interval(confirm_trade.get("noul"), default=None)
-            if noul_conf is None:
-                return make_verdict(
-                    decision=JevDecision.VETO,
-                    side=side,
-                    confidence=0.0,
-                    market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=[
-                        f"Invalid AI confidence (must be finite in [0,1]): {confirm_trade.get('noul')!r}"
-                    ],
-                    source="external",
-                    status=JevStatus.INVALID,
-                    raw_response=result,
-                )
-
-            threshold = _external_confirm_threshold()
-            if threshold is None:
-                return make_verdict(
-                    decision=JevDecision.VETO,
-                    side=side,
-                    confidence=0.0,
-                    market_regime=JevMarketRegime.UNKNOWN,
-                    reasons=["Invalid JEV_CONFIRM_THRESHOLD (must be finite in [0,1])"],
-                    source="external",
-                    status=JevStatus.INVALID,
-                    raw_response=result,
-                )
-
-            regime_choice = str(market_regime_ans.get("choice") or "unknown")
-            regime = regime_choice.upper()
-            actual_model = result.get("model") if isinstance(result.get("model"), str) else model_id
-            reasons = [
-                f"Jev Cloud probability: {noul_conf:.2f}",
-                f"Threshold: {threshold:.2f}",
-                f"Regime: {regime}",
-                f"Model: {actual_model}",
-            ]
-
-            # Hard veto chop/range even if noul clears the numeric threshold.
-            if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
-                decision = JevDecision.VETO.value
-                reasons.append("Vetoed by choppy/ranging regime")
-            elif noul_conf >= threshold:
-                decision = JevDecision.CONFIRM.value
-            else:
-                decision = JevDecision.VETO.value
-                reasons.append("Below confirm threshold")
-
-            return make_verdict(
-                decision=decision,
+        if cached_raw is not None:
+            result = cached_raw
+        else:
+            state_text = _format_external_state(
+                pair=pair,
                 side=side,
-                confidence=noul_conf,
-                market_regime=regime,
-                reasons=reasons,
-                source="external",
-                model_version=actual_model,
-                status=JevStatus.SUCCESS,
-                raw_response=result,
+                current_price=float(current_price or 0.0),
+                seq=seq if isinstance(seq, list) else [],
+                macro=macro if isinstance(macro, dict) else {},
+                candle_limit=12,
             )
-        except Exception as e:
+
+            req_body = {
+                "model": model_id,
+                "state": state_text,
+                "questions": {
+                    "confirm_trade": {
+                        "type": "noul",
+                        "instructions": _external_confirm_instructions(side),
+                    },
+                    "market_regime": {
+                        "type": "choice",
+                        "instructions": (
+                            "Classify the immediate regime of this candle sequence for a sniper entry. "
+                            "Use choppy_ranging only for genuine two-sided overlap without directional "
+                            "close bias — impulsive waterfall or breakout candles are trend_expansion."
+                        ),
+                        "criteria": _external_regime_criteria(),
+                    },
+                },
+            }
+
+            try:
+                data = json.dumps(req_body).encode("utf-8")
+                headers = {
+                    "Content-Type": "application/json",
+                    "User-Agent": f"Freqtrade-Jev/{ENGINE_VERSION}"
+                }
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
+                timeout_val = float(os.environ.get("JEV_API_TIMEOUT", "2.0"))
+                req = urllib.request.Request(self.api_url, data=data, headers=headers)
+                with urllib.request.urlopen(req, timeout=timeout_val) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                return make_verdict(
+                    decision=JevDecision.VETO,
+                    side=side,
+                    confidence=0.0,
+                    market_regime=JevMarketRegime.UNKNOWN,
+                    reasons=[f"External Jev API call failed: {str(e)}"],
+                    source="external",
+                    status=JevStatus.UNAVAILABLE,
+                    raw_response={"error": str(e)}
+                )
+
+        answers = result.get("answers")
+        if not isinstance(answers, dict):
             return make_verdict(
                 decision=JevDecision.VETO,
                 side=side,
                 confidence=0.0,
                 market_regime=JevMarketRegime.UNKNOWN,
-                reasons=[f"External Jev API call failed: {str(e)}"],
+                reasons=["External API response missing or invalid answers structure"],
                 source="external",
-                status=JevStatus.UNAVAILABLE,
-                raw_response={"error": str(e)}
+                status=JevStatus.INVALID,
+                raw_response=result if isinstance(result, dict) else {"raw": result},
             )
+
+        confirm_trade = answers.get("confirm_trade")
+        market_regime_ans = answers.get("market_regime")
+        if not isinstance(confirm_trade, dict) or "noul" not in confirm_trade:
+            return make_verdict(
+                decision=JevDecision.VETO,
+                side=side,
+                confidence=0.0,
+                market_regime=JevMarketRegime.UNKNOWN,
+                reasons=["External API response missing confirm_trade.noul"],
+                source="external",
+                status=JevStatus.INVALID,
+                raw_response=result,
+            )
+        if not isinstance(market_regime_ans, dict) or "choice" not in market_regime_ans:
+            return make_verdict(
+                decision=JevDecision.VETO,
+                side=side,
+                confidence=0.0,
+                market_regime=JevMarketRegime.UNKNOWN,
+                reasons=["External API response missing market_regime.choice"],
+                source="external",
+                status=JevStatus.INVALID,
+                raw_response=result,
+            )
+
+        noul_conf = _parse_unit_interval(confirm_trade.get("noul"), default=None)
+        if noul_conf is None:
+            return make_verdict(
+                decision=JevDecision.VETO,
+                side=side,
+                confidence=0.0,
+                market_regime=JevMarketRegime.UNKNOWN,
+                reasons=[
+                    f"Invalid AI confidence (must be finite in [0,1]): {confirm_trade.get('noul')!r}"
+                ],
+                source="external",
+                status=JevStatus.INVALID,
+                raw_response=result,
+            )
+
+        threshold = _external_confirm_threshold()
+        if threshold is None:
+            return make_verdict(
+                decision=JevDecision.VETO,
+                side=side,
+                confidence=0.0,
+                market_regime=JevMarketRegime.UNKNOWN,
+                reasons=["Invalid JEV_CONFIRM_THRESHOLD (must be finite in [0,1])"],
+                source="external",
+                status=JevStatus.INVALID,
+                raw_response=result,
+            )
+
+        w_ai = _external_weight_ai()
+        choppy_penalty = _external_choppy_penalty()
+
+        # Continuous AI score adjustment centered at 0.50:
+        # noul=1.00 -> +w_ai, noul=0.50 -> 0.00, noul=0.00 -> -w_ai
+        ai_delta = max(-w_ai, min(w_ai, w_ai * (noul_conf - 0.50) * 2.0))
+
+        regime_choice = str(market_regime_ans.get("choice") or "unknown")
+        regime = regime_choice.upper()
+        actual_model = result.get("model") if isinstance(result.get("model"), str) else model_id
+
+        regime_penalty = 0.0
+        if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
+            regime_penalty = choppy_penalty
+
+        # Compute composite Hybrid Score
+        hybrid_score = round(native_conf + ai_delta - regime_penalty, 2)
+        hybrid_score = max(0.0, min(1.0, hybrid_score))
+
+        hard_choppy = getattr(self, "hard_choppy", False) or (os.environ.get("JEV_DECISION_HARD_CHOPPY", "0") == "1")
+        if hard_choppy and regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
+            decision = JevDecision.VETO.value
+        elif hybrid_score >= threshold:
+            decision = JevDecision.CONFIRM.value
+        else:
+            decision = JevDecision.VETO.value
+
+        reasons = list(native_reasons or []) + [
+            f"Native score: {native_conf:.2f}",
+            f"Jev Cloud probability: {noul_conf:.2f}",
+            f"AI adjustment: delta={ai_delta:+.2f} (w_ai={w_ai:.2f})",
+            f"Market regime: {regime}" + (f" (penalty: -{regime_penalty:.2f})" if regime_penalty > 0 else ""),
+            f"Hybrid score: {hybrid_score:.2f} vs threshold {threshold:.2f}",
+            f"Model: {actual_model}",
+        ]
+        if regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
+            reasons.append("Penalized by choppy/ranging regime")
+        if decision == JevDecision.VETO.value:
+            reasons.append("Below confirm threshold")
+
+        return make_verdict(
+            decision=decision,
+            side=side,
+            confidence=hybrid_score,
+            market_regime=regime,
+            reasons=reasons,
+            source="external",
+            model_version=actual_model,
+            status=JevStatus.SUCCESS,
+            raw_response=result,
+        )
 
     def _evaluate_native_sequence(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -974,6 +1163,28 @@ Macro & Filter Context:
         if atr_pct >= 90.0:
             confidence -= 0.20
             reasons.append(f"Extreme ATR volatility risk ({atr_pct:.1f}%)")
+
+        # --- E. Cấu trúc thị trường & Biên rơi tự do (Headroom & Intermediate Momentum) ---
+        floor_dist = macro.get("floor_20d_dist_pct", 0.0)
+        dist_ema50_1h = macro.get("ema_50_1h_dist_pct", 0.0)
+        rsi_1h = macro.get("rsi_1h", 50.0)
+
+        if side == "SHORT":
+            # Thưởng hợp lưu: Biên rơi tự do lớn (>= 15% trên đáy 20D) + Giá dưới EMA50 1H + RSI 1H gấu (< 50)
+            if floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
+                confidence += 0.10
+                reasons.append(f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)")
+            # Phạt bẫy đảo chiều: Bán ép vào sàn hỗ trợ cứng (< 8%) hoặc bán ngược sóng khi giá trên EMA50 1H và RSI 1H > 50
+            elif floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0):
+                confidence -= 0.10
+                reasons.append("Counter-trend trap or exhausted floor risk on short")
+        elif side == "LONG":
+            if dist_ema50_1h > 0.0 and rsi_1h > 50.0:
+                confidence += 0.05
+                reasons.append("1H Bull momentum alignment")
+            elif dist_ema50_1h < 0.0 and rsi_1h < 50.0:
+                confidence -= 0.10
+                reasons.append("Counter-trend trap on long (below 1H EMA50)")
 
         confidence = max(0.0, min(1.0, round(confidence, 2)))
 
