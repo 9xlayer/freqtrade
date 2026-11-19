@@ -1,13 +1,13 @@
 """
 Jev Decision Engine & Candle Trajectory Extractor
 ================================================
-Cung cấp cầu nối AI Decision Layer cho Freqtrade & AI Agent Lens:
-1. CandleTrajectoryExtractor: Đóng gói chuỗi 32 nến thời gian thực thành
-   vector hành vi giá (Price Action Trajectory) chuẩn hóa kèm bối cảnh MTF.
-2. JevDecisionEngine: Mô hình quyết định System-1 hỗ trợ cả:
-   - Native Quant System-1: Bộ phân tích cấu trúc chuỗi giá offline siêu tốc (<1ms)
-   - External Mode: Gửi HTTP JSON Payload tới Jev API / LLM endpoint (khi được cấu hình tường minh)
-   - Backtest Mode: Đảm bảo tính tất định (deterministic), không gọi network API khi backtest.
+Provides AI Decision Layer bridge for Freqtrade & AI Agent Lens:
+1. CandleTrajectoryExtractor: Packages 32 real-time candles into
+   normalized Price Action Trajectory vectors with MTF context.
+2. JevDecisionEngine: System-1 decision model supporting:
+   - Native Quant System-1: High-speed offline price trajectory analyzer (<1ms).
+   - External Mode: Sends HTTP JSON payload to Jev API / LLM endpoint (when explicitly configured).
+   - Backtest Mode: Ensures full determinism without network API calls in backtesting.
 """
 
 import os
@@ -216,7 +216,7 @@ def build_decision_cache_key(
         "model_version": str(model_version or ""),
         "engine_version": str(engine_version or ""),
         "prompt_version": str(prompt_version or ""),
-        "confirm_threshold": str(confirm_threshold),
+        "confirm_threshold": confirm_threshold,
         "fail_policy": str(fail_policy or ""),
         "mode": str(mode or ""),
     }
@@ -262,7 +262,7 @@ def make_verdict(
     raw_response: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Đảm bảo 100% verdict tuân thủ Universal Decision Contract Schema:
+    Ensures 100% verdict compliance with Universal Decision Contract Schema:
     {
         "decision": "CONFIRM" | "VETO",
         "side": "LONG" | "SHORT" | "NONE",
@@ -277,9 +277,7 @@ def make_verdict(
     }
     """
     try:
-        conf_float = float(confidence)
-        if math.isnan(conf_float) or math.isinf(conf_float):
-            conf_float = 0.0
+        conf_float = 0.0 if (math.isnan(confidence) or math.isinf(confidence)) else confidence
     except (TypeError, ValueError):
         conf_float = 0.0
     conf_bounded = max(0.0, min(1.0, round(conf_float, 2)))
@@ -289,7 +287,7 @@ def make_verdict(
         stat_str = JevStatus.INVALID.value
 
     dec_str = str(getattr(decision, "value", decision)).upper()
-    # Chỉ được CONFIRM nếu trạng thái là SUCCESS và quyết định rõ ràng là CONFIRM
+    # Confirm only if status is SUCCESS and action is CONFIRM
     final_decision = JevDecision.CONFIRM.value if (dec_str == "CONFIRM" and stat_str == "SUCCESS") else JevDecision.VETO.value
 
     side_str = str(getattr(side, "value", side)).upper()
@@ -303,9 +301,9 @@ def make_verdict(
         "confidence": conf_bounded,
         "market_regime": regime_str,
         "reasons": list(reasons or []),
-        "source": str(source),
-        "model_version": str(model_version),
-        "engine_version": str(engine_version),
+        "source": source,
+        "model_version": model_version,
+        "engine_version": engine_version,
         "status": stat_str,
         "raw_response": dict(raw_response or {}),
     }
@@ -313,9 +311,9 @@ def make_verdict(
 
 class CandleTrajectoryExtractor:
     """
-    Trích xuất chuỗi nến thời gian thực và bối cảnh thị trường thành JSON Snapshot
-    cho mô hình AI ra quyết định.
-    Đảm bảo an toàn toán học: chống chia cho 0, chống NaN/Inf, kiểm tra bắt buộc cột.
+    Extracts real-time candle sequence and market context into JSON Snapshot
+    for AI decision model.
+    Ensures numerical safety: zero-division protection, NaN/Inf checks, column validation.
     """
 
     REQUIRED_COLS = ["open", "high", "low", "close", "volume"]
@@ -323,8 +321,8 @@ class CandleTrajectoryExtractor:
     @classmethod
     def extract_sequence(cls, df: DataFrame, lookback: int = 32) -> List[Dict[str, float]]:
         """
-        Trích xuất chuỗi N nến gần nhất thành chuỗi đặc trưng động lượng.
-        Index của nến chạy từ -(lookback-1) đến 0 (nến kích hoạt cuối cùng).
+        Extracts recent N candles into momentum feature sequence.
+        Candle index runs from -(lookback-1) to 0 (trigger candle).
         """
         if df is None or not isinstance(df, DataFrame) or df.empty:
             return []
@@ -339,10 +337,10 @@ class CandleTrajectoryExtractor:
         else:
             recent = df.iloc[-lookback:].copy()
 
-        # Làm sạch và chống NaN/Inf bằng ffill & bfill
+        # Clean NaN/Inf via ffill and bfill
         recent = recent.ffill().bfill()
 
-        # Thống nhất chuẩn hóa Volume: dùng rolling 20 SMA hoặc trung bình recent
+        # Normalize volume via rolling 20 SMA or recent mean
         vol_col = recent["volume"].fillna(0.0)
         vol_mean = float(vol_col.rolling(20, min_periods=1).mean().iloc[-1]) if len(vol_col) > 0 else 1.0
         if vol_mean <= 0.0 or math.isnan(vol_mean):
@@ -384,7 +382,7 @@ class CandleTrajectoryExtractor:
             except (ValueError, TypeError):
                 rsi = 50.0
 
-            # Index chạy từ -(n_candles - 1) đến 0 (ví dụ: -31 đến 0 cho 32 nến)
+            # Index runs from -(n_candles - 1) to 0
             candle_idx = i - n_candles + 1
 
             sequence.append({
@@ -405,8 +403,8 @@ class CandleTrajectoryExtractor:
     @classmethod
     def extract_macro_context(cls, df: DataFrame) -> Dict[str, Any]:
         """
-        Trích xuất bối cảnh đa khung thời gian từ hàng cuối cùng.
-        Thống nhất định dạng key để External API và Native Quant dùng chung.
+        Extracts MTF context from the latest row.
+        Unifies key format for External API and Native Quant.
         """
         if df is None or not isinstance(df, DataFrame) or df.empty:
             return {}
@@ -424,8 +422,8 @@ class CandleTrajectoryExtractor:
         rsi_1h = float(last.get("rsi_1h", 50.0)) if not pd.isna(last.get("rsi_1h")) else 50.0
 
         # 4H context
-        is_bull_4h = bool(last.get("is_bull_wave_4h", 0) == 1)
-        is_bear_4h = bool(last.get("is_bear_wave_4h", 0) == 1)
+        is_bull_4h = (last.get("is_bull_wave_4h", 0) == 1)
+        is_bear_4h = (last.get("is_bear_wave_4h", 0) == 1)
         adx_4h = float(last.get("adx_4h", 20.0)) if not pd.isna(last.get("adx_4h")) else 20.0
 
         # 1D context
@@ -453,11 +451,11 @@ class CandleTrajectoryExtractor:
     @classmethod
     def build_payload(cls, df: DataFrame, pair: str, side: str, lookback: int = 32) -> Dict[str, Any]:
         """
-        Đóng gói toàn bộ thông điệp chuẩn bị gửi cho Jev Decision Engine.
-        Đảm bảo bao gồm đầy đủ:
+        Packages payload for Jev Decision Engine.
+        Ensures complete payload structure:
         - current_price
         - timeframe ("15m")
-        - timestamp chuẩn hóa
+        - normalized timestamp
         - side ("LONG" / "SHORT")
         - pair
         - trajectory_sequence
@@ -482,7 +480,7 @@ class CandleTrajectoryExtractor:
         macro_ctx = cls.extract_macro_context(df)
         traj_seq = cls.extract_sequence(df, lookback=lookback)
 
-        # Tính payload_hash tất định cho caching đại diện cho toàn bộ chuỗi nến và macro context
+        # Compute deterministic payload_hash for caching
         traj_repr = json.dumps(traj_seq, sort_keys=True, default=str)
         macro_repr = json.dumps(macro_ctx, sort_keys=True, default=str)
         traj_hash = hashlib.sha256(traj_repr.encode("utf-8")).hexdigest()[:12]
@@ -504,12 +502,12 @@ class CandleTrajectoryExtractor:
 
 class JevDecisionEngine:
     """
-    Bộ phán quyết AI System-1:
-    - Chế độ rõ ràng thông qua biến môi trường JEV_MODE (native | external | backtest).
-    - Mặc định: 'native' (không bao giờ thực hiện HTTP request, chạy 100% cục bộ <1ms).
-    - External Mode: Chỉ gọi API khi JEV_MODE='external' và có JEV_API_KEY.
-    - Caching SQLite thông minh, đa tiến trình an toàn (WAL mode, busy_timeout=5000), không cache lỗi.
-    - Tất định hoàn toàn (deterministic) trong môi trường Backtest.
+    AI System-1 Decision Engine:
+    - Explicit mode via JEV_MODE (native | external | backtest).
+    - Default: 'native' (zero HTTP requests, 100% local <1ms).
+    - External Mode: Calls API only when JEV_MODE='external' and JEV_API_KEY is set.
+    - SQLite caching with multiprocess safety (WAL mode, busy_timeout=5000).
+    - Fully deterministic in backtesting.
     """
 
     def __init__(
@@ -687,8 +685,8 @@ class JevDecisionEngine:
                         raw = json.loads(row[0])
                         if isinstance(raw, dict) and "answers" in raw:
                             return raw
-                    except Exception:
-                        pass
+                    except (json.JSONDecodeError, TypeError, KeyError) as err:
+                        logger.debug(f"Raw external cache decode error: {err}")
         except Exception as e:
             logger.debug(f"Raw external cache lookup bypassed: {e}")
         return None
@@ -706,11 +704,11 @@ class JevDecisionEngine:
 
     def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Thực hiện đánh giá và đưa ra phán quyết.
-        1. Kiểm tra tính hợp lệ của Payload.
-        2. Kiểm tra Cache SQLite (chỉ chấp nhận cache có status SUCCESS).
-        3. Phân luồng theo Mode (native, backtest, external).
-        4. Áp dụng Fail-Safe Policy nghiêm ngặt khi có lỗi.
+        Evaluate payload and emit verdict.
+        1. Validate payload.
+        2. Lookup SQLite cache (accept only SUCCESS status).
+        3. Route by mode (native, backtest, external).
+        4. Apply fail-safe policy on error.
         """
         if not payload or not isinstance(payload, dict):
             return make_verdict(
@@ -727,7 +725,7 @@ class JevDecisionEngine:
         p_hash = payload.get("payload_hash", "")
         seq = payload.get("trajectory_sequence", [])
 
-        # Kiểm tra tính sẵn sàng của dữ liệu
+        # Verify data readiness
         if not seq or len(seq) < 5:
             return make_verdict(
                 decision=JevDecision.VETO,
@@ -739,7 +737,7 @@ class JevDecisionEngine:
                 source="validator"
             )
 
-        # 1. Tra cứu Cache SQLite — full identity (payload + model + prompt + threshold + policy + mode)
+        # 1. Lookup SQLite cache with full identity token
         cache_key = self._build_cache_key(p_hash) if p_hash else ""
         if self.cache_db and cache_key:
             try:
@@ -795,7 +793,7 @@ class JevDecisionEngine:
             except Exception as e:
                 logger.debug(f"Cache lookup bypassed: {e}")
 
-        # 2. Xử lý theo Mode
+        # 2. Route by mode
         if self.mode == "native" or self.mode == "backtest":
             verdict = self._evaluate_native_sequence(payload)
         elif self.mode == "external":
@@ -843,7 +841,7 @@ class JevDecisionEngine:
         else:
             verdict = self._evaluate_native_sequence(payload)
 
-        # 3. Ghi vào Cache SQLite (chỉ khi SUCCESS + identity hợp lệ)
+        # 3. Write to SQLite cache on SUCCESS
         threshold_token = self._cache_threshold_token()
         if (
             self.cache_db
@@ -895,8 +893,8 @@ class JevDecisionEngine:
         cached_raw: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Gửi payload tới endpoint Jev System-1 Cloud (TypeSafe) và tính toán Hybrid Score.
-        AI noul đóng vai trò tham số hiệu chỉnh (weight_ai) thay vì gác cổng nhị phân.
+        Send payload to Jev Cloud endpoint and compute hybrid score.
+        AI noul acts as a continuous score weight instead of binary gate.
         """
         side = payload.get("side", JevSide.NONE.value).upper()
         pair = payload.get("pair", "UNKNOWN")
@@ -1083,11 +1081,11 @@ class JevDecisionEngine:
     def _evaluate_native_sequence(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Native Quant System-1 Evaluator:
-        Phân tích chuỗi 32 nến thời gian thực (đảm bảo >= 5 nến):
-        1. Nến kích hoạt (Impulse / Adverse rejection wick).
-        2. Pha nén biên độ (Pre-breakout Compression).
-        3. Dòng lệnh liên tục (Sequential Order Flow closes).
-        4. Hợp lưu đa khung vĩ mô (Macro Confluence).
+        Analyze 32-candle sequence:
+        1. Trigger impulse candle.
+        2. Pre-breakout compression phase.
+        3. Sequential order flow closes.
+        4. Macro MTF confluence.
         """
         side = payload.get("side", JevSide.NONE.value).upper()
         seq = payload.get("trajectory_sequence", [])
@@ -1107,7 +1105,7 @@ class JevDecisionEngine:
         reasons = []
         confidence = 0.50
 
-        # --- A. Phân tích nến kích hoạt (Nến cuối cùng - idx 0) ---
+        # A. Trigger candle analysis
         last_candle = seq[-1]
         is_impulse = (last_candle.get("body_ratio", 0) >= 0.55) and (last_candle.get("vol_ratio", 0) >= 1.20)
         has_adverse_wick = (
@@ -1122,7 +1120,7 @@ class JevDecisionEngine:
             confidence += 0.15
             reasons.append("Impulsive breakout candle with expanding volume")
 
-        # --- B. Phân tích pha nén biên độ (Pre-breakout Compression) ---
+        # B. Pre-breakout compression
         prior_candles = seq[-5:-1]
         if prior_candles:
             avg_prior_vol = sum(c.get("vol_ratio", 1.0) for c in prior_candles) / len(prior_candles)
@@ -1131,7 +1129,7 @@ class JevDecisionEngine:
                 confidence += 0.10
                 reasons.append("Clean pre-breakout volatility compression confirmed")
 
-        # --- C. Phân tích dòng lệnh liên tục (Sequential Order Flow) ---
+        # C. Sequential order flow
         favorable_closes = sum(
             1 for c in seq[-5:] 
             if (c.get("close_pos", 0.5) <= 0.40 if side == "SHORT" else c.get("close_pos", 0.5) >= 0.60)
@@ -1140,7 +1138,7 @@ class JevDecisionEngine:
             confidence += 0.10
             reasons.append(f"Directional order flow aligned ({favorable_closes}/5 candles favorable)")
 
-        # --- D. Hợp lưu đa khung vĩ mô (Macro Context) ---
+        # D. Macro MTF context
         trend_4h = macro.get("trend_4h", "NEUTRAL")
         atr_pct = macro.get("atr_percentile", 50.0)
 
@@ -1159,22 +1157,22 @@ class JevDecisionEngine:
             confidence += 0.10
             reasons.append(f"AI Lens Confluence Score strong ({score:.1f})")
 
-        # Phạt nặng nếu ATR ở vùng bão quét biến động cực đại (>90%)
+        # Heavy penalty if ATR in extreme volatility zone (>90%)
         if atr_pct >= 90.0:
             confidence -= 0.20
             reasons.append(f"Extreme ATR volatility risk ({atr_pct:.1f}%)")
 
-        # --- E. Cấu trúc thị trường & Biên rơi tự do (Headroom & Intermediate Momentum) ---
+        # E. Market structure & headroom
         floor_dist = macro.get("floor_20d_dist_pct", 0.0)
         dist_ema50_1h = macro.get("ema_50_1h_dist_pct", 0.0)
         rsi_1h = macro.get("rsi_1h", 50.0)
 
         if side == "SHORT":
-            # Thưởng hợp lưu: Biên rơi tự do lớn (>= 15% trên đáy 20D) + Giá dưới EMA50 1H + RSI 1H gấu (< 50)
+            # Confluence bonus: Large headroom (>= 15% above 20D floor) + Price < EMA50 1H + Bearish RSI 1H (< 50)
             if floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
                 confidence += 0.10
                 reasons.append(f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)")
-            # Phạt bẫy đảo chiều: Bán ép vào sàn hỗ trợ cứng (< 8%) hoặc bán ngược sóng khi giá trên EMA50 1H và RSI 1H > 50
+            # Reversal trap penalty: Selling into hard floor (< 8%) or counter-wave
             elif floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0):
                 confidence -= 0.10
                 reasons.append("Counter-trend trap or exhausted floor risk on short")
@@ -1188,7 +1186,7 @@ class JevDecisionEngine:
 
         confidence = max(0.0, min(1.0, round(confidence, 2)))
 
-        # Native Heuristic threshold: >= 0.70 là CONFIRM, < 0.70 là VETO
+        # Native Heuristic threshold: >= 0.70 CONFIRM, < 0.70 VETO
         decision = JevDecision.CONFIRM.value if confidence >= 0.70 else JevDecision.VETO.value
         regime = (
             JevMarketRegime.TREND_EXPANSION.value if is_impulse 

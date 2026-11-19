@@ -61,12 +61,12 @@ class CompositeSensor(BaseSensor):
         self.sensor_type = sensor_type
         self._children: Tuple[BaseSensor, ...] = tuple(children)
         self._mode = mode if isinstance(mode, CombineMode) else CombineMode(str(mode))
-        self._k = int(k)
+        self._k = k
         self._side_filter = side
         self.min_history = int(
             min_history
             if min_history is not None
-            else max(int(getattr(c, "min_history", 100)) for c in self._children)
+            else max(getattr(c, "min_history", 100) for c in self._children)
         )
 
     @property
@@ -91,7 +91,7 @@ class CompositeSensor(BaseSensor):
             for event in child.scan(dataframe, pair, candle_index=candle_index):
                 if self._side_filter is not None and event.side != self._side_filter:
                     continue
-                key = (int(event.candle_index), event.side)
+                key = (event.candle_index, event.side)
                 # one hit per child name per bar/side
                 child_hits[key][child.name] = event
 
@@ -173,7 +173,7 @@ def is_legacy_sniper_pass(primary: str, raw_features: dict, side: str) -> bool:
 
     Partial part sensors alone are NOT a pass.
     """
-    side = str(side).lower()
+    side = side.lower()
     expected = f"setup:sniper_{side}"
     if primary == expected:
         return True

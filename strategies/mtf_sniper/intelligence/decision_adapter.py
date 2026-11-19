@@ -25,7 +25,7 @@ class JevDecisionAdapter:
 
     def __init__(self, *, force_native: bool = False, mode: Optional[str] = None) -> None:
         self._extractor = CandleTrajectoryExtractor
-        self._force_native = bool(force_native)
+        self._force_native = force_native
         if self._force_native:
             resolved_mode = "native"
         else:

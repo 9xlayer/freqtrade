@@ -55,7 +55,7 @@ class ScoreConfig:
 
     @classmethod
     def with_threshold(cls, threshold: float, **kwargs: Any) -> "ScoreConfig":
-        return cls(pass_threshold=float(threshold), **kwargs)
+        return cls(pass_threshold=threshold, **kwargs)
 
 
 class CandidateScorer:
@@ -102,7 +102,7 @@ class CandidateScorer:
 
         cfg = self.config
         policy_s = min(1.0, max(0.0, float(policy_result.score or 0.0)))
-        confluence_s = min(1.0, max(0.0, (int(candidate.confluence_count) - 1) / 3.0))
+        confluence_s = min(1.0, max(0.0, (candidate.confluence_count - 1) / 3.0))
         sensor_s = self._sensor_quality(candidate)
         near_miss_s = self._near_miss_quality(policy_result)
         context_s = self._context_quality(candidate.side, row)

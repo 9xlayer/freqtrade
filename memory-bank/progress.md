@@ -4,7 +4,12 @@
 - Part sensors + SetupComposer recipes (`setup:sniper_short/long`)
 - Vectorized AND fast path in `EntryPipeline` (BT-safe)
 - Policy setup-only ACCEPT; live Hunter off
-- 5Y Decision-OFF parity with legacy AND-mask system
+- **Dual-Regime Native Waterfall**: Re-activated via `MomentumRadar.find_candidates(dataframe, cooldown_bars=12, directional_cooldown=True)` with **Dual-Regime Filter** in `ShortPolicy`:
+  - Regime A (Vacuum Breakdown `floor_dist <= 0`): Price breaks 20-day swing low, free-fall momentum permitted unless in capitulation selling climax (`dist_ema50_4h >= -6.0%`, `dist_ema50_1d >= -15.0%`).
+  - Regime B (In-Range Breakdown `floor_dist > 0`): High-confidence momentum filters: not overextended (`dist_ema50_4h >= -3.5%`, `dist_ema50_1d >= -12.0%`), not macro bull (`dist_ema200_1d <= 5.0%`), 4H MACD histogram <= 35.0, 4H volatility expanding (`bb_width_4h >= 0.035`), high floor guard.
+- **BTC Nov 12, 2026 Crash Captured**: Entered at $72,417.20, exited at trailing stop for **+108.34% ROE** (+$15,660.71 USDT in 5Y compound).
+- **5Y 2022-2026 Backtest Proven (`20220101-20261116`)**: 354 trades, **+55,991.80 USDT (+5,599.18%)**, **Max DD: 18.89%**, **WR: 57.6%**. Outperforms pre-waterfall baseline (+52,690 USDT) by **+$3,301.03 USDT (+330 pp)** with ZERO increase in Drawdown (18.89% flat)! Calmar surges to **318.39**! Waterfall trades contributed **+$22,362.15 USDT nominal PnL** (BTC +$16,054 USDT, ETH +$6,307 USDT).
+- **Architectural Guardrails Linter & Quality Standards**: Enforces AGENT OPERATING PRINCIPLES with automated checks (`scripts/lint_guardrails.py`, LINT001-LINT014) covering 100% English codebase (Rule 2), 99% No-Comment Policy (<5% density), anti-lookahead bias (`shift(-k)`), anti-silent-exception-swallowing, directional isolation, and redundant type-cast prevention. All 410 unit tests passing.
 - Version sync: package/strategy `4.4.1-deterministic`; Decision engine `2.7.2` (richctx + prompt variants); Hunter `2.7.0`
 - Hybrid Decision Score + High-Runway Confluence: AI noul integrated as continuous score term (`w_ai=0.10`, `choppy_penalty=0.05`). With structural runway confluence (`floor_dist >= 15%`, `dist_ema50_1h < 0`, `rsi_1h < 50` -> +0.10 bonus) and trap protection, 5Y BT reaches **+5269.08%** (+$52,690.77 USDT), **PF 1.730**, **WR 58.80%**, **DD 18.89%**. Successfully rescues the +107.34% winner (2024-01-20 ETH) while fully vetoing the -27.95% crash (2025-11-24 ETH), outperforming Decision OFF (+5096.55%) by +172.5 pp!
 - External prompt A/B harness: `JEV_DECISION_PROMPT_VARIANT` + scorecard — **5Y Pareto NO_SHIP** for binary gate (hybrid score succeeds instead)

@@ -49,7 +49,7 @@ def is_mutable_model_id(model_id: Optional[str]) -> bool:
     """True when model id is a floating alias (e.g. jev-latest), not an immutable version."""
     if not model_id:
         return True
-    mid = str(model_id).strip().lower()
+    mid = model_id.strip().lower()
     if mid in _MUTABLE_MODEL_ALIASES:
         return True
     if mid.endswith("-latest") or mid.endswith(":latest"):
@@ -97,12 +97,12 @@ def is_setup_valid_for_side(setup_type: Union[str, JevSetupType], side: str) -> 
 
 def _clean_val(val: Any) -> Any:
     """
-    Chuẩn hóa đệ quy giá trị để deterministic serialization:
+    Recursively normalize values for deterministic serialization:
     - NaN / pd.NA / None -> None
     - Inf / -Inf -> 'Infinity' / '-Infinity'
-    - Float -> Làm tròn 6 chữ số thập phân (loại bỏ floating-point jitter giữa các OS/CPU)
-    - Dict -> Sắp xếp keys tăng dần
-    - List/Tuple -> List các phần tử đã chuẩn hóa
+    - Float -> Round to 6 decimal places to prevent cross-OS jitter
+    - Dict -> Sort keys ascending
+    - List/Tuple -> List of normalized elements
     """
     if val is None:
         return None
@@ -133,20 +133,20 @@ def build_canonical_payload(
     engine_version: str = HUNTER_ENGINE_VERSION
 ) -> Dict[str, Any]:
     """
-    Tạo canonical payload chứa toàn bộ dữ liệu thực sự ảnh hưởng đến verdict của Hunter:
-    1. Chuỗi nến OHLCV (open, high, low, close, volume)
-    2. Derived features có mặt trong DataFrame ảnh hưởng trực tiếp đến Native & External engines:
+    Create canonical payload containing all data affecting Hunter verdict:
+    1. OHLCV candle sequence
+    2. Derived features directly consumed by Native & External engines
        - rel_vol
        - volume_ratio_20
-    3. Toàn bộ Macro Structural Anchors (trend_4h, ema50_1h_dist_pct, atr_percentile, range_24h_pct, ...)
-    4. Metadata sự kiện (pair, timestamp, event_trigger, current_price)
+    3. Macro Structural Anchors
+    4. Event metadata
     5. Version identity (model_version, engine_version)
     """
     macro_dict = macro_info or {}
     last_candle = df_32.iloc[-1]
     current_price = float(last_candle["close"])
 
-    # Xác định các cột OHLCV và derived features thực sự được tiêu thụ
+    # Identify consumed OHLCV and derived columns
     core_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df_32.columns]
     derived_cols = [c for c in ["rel_vol", "volume_ratio_20"] if c in df_32.columns]
     all_consumed_cols = core_cols + derived_cols
@@ -157,22 +157,22 @@ def build_canonical_payload(
         candles_data.append(c_dict)
 
     canonical = {
-        "pair": str(pair),
-        "timestamp": str(timestamp),
-        "event_trigger": str(event_trigger),
+        "pair": pair,
+        "timestamp": timestamp,
+        "event_trigger": event_trigger,
         "current_price": _clean_val(current_price),
         "candles": candles_data,
         "macro": _clean_val(macro_dict),
-        "model_version": str(model_version),
-        "engine_version": str(engine_version)
+        "model_version": model_version,
+        "engine_version": engine_version
     }
     return canonical
 
 
 def compute_payload_hash(payload: Dict[str, Any]) -> str:
     """
-    Hash deterministic canonical payload bằng SHA-256.
-    Đảm bảo 100% tất định (deterministic), không bị ảnh hưởng bởi thứ tự key hay float representation.
+    Compute deterministic SHA-256 hash of canonical payload.
+    Ensures 100% determinism independent of key ordering or float representation.
     """
     canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()[:16]
@@ -180,23 +180,23 @@ def compute_payload_hash(payload: Dict[str, Any]) -> str:
 
 class MomentumRadar:
     """
-    Tầng 1: Radar quét cơ hội (High-Recall Candidate Generator)
-    Chạy cục bộ siêu tốc (<1ms), chỉ đánh thức Jev khi thị trường có biến động thực sự.
+    Stage 1: High-Recall Momentum Candidate Radar
+    Runs locally (<1ms), triggers only on real market expansion.
     """
 
     @classmethod
     def find_candidates(cls, df: DataFrame, cooldown_bars: int = 12, directional_cooldown: bool = False) -> List[Tuple[int, str]]:
         """
-        Quét nhanh dataframe để tìm các điểm xung lực đáng chú ý:
-        - Cooldown 12 nến (3 tiếng) giữa các lần đánh thức JEV.
-        - Đột biến Volume (>= 4.0x) kèm biên độ lớn (>= 2.2x ATR)
-        - Hoặc phá vỡ ngưỡng 24 giờ (96 nến) kèm Volume >= 2.5x
-        - Chống chia cho 0, kiểm tra NaN/Inf.
+        Scan dataframe for significant momentum impulses:
+        - 12 bars cooldown (3 hours) between candidate triggers.
+        - Volume surge (>= 4.0x) with wide range (>= 2.2x ATR)
+        - Or 24h range breakout (96 bars) with volume >= 2.5x
+        - Zero-division protection, NaN/Inf checks.
         """
         if df is None or len(df) < 100:
             return []
 
-        # Safe division chống division by zero & NaN
+        # Safe division against zero and NaN
         vol_sma = df["volume"].rolling(20, min_periods=1).mean().replace(0, np.nan)
         vol_ratio = (df["volume"] / vol_sma).fillna(0.0)
 
@@ -255,8 +255,8 @@ class MomentumRadar:
 
 class JevHunterCache:
     """
-    Bộ nhớ đệm SQLite cục bộ cho các phán quyết của Jev Hunter.
-    Hỗ trợ WAL mode, concurrency safe, version-aware, và không lưu transient errors.
+    Local SQLite cache for Jev Hunter verdicts.
+    Supports WAL mode, concurrency-safe, version-aware, no transient errors.
     """
 
     def __init__(self, db_path: str = "user_data/jev_hunter_cache.sqlite"):
@@ -288,7 +288,7 @@ class JevHunterCache:
                         PRIMARY KEY (pair, timestamp, engine_version, model_version, payload_hash)
                     )
                 """)
-                # Di chuyển schema tự động nếu phiên bản cũ chưa có payload_hash trong PRIMARY KEY
+                # Auto-migrate schema if legacy version lacks payload_hash in PRIMARY KEY
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(jev_hunter_verdicts)")
                 columns = cursor.fetchall()
@@ -346,19 +346,19 @@ class JevHunterCache:
                     FROM jev_hunter_verdicts
                     WHERE pair=? AND timestamp=? AND engine_version=?
                 """
-                params = [pair, str(timestamp), str(engine_version)]
+                params = [pair, timestamp, engine_version]
                 if model_version:
                     query += " AND model_version=?"
-                    params.append(str(model_version))
+                    params.append(model_version)
                 if payload_hash:
                     query += " AND payload_hash=?"
-                    params.append(str(payload_hash))
+                    params.append(payload_hash)
 
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
                 if row:
                     action, setup_type, conf, stat, raw_resp_str, p_hash, m_ver = row
-                    # Không trả về cached error/invalid entries
+                    # Do not return cached error/invalid entries
                     if stat not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
                         return None
 
@@ -372,13 +372,13 @@ class JevHunterCache:
                         "raw_response": json.loads(raw_resp_str) if raw_resp_str else {}
                     }
 
-                # Tra cứu fallback trong bảng frozen historical dataset (jev_verdicts)
-                # Chỉ cho phép fallback sang legacy frozen nếu KHÔNG yêu cầu model_version cụ thể hoặc model_version là "jev-frozen"
+                # Lookup fallback in frozen historical table
+                # Allow legacy fallback only when no model_version is required or model is jev-frozen
                 if model_version is None or model_version == "jev-frozen":
                     try:
                         cursor.execute(
                             "SELECT action, setup_type, confidence, raw_response FROM jev_verdicts WHERE pair=? AND timestamp=?",
-                            (pair, str(timestamp))
+                            (pair, timestamp)
                         )
                         legacy_row = cursor.fetchone()
                         if legacy_row:
@@ -393,8 +393,8 @@ class JevHunterCache:
                                 "model_version": "jev-frozen",
                                 "raw_response": json.loads(l_raw) if l_raw else {}
                             }
-                    except Exception:
-                        pass
+                    except (json.JSONDecodeError, ValueError) as err:
+                        logger.debug(f"[JevHunterCache] Legacy parse error: {err}")
         except Exception as e:
             logger.warning(f"[JevHunterCache] Read error: {e}")
         return None
@@ -412,11 +412,11 @@ class JevHunterCache:
         model_version: str = HUNTER_MODEL_VERSION_NATIVE,
         engine_version: str = HUNTER_ENGINE_VERSION
     ):
-        # KHÔNG cache transient failures, unavailable hay invalid response
+        # Never cache transient failures or invalid responses
         if status not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
             return
 
-        p_hash = str(payload_hash) if payload_hash else "no_hash"
+        p_hash = payload_hash if payload_hash else "no_hash"
         try:
             with sqlite3.connect(self.db_path, timeout=30.0, isolation_level="IMMEDIATE") as conn:
                 conn.execute("PRAGMA busy_timeout = 30000;")
@@ -428,14 +428,14 @@ class JevHunterCache:
                     """,
                     (
                         pair,
-                        str(timestamp),
-                        str(engine_version),
-                        str(model_version),
-                        str(p_hash),
-                        str(action),
-                        str(setup_type),
-                        float(confidence),
-                        str(status),
+                        timestamp,
+                        engine_version,
+                        model_version,
+                        p_hash,
+                        action,
+                        setup_type,
+                        confidence,
+                        status,
                         json.dumps(raw_response or {}, default=str)
                     )
                 )
@@ -446,8 +446,8 @@ class JevHunterCache:
 
 class JevHunterEngine:
     """
-    Tầng 2: Jev Active Hunter (Bộ não ra quyết định)
-    Hỗ trợ Native Heuristic, External API, và Backtest Mode đảm bảo tính tất định.
+    Stage 2: Jev Active Hunter Decision Engine
+    Supports Native Heuristic, External API, and Backtest Mode with full determinism.
     """
 
     def __init__(
@@ -460,7 +460,7 @@ class JevHunterEngine:
         missing_model_policy: Optional[str] = None
     ):
         self._load_env()
-        # Chế độ: native | external | backtest
+        # Modes: native | external | backtest
         self.mode = (mode or os.environ.get("JEV_MODE", "native")).lower()
         if self.mode not in ("native", "external", "backtest"):
             self.mode = "native"
@@ -469,7 +469,7 @@ class JevHunterEngine:
         self.api_key = api_key or os.environ.get("JEV_API_KEY")
         self.cache = JevHunterCache(cache_db)
 
-        # Cấu hình external model version bất biến và policy xử lý khi backend thiếu model version
+        # External model version configuration and missing version policy
         self.external_model_version = (
             model_version or
             os.environ.get("JEV_HUNTER_MODEL_VERSION") or
@@ -521,8 +521,8 @@ class JevHunterEngine:
                                     k, v = k.strip(), v.strip().strip('"').strip("'")
                                     if k not in os.environ:
                                         os.environ[k] = v
-                    except Exception:
-                        pass
+                    except (OSError, UnicodeDecodeError) as err:
+                        logger.debug(f"[JevHunter] Env load error: {err}")
 
     def evaluate_candidate(
         self,
@@ -533,10 +533,10 @@ class JevHunterEngine:
         macro_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Đánh giá chuỗi nến (tối đa 32 nến, tối thiểu 16 nến) của ứng viên để ra quyết định:
-        enter_short, enter_long hay no_trade kèm setup_type và status rõ ràng.
+        Evaluate candidate candle sequence (16-32 candles):
+        enter_short, enter_long, or no_trade with setup_type and status.
         """
-        # Fail-closed nếu dữ liệu không đủ
+        # Fail-closed if insufficient data
         if df_32 is None or len(df_32) < 16:
             return {
                 "action": JevHunterAction.NO_TRADE.value,
@@ -586,10 +586,10 @@ class JevHunterEngine:
         if cached:
             return cached
 
-        # 2. Xử lý theo từng Mode
+        # 2. Route by mode
         if self.mode == "backtest":
-            # Trong backtest mode, tuyệt đối không gọi live API.
-            # Nếu không có cache sẵn, chuyển sang Native Heuristic để đảm bảo tính tất định.
+            # Never call live API in backtest mode.
+            # If cache miss, fallback to Native Heuristic for determinism.
             return self._evaluate_native(df_32, pair, timestamp, event_trigger, macro_dict, payload_hash)
 
         elif self.mode == "native":
@@ -598,7 +598,7 @@ class JevHunterEngine:
         elif self.mode == "external":
             return self._evaluate_external(df_32, pair, timestamp, event_trigger, macro_dict, payload_hash)
 
-        # Fallback an toàn
+        # Safe fallback
         return {
             "action": JevHunterAction.NO_TRADE.value,
             "setup_type": JevSetupType.UNKNOWN.value,
@@ -619,13 +619,13 @@ class JevHunterEngine:
         payload_hash: str
     ) -> Dict[str, Any]:
         """
-        Đánh giá Native Quant offline siêu tốc (<1ms) và tất định 100%.
+        High-speed offline Native Quant evaluation (<1ms, 100% deterministic).
         """
         last_c = df_32.iloc[-1]
         is_short_event = "SHORT" in event_trigger
         is_long_event = "LONG" in event_trigger
 
-        # Tính toán volume ratio an toàn: ưu tiên rel_vol nếu có, fallback rolling 20 SMA
+        # Calculate volume ratio safely
         if "rel_vol" in last_c and not pd.isna(last_c["rel_vol"]):
             vol_ratio = float(last_c["rel_vol"])
         elif "volume_ratio_20" in last_c and not pd.isna(last_c["volume_ratio_20"]):
@@ -644,7 +644,7 @@ class JevHunterEngine:
 
         # Heuristic 1: Waterfall Collapse (SHORT)
         if is_short_event:
-            # Điều kiện Waterfall: Nến đỏ thân đặc, nến đóng gần đáy (lower wick nhỏ <= 0.285), volume nở rộng
+            # Waterfall condition: Solid red candle, close near low, volume expansion
             is_strong_bear = (last_c["close"] < last_c["open"]) and (body_ratio >= 0.50) and (lower_wick_ratio <= 0.285)
             is_breakdown = ("BREAKOUT" in event_trigger) or ("SURGE" in event_trigger)
             macro_bear = (trend_4h == "BEAR") or (macro_info.get("ema50_1h_dist_pct", 0.0) < 0)
@@ -703,7 +703,7 @@ class JevHunterEngine:
                 )
                 return verdict
 
-        # Không đạt tiêu chí xung lực -> no_trade
+        # Incompatible impulse -> no_trade
         verdict = {
             "action": JevHunterAction.NO_TRADE.value,
             "setup_type": JevSetupType.CONSOLIDATION_NOISE.value,
@@ -732,7 +732,7 @@ class JevHunterEngine:
         payload_hash: str
     ) -> Dict[str, Any]:
         """
-        Gọi API Jev Cloud và phân tích phản hồi HTTP JSON.
+        Call Jev Cloud API and parse HTTP JSON response.
         """
         if not self.api_key:
             logger.warning("[JevHunterEngine] API key missing for external mode. Returning UNAVAILABLE.")
@@ -746,9 +746,9 @@ class JevHunterEngine:
                 "error": "Missing JEV_API_KEY"
             }
 
-        # Xây dựng narrative sequence an toàn
+        # Build narrative sequence safely
         candles_summary = []
-        # Tính vol_sma chuẩn cho sequence
+        # Calculate standard vol_sma for sequence
         vol_sma_series = df_32["volume"].rolling(20, min_periods=1).mean().replace(0, np.nan)
 
         for i, (_, c) in enumerate(df_32.iterrows()):
@@ -833,7 +833,7 @@ Radar Event: {event_trigger}
             with urllib.request.urlopen(req, timeout=8.0) as resp:
                 res = json.loads(resp.read().decode("utf-8"))
 
-            # Schema Validation Nghiêm ngặt: Bắt buộc root phải có 'answers'
+            # Strict schema validation: Root must contain answers
             if not isinstance(res, dict) or "answers" not in res:
                 logger.warning(f"[JevHunterEngine] API invalid root schema: {res}")
                 return {
@@ -850,7 +850,7 @@ Radar Event: {event_trigger}
             sug_action = ans.get("suggested_action")
             setup_info = ans.get("setup_type")
 
-            # Bắt buộc phải có cả suggested_action và setup_type dưới dạng dict
+            # Requires both suggested_action and setup_type dicts
             if not isinstance(sug_action, dict) or not isinstance(setup_info, dict):
                 logger.warning(f"[JevHunterEngine] API missing required answer objects: {ans}")
                 return {
@@ -867,7 +867,7 @@ Radar Event: {event_trigger}
             probs = sug_action.get("probabilities")
             setup_raw = setup_info.get("choice")
 
-            # Choice và probabilities phải hợp lệ và đầy đủ
+            # Validate choices and probabilities
             if (
                 not action_raw or not isinstance(action_raw, str) or
                 action_raw.lower() not in ("enter_short", "enter_long", "no_trade") or

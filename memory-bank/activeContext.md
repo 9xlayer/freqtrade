@@ -1,14 +1,28 @@
 # Active Context
 
 ## Current focus
-**v4.4.1-deterministic** — Hybrid Score architecture implemented. AI converted from binary gatekeeper to bounded continuous score term:
-`score = score_native + clip(w_ai * (noul - 0.5) * 2, -w_ai, +w_ai) - regime_penalty`.
-Confirmed at threshold 0.70.
+**v4.4.1-deterministic** — Dual-Regime Native Waterfall Optimization & Macro Climax Protection.
+- Conducted deep quantitative analysis of all 67 Waterfall trades over 5Y dataset (`20220101-20261116`).
+- Uncovered root causes of performance degradation: ETH false breakdown whipsaws (-$1.1k loss) and "Capitulation Selling Climax" trap (`dist_ema50_4h < -4%`, `dist_ema50_1d < -14%`).
+- Architected & implemented **Dual-Regime Waterfall Filter** in `ShortPolicy`:
+  - **Regime A (Vacuum Breakdown, `floor_dist <= 0`):** Price officially breaks below 20-day swing low into price discovery / vacuum (e.g. BTC Nov 12 @ 72.4k). Free-fall momentum allowed, capped only by extreme capitulation guards (`dist_ema50_4h >= -6.0%`, `dist_ema50_1d >= -15.0%`).
+  - **Regime B (In-Range Breakdown, `floor_dist > 0`):** Price is floating above 20-day floor. Requires strict confluence to avoid traps: not overextended (`dist_ema50_4h >= -3.5%`, `dist_ema50_1d >= -12.0%`), not macro bull (`dist_ema200_1d <= 5.0%`), 4H MACD histogram not bullish (`macdhist_4h <= 35.0`), 4H volatility expanding (`bb_width_4h >= 0.035`), and high floor guard (`floor_dist > 10%` requires `vol_ratio >= 4.0` or `bb_width_4h >= 0.06`).
+- **5Y Backtest Scorecard (`20220101-20261116`):**
+  - Trades: **354** | Win Rate: **57.6%** (204W / 150L)
+  - Total Profit: **+$55,991.80 USDT (+5,599.18%)** — **+$3,301.03 USDT higher than pre-waterfall baseline!**
+  - Max Drawdown: **18.89%** — **EXACTLY flat to baseline (zero DD surge)!**
+  - Calmar: **318.39** | Sharpe: **1.28** | Sortino: **1.53**
+  - Waterfall contribution: 70 trades, **+$22,362.15 USDT nominal PnL** (BTC +$16,054 USDT, ETH +$6,307 USDT).
+  - Preserved massive Nov 12 BTC waterfall trade (+108.34% ROE, +$15,660.71 USDT).
+- All 410 strategy unit tests passing (`pytest tests/strategy`).
+- Enforced AGENT OPERATING PRINCIPLES & VERIFICATION STANDARDS: Determinism Over Prose, Codebase Hygiene (no workarounds, hacks, dead paths), 99% No-Comment Policy (comment density < 5%), strict architectural boundaries, 100% English codebase (Rule 2), and automated guardrails linter (`scripts/lint_guardrails.py`, LINT001-LINT014).
 
-## Evidence (2026-11-19: Hybrid Score + High-Runway Confluence, 5Y 20220101-20261116)
-| Setup | Trades | PnL % | Profit abs (USDT) | Max DD | PF | Winrate |
-|---|---:|---:|---:|---:|---:|---:|
-| **Hybrid + Runway Confluence** | **291** | **+5269.08%** | **52,690.77** | **18.89%** | **1.730** | **58.80%** |
+## Evidence (2026-11-19: Waterfall Evolution 5Y 20220101-20261116)
+| Setup | Trades | PnL % | Profit abs (USDT) | Max DD | Calmar | Sharpe | Winrate |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Dual-Regime Waterfall (Production)** | **354** | **+5599.18%** | **55,991.80** | **18.89%** | **318.39** | **1.28** | **57.60%** |
+| Pre-Waterfall Baseline | 291 | +5269.08% | 52,690.77 | 18.89% | 299.14 | 1.25 | 58.80% |
+| Naive Waterfall (Unfiltered) | 370 | +1390.04% | 13,900.35 | 35.88% | 48.61 | 0.88 | 52.40% |
 | Decision OFF (pure) | 320 | +5096.55% | 50,965.50 | 18.89% | 1.670 | 59.10% |
 | Hybrid Baseline (w=0.10, cp=0.05) | 302 | +4074.85% | 40,748.53 | 18.89% | 1.722 | 58.94% |
 | Native Decision (Ep46) | 299 | +3866.60% | 38,666.00 | 18.89% | 1.710 | 58.50% |

@@ -40,7 +40,7 @@ class RiskEngine:
         config_fingerprint: str = "",
     ) -> None:
         self.decision_ledger = decision_ledger
-        self.max_open_trades = int(max_open_trades)
+        self.max_open_trades = max_open_trades
         self.config_fingerprint = config_fingerprint
 
     def authorize_entry(
@@ -81,7 +81,7 @@ class RiskEngine:
         stage = ""
 
         open_n = len(list(open_trades))
-        side_l = str(side).lower()
+        side_l = side.lower()
         directional_open = sum(
             1
             for t in open_trades
@@ -131,7 +131,7 @@ class RiskEngine:
                 proposed_stake=float(proposed_stake or 0.0),
                 max_stake=float(max_stake or proposed_stake or 0.0),
                 entry_tag=entry_tag,
-                enable_dynamic_sizing=bool(enable_dynamic_sizing),
+                enable_dynamic_sizing=enable_dynamic_sizing,
             )
             lev = resolve_leverage(max_leverage)
 
@@ -150,7 +150,7 @@ class RiskEngine:
         equity: Optional[float] = None
         if wallet_equity is not None:
             try:
-                eq = float(wallet_equity)
+                eq = wallet_equity
                 if eq > 0:
                     equity = eq
             except (TypeError, ValueError):
@@ -160,7 +160,7 @@ class RiskEngine:
         )
         # Stop-distance risk budget is not implemented — leave None (unavailable).
         risk_per_trade: Optional[float] = None
-        if stop_distance_pct and float(stop_distance_pct) > 0 and equity is not None:
+        if stop_distance_pct and stop_distance_pct > 0 and equity is not None:
             # Only claim per-trade risk when an explicit stop distance was supplied
             # AND we sized from it (we do not today). Keep None until that lands.
             risk_per_trade = None
@@ -169,7 +169,7 @@ class RiskEngine:
             is_approved=approved,
             stake_amount=float(stake),
             leverage=float(lev) if approved else 0.0,
-            stoploss_rate=float(default_stoploss) if approved else 0.0,
+            stoploss_rate=default_stoploss if approved else 0.0,
             rejection_reasons=list(reasons),
             risk_budget_used_pct=None,
             risk_per_trade_pct=risk_per_trade,
