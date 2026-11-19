@@ -172,6 +172,70 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         )
         self.assertIsNone(missing)
 
+    def test_resolve_duplicate_index_uses_mask_absolute_position(self):
+        """Duplicate index labels must not confuse candle_index (use mask positions)."""
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat._candidate_registry = CandidateRegistry()
+        strat.timeframe = "15m"
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        # Two rows share label 7; only the second has the enter signal.
+        dates = [
+            base,
+            base + timedelta(minutes=15),
+            base + timedelta(minutes=30),
+            base + timedelta(minutes=45),
+        ]
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "enter_short": [False, False, True, True],
+                "enter_tag": ["", "", "short_A80plus", "short_A80plus"],
+            },
+            index=[5, 7, 7, 9],
+        )
+        strat.dp = MagicMock()
+        strat.dp.get_analyzed_dataframe.return_value = (df, None)
+
+        # Only first duplicate (iloc 2, label 7) would be wrong if we took first label 7;
+        # newest matching absolute position is 3.
+        cid = strat._resolve_candidate_id(
+            "BTC/USDT:USDT",
+            "short",
+            "short_A80plus",
+            dates[3],
+        )
+        self.assertIsNotNone(cid)
+        self.assertTrue(cid.endswith("_3"), cid)
+
+        # Single signal on second duplicate label only
+        df2 = pd.DataFrame(
+            {
+                "date": dates,
+                "enter_short": [False, False, False, True],
+                "enter_tag": ["", "", "", "short_A80plus"],
+            },
+            index=[7, 7, 7, 7],
+        )
+        strat.dp.get_analyzed_dataframe.return_value = (df2, None)
+        cid2 = strat._resolve_candidate_id(
+            "BTC/USDT:USDT",
+            "short",
+            "short_A80plus",
+            dates[3],
+        )
+        self.assertIsNotNone(cid2)
+        self.assertTrue(cid2.endswith("_3"), cid2)
+
+        # No signal
+        df3 = df2.copy()
+        df3["enter_short"] = False
+        strat.dp.get_analyzed_dataframe.return_value = (df3, None)
+        self.assertIsNone(
+            strat._resolve_candidate_id(
+                "BTC/USDT:USDT", "short", "short_A80plus", dates[3]
+            )
+        )
+
 
 class TestRuntimeModeStartupFailFast(unittest.TestCase):
     def test_load_external_config_raises_on_typo_mode(self):
