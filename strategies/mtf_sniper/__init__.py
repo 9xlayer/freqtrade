@@ -10,7 +10,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Package / live strategy (layered pipeline)
 # ---------------------------------------------------------------------------
-STRATEGY_VERSION = "4.4.1-deterministic"
+STRATEGY_VERSION = "4.5.0-waterfall"
 __version__ = STRATEGY_VERSION
 
 # ---------------------------------------------------------------------------
