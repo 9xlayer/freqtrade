@@ -104,10 +104,19 @@ class CandidateRegistry:
         entry_tag: Optional[str],
         current_time: Optional[datetime] = None,
         max_age: Optional[timedelta] = None,
+        allow_unbounded: bool = False,
     ) -> Optional[str]:
         """
         Return the newest candidate with ``timestamp <= current_time`` inside
-        the age window. Returns ``None`` when nothing matches (no future fallback).
+        the age window (default ``DEFAULT_LOOKUP_MAX_AGE`` = 6h).
+
+        Semantics:
+        - ``current_time`` **required** for age-bounded lookup (production path).
+        - If ``current_time`` is ``None`` and ``allow_unbounded`` is False →
+          return ``None`` (fail-closed; never silently return a possibly-stale ID).
+        - If ``allow_unbounded=True`` with ``current_time is None`` → return the
+          newest stored ID for diagnostics/tests only (no max-age filter).
+        - Never returns a future candidate when ``current_time`` is set.
         """
         key = _EntryKey(
             pair=str(pair),
@@ -118,7 +127,14 @@ class CandidateRegistry:
         if not bucket:
             return None
         if current_time is None:
-            return bucket[-1][2]
+            if allow_unbounded:
+                return bucket[-1][2]
+            logger.warning(
+                "[CandidateRegistry] lookup without current_time refused "
+                f"(pair={pair} side={side} tag={entry_tag!r}); "
+                "pass current_time or allow_unbounded=True"
+            )
+            return None
 
         ct = normalize_utc(current_time)
         age_limit = self._lookup_max_age if max_age is None else max_age

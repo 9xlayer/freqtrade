@@ -147,15 +147,25 @@ class TestCandidateRegistryLifecycle(unittest.TestCase):
             cand.candidate_id,
         )
 
-    def test_lookup_without_current_time_returns_newest(self):
+    def test_lookup_without_current_time_fail_closed(self):
         t0 = datetime(2024, 6, 1, 10, 0, tzinfo=timezone.utc)
         t1 = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
         c0, c1 = _cand(t0, 1), _cand(t1, 2)
         reg = CandidateRegistry()
         reg.remember(c0, "short_A80plus")
         reg.remember(c1, "short_A80plus")
+        # No current_time → refuse unbounded stale risk
+        self.assertIsNone(
+            reg.lookup(pair="BTC/USDT:USDT", side="short", entry_tag="short_A80plus")
+        )
+        # Explicit diagnostics opt-in
         self.assertEqual(
-            reg.lookup(pair="BTC/USDT:USDT", side="short", entry_tag="short_A80plus"),
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                allow_unbounded=True,
+            ),
             c1.candidate_id,
         )
 

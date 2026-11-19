@@ -16,10 +16,11 @@
 - Final P1 correlation batch: registry time-window (no future), absolute candle_index, persist verify bool, validate-on-read
 - Correlation hardening: DF fallback max-age; `parse_candidate_id` + trade pair/side match; LocalTrade custom-data lifecycle + partial-exit tests
 - Docs↔code alignment: RiskAuth confirm-path honesty; dual-path architecture; migration archive
-- Candidate ID: negative index rejected; registry `remember` validates fields; DB custom-data persist test
+- Candidate ID: unique canonical form (no UPPER/leading zeros); round-trip; lookup fail-closed without `current_time`
+- DB: expire/reload Trade session + exit ledger (`test_mtf_candidate_id_db_persist`) — not full live restart
 - Hunter: live pipeline hard-off; startup warns if profile says Hunter=True
 - Ep46 BT ON on `2eb6607`: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71
-- Remaining ops gap: live dry-run restart with open trade (unit/DB covered; full bot restart still ops)
+- Remaining ops gap: full live bot restart with open trade
 - Hunter / Momentum Radar still out of scope
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)

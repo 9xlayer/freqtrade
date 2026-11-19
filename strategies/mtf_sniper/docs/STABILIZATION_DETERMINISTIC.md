@@ -1,6 +1,6 @@
 # Stabilization — Deterministic MTF Sniper
 
-**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Phase:** Hunter OFF by design
+**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Version:** `STRATEGY_VERSION` in `__init__.py` (`4.4.1-deterministic`) · **Phase:** Hunter OFF by design
 
 ## Runtime modes
 
@@ -74,6 +74,7 @@ confirm_trade_entry
 26. **`_dataframe_position`** — `get_loc` first (last duplicate), absolute row only; covered for Range/Datetime/sparse/duplicate indexes.
 27. **Canonical ID hardening** — reject negative `candle_index`; `remember()` validates / replaces mismatched provided IDs.
 28. **RiskAuth docs honesty** — confirm path does not pass `proposed_stake`; `stake_amount`/`leverage` are not live order echoes.
+29. **Canonical uniqueness** — reject uppercase side / leading-zero epoch-index; `make→parse→make` round-trip; registry `lookup` fail-closed without `current_time`.
 
 ## Semantics: Policy vs Decision
 
@@ -107,20 +108,22 @@ Canonical `candidate_id` should match populate → confirm when registry is warm
 
 - Stop-distance-based risk budget **not** implemented (honest `sizing_method`).
 - Margin/liquidation buffer check enum exists but not fully wired to exchange margin.
-- Full Freqtrade order lifecycle (partial fill / stoploss fill / live restart) still a verification gap vs unit callback stubs.
+- **DB-backed custom-data tests** (ORM expire/reload) ≠ **full live bot restart** (process/Docker recycle with open trades) — the latter remains an ops verification gap.
+- Full Freqtrade order lifecycle (partial fill / stoploss fill) still thinner than production.
 - Informative merge/alignment beyond unit prefix tests still needs expansion.
 - JEV Hunter / Momentum Radar expansion remain **out of scope**.
 
 ## Tests executed
 
 ```bash
+# Unit (Candidate ID / parity / contracts)
 PYTHONPATH=. .venv/bin/python -m unittest \
   tests.strategy.test_mtf_data_contracts \
   tests.strategy.test_mtf_candidate_id_hardening \
-  tests.strategy.test_mtf_runtime_deterministic \
-  tests.strategy.test_mtf_candidate_parity \
   tests.strategy.test_mtf_candidate_registry \
+  tests.strategy.test_mtf_candidate_parity \
   tests.strategy.test_mtf_callback_integration \
+  tests.strategy.test_mtf_runtime_deterministic \
   tests.strategy.test_mtf_policy_grade_semantics \
   tests.strategy.test_mtf_policy_decision_semantics \
   tests.strategy.test_mtf_sniper_directional \
@@ -129,4 +132,8 @@ PYTHONPATH=. .venv/bin/python -m unittest \
   tests.strategy.test_mtf_sniper_exit_policy \
   tests.strategy.test_telemetry_pickle \
   tests.strategy.test_mtf_lookahead_indicators
+
+# DB-backed persistence (pytest + init_persistence) — not a live bot restart
+PYTHONPATH=. .venv/bin/pytest \
+  tests/strategy/test_mtf_candidate_id_db_persist.py -q
 ```

@@ -1,4 +1,9 @@
-"""DB-backed Trade custom-data persistence for Candidate ID (Freqtrade persistence)."""
+"""DB-backed Trade custom-data persistence for Candidate ID (Freqtrade persistence).
+
+These tests prove Trade custom-data survives ORM expire/reload via a fresh
+session query. They are **not** a full live-bot restart (process recycle /
+Docker restart) — that remains an operational verification gap.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -20,23 +25,7 @@ from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
 
 
-@pytest.mark.usefixtures("init_persistence")
-def test_db_backed_persist_survives_registry_clear_on_exit(fee):
-    """
-    Use real Trade + CustomDataWrapper with DB (init_persistence).
-
-    Entry fill persists candidate_id; after wiping RAM registry, exit fill
-    still recovers the same ID from Trade custom data.
-    """
-    Trade.reset_trades()
-    CustomDataWrapper.reset_custom_data()
-    create_mock_trades_usdt(fee, is_short=True, use_db=True)
-
-    trade = Trade.get_trades_proxy(is_open=True)[0]
-    assert trade.id is not None
-
-    ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
-    # Align trade identity with the ID we persist
+def _prepare_short_trade(trade: Trade, ts: datetime) -> None:
     trade.pair = "BTC/USDT:USDT"
     trade.is_short = True
     trade.enter_tag = "short_A80plus"
@@ -46,6 +35,19 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     trade.stake_amount = 100.0
     trade.leverage = 10.0
 
+
+@pytest.mark.usefixtures("init_persistence")
+def test_db_backed_persist_survives_registry_clear_on_exit(fee):
+    """Entry fill persists; after wiping RAM registry, exit fill recovers ID."""
+    Trade.reset_trades()
+    CustomDataWrapper.reset_custom_data()
+    create_mock_trades_usdt(fee, is_short=True, use_db=True)
+
+    trade = Trade.get_trades_proxy(is_open=True)[0]
+    assert trade.id is not None
+
+    ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+    _prepare_short_trade(trade, ts)
     cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
 
     strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
@@ -58,7 +60,6 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     strat.order_filled("BTC/USDT:USDT", trade, entry_order, ts)
     assert trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY) == cid
 
-    # Restart simulation: empty RAM registry; DB custom data remains
     strat._candidate_registry = CandidateRegistry()
     ledger = MagicMock()
     strat._trade_ledger = ledger
@@ -79,3 +80,61 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     assert ledger.record.called
     rec = ledger.record.call_args[0][0]
     assert rec.candidate_id == cid
+
+
+@pytest.mark.usefixtures("init_persistence")
+def test_db_expire_reload_preserves_candidate_id_for_exit_ledger(fee):
+    """
+    Persist → commit → expire session → reload Trade by id in a new query →
+    verify custom data → exit ledger with empty RAM registry.
+    """
+    Trade.reset_trades()
+    CustomDataWrapper.reset_custom_data()
+    create_mock_trades_usdt(fee, is_short=True, use_db=True)
+
+    trade = Trade.get_trades_proxy(is_open=True)[0]
+    trade_id = int(trade.id)
+    ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+    _prepare_short_trade(trade, ts)
+    cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 99)
+
+    strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+    strat._candidate_registry = CandidateRegistry()
+    strat.enable_telemetry = True
+    strat._trade_ledger_recorded_ids = set()
+    strat._resolve_candidate_id = lambda *a, **k: cid
+
+    entry_order = SimpleNamespace(ft_order_side="sell", filled=1.0, safe_amount=1.0)
+    strat.order_filled("BTC/USDT:USDT", trade, entry_order, ts)
+    assert trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY) == cid
+
+    # Flush identity fields + custom data to DB, then drop ORM identity map.
+    Trade.commit()
+    Trade.session.expire_all()
+
+    reloaded = Trade.session.get(Trade, trade_id)
+    assert reloaded is not None
+    assert reloaded.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY) == cid
+    # Strategy read path must also accept reloaded trade
+    assert StrategyMTFSniper._read_persisted_candidate_id(strat, reloaded) == cid
+
+    # Fresh strategy RAM registry — exit must still correlate via custom data
+    strat._candidate_registry = CandidateRegistry()
+    ledger = MagicMock()
+    strat._trade_ledger = ledger
+    reloaded.is_open = True
+    reloaded.close_rate = 95.0
+    reloaded.max_rate = 101.0
+    reloaded.min_rate = 94.0
+    reloaded.close_profit = 0.05
+    reloaded.close_profit_abs = 5.0
+    reloaded.exit_reason = "roi"
+    reloaded.close_date = ts.replace(tzinfo=None)
+
+    exit_order = SimpleNamespace(
+        ft_order_side="buy", filled=1.0, safe_amount=1.0, average=95.0
+    )
+    strat.order_filled("BTC/USDT:USDT", reloaded, exit_order, ts)
+
+    assert ledger.record.called
+    assert ledger.record.call_args[0][0].candidate_id == cid

@@ -32,17 +32,17 @@ Examples: `BTC/USDT:USDT_short_1717243200_42`
 
 | Helper | Role |
 |---|---|
-| `make_candidate_id` | Build canonical ID (`candle_index >= 0` or raises) |
-| `parse_candidate_id` | Parse → `ParsedCandidateId`; rejects negative index |
-| `is_canonical_candidate_id` | Structural validity (side ∈ {long,short}, pair contains `/`, index ≥ 0) |
+| `make_candidate_id` | Build canonical ID; validates pair (`/`), side exact `long`/`short`, `candle_index >= 0` |
+| `parse_candidate_id` | Parse unique canonical form only |
+| `is_canonical_candidate_id` | Parse + remake equality (round-trip stable) |
 | `candidate_id_matches_fields` | Match ID vs pair/side/timestamp/candle_index |
 | `candidate_id_matches_trade` | Optional pair/side context match |
 | `CANDIDATE_ID_MISSING` | Sentinel when correlation cannot be reconstructed |
 | `CANDIDATE_ID_CUSTOM_DATA_KEY` | `"mtf_candidate_id"` on Trade custom data |
 
-`CandidateRegistry.remember` rebuilds/replaces any provided `candidate_id` that does not match the candidate’s pair/side/timestamp/index.
+`CandidateRegistry.remember` rebuilds/replaces any provided `candidate_id` that does not match the candidate’s pair/side/timestamp/index. `lookup` requires `current_time` for age-bounded results (default max-age 6h); `allow_unbounded=True` is diagnostics-only.
 
-**Not valid:** `{pair}_{side}_{epoch}` (missing candle index), negative `candle_index`, ad-hoc tag/timestamp IDs, or IDs that fail pair/side match on read.
+**Not valid:** missing candle index; uppercase side (`LONG`); leading-zero epoch/index (`01`); negative index; bad pair; ad-hoc tag IDs.
 Correlation window: `DEFAULT_LOOKUP_MAX_AGE` = **6 hours** (shared by `CandidateRegistry.lookup` and DataFrame reconstruct fallback).
 
 ---
