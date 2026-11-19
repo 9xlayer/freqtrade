@@ -5,8 +5,7 @@
 
 This document mirrors **implemented** schemas. Target / future designs are marked explicitly and are **not** live behavior.
 
-All inter-module dataclasses are `frozen=True`.
-
+All inter-module dataclasses are `frozen=True` (**shallow** immutability only): the dataclass instance cannot rebind fields, but nested `List` / `Dict` values remain mutable unless callers treat them as read-only.
 ---
 
 ## 1. Enumerations (`core/enums.py`)
@@ -33,15 +32,17 @@ Examples: `BTC/USDT:USDT_short_1717243200_42`
 
 | Helper | Role |
 |---|---|
-| `make_candidate_id` | Build canonical ID |
-| `parse_candidate_id` | Parse → `ParsedCandidateId(pair, side, epoch, candle_index)` |
-| `is_canonical_candidate_id` | Structural validity (side ∈ {long,short}, pair contains `/`) |
+| `make_candidate_id` | Build canonical ID (`candle_index >= 0` or raises) |
+| `parse_candidate_id` | Parse → `ParsedCandidateId`; rejects negative index |
+| `is_canonical_candidate_id` | Structural validity (side ∈ {long,short}, pair contains `/`, index ≥ 0) |
+| `candidate_id_matches_fields` | Match ID vs pair/side/timestamp/candle_index |
 | `candidate_id_matches_trade` | Optional pair/side context match |
 | `CANDIDATE_ID_MISSING` | Sentinel when correlation cannot be reconstructed |
 | `CANDIDATE_ID_CUSTOM_DATA_KEY` | `"mtf_candidate_id"` on Trade custom data |
 
-**Not valid:** `{pair}_{side}_{epoch}` (missing candle index), ad-hoc tag/timestamp IDs, or IDs that fail pair/side match on read.
+`CandidateRegistry.remember` rebuilds/replaces any provided `candidate_id` that does not match the candidate’s pair/side/timestamp/index.
 
+**Not valid:** `{pair}_{side}_{epoch}` (missing candle index), negative `candle_index`, ad-hoc tag/timestamp IDs, or IDs that fail pair/side match on read.
 Correlation window: `DEFAULT_LOOKUP_MAX_AGE` = **6 hours** (shared by `CandidateRegistry.lookup` and DataFrame reconstruct fallback).
 
 ---
@@ -105,12 +106,12 @@ Produced by **either** the vectorized fast path **or** SensorSuite → Builder �
 
 ### 3.5 `RiskAuthorization` (frozen) — authorization gate, not sizing authority
 
-| Field | Type | Live meaning |
+| Field | Type | Live meaning on `confirm_trade_entry` path |
 |---|---|---|
-| `is_approved` | `bool` | Only field `confirm_trade_entry` currently consumes |
-| `stake_amount` | `float` | Echo of Freqtrade-proposed stake (metadata) |
-| `leverage` | `float` | Echo / cap metadata |
-| `stoploss_rate` | `float` | Pair/default SL rate used in auth context |
+| `is_approved` | `bool` | **Only field the Strategy currently consumes** (`return bool(auth.is_approved)`) |
+| `stake_amount` | `float` | **Not** a live Freqtrade stake echo today — confirm does **not** pass `proposed_stake` / `max_stake`, so defaults yield **`0.0`** when approved |
+| `leverage` | `float` | Metadata from `max_leverage` default (**10.0**), not the leverage Freqtrade already applied to the order |
+| `stoploss_rate` | `float` | Pair/default SL rate passed into `authorize_entry` (auth context only) |
 | `rejection_reasons` | `List[str]` | |
 | `risk_budget_used_pct` | `Optional[float]` | **`None`** until stop-distance budgeting exists |
 | `risk_per_trade_pct` | `Optional[float]` | **`None`** until implemented |
@@ -118,15 +119,16 @@ Produced by **either** the vectorized fast path **or** SensorSuite → Builder �
 | `max_open_positions` | `int` | |
 | `open_positions` | `int` | |
 | `directional_open` | `int` | |
-| `total_exposure_notional` | `float` | `sum(stake * leverage)` |
+| `total_exposure_notional` | `float` | From **open trades** (`sum(stake * leverage)`); does not include the pending order’s `auth.stake_amount` when that is 0 |
 | `total_exposure_pct` | `Optional[float]` | Only when `wallet_equity` known |
-| `wallet_equity` | `Optional[float]` | |
-| `sizing_method` | `str` | Default `"freqtrade_proposed"` |
+| `wallet_equity` | `Optional[float]` | Confirm currently does not pass equity → usually `None` |
+| `sizing_method` | `str` | Default `"freqtrade_proposed"` (label only while confirm omits stake args) |
 | `config_fingerprint` | `str` | |
 | `stage_rejected` | `str` | `entry\|portfolio\|sizing\|leverage\|stoploss\|""` |
 
-**Not implemented (do not document as live):** stop-distance risk budgeting; RiskEngine driving exchange stake/leverage from `auth.stake_amount` / `auth.leverage`. Stoploss updates still flow through Freqtrade `custom_stoploss` → `RiskEngine.get_stoploss()`.
+**Confirm call site (current):** passes portfolio context, Decision callback, `candidate_id`, and `default_stoploss` — **not** `proposed_stake`, `max_stake`, or `enable_dynamic_sizing`. Do not treat `auth.stake_amount` / `auth.leverage` as the live order size.
 
+**Not implemented (do not document as live):** stop-distance risk budgeting; RiskEngine driving exchange stake/leverage from `auth.*`. Stoploss updates still flow through Freqtrade `custom_stoploss` → `RiskEngine.get_stoploss()`. Dynamic sizing expansion is **out of scope** for stabilization.
 ### 3.6 Telemetry
 
 **`TelemetryDecisionRecord`** (frozen) — base decision fields plus:

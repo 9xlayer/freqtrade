@@ -59,9 +59,10 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Retargeted broken `user_data/strategies/*` symlinks away from deleted `strategies/active/`
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
-## Docs alignment (in progress / working tree)
-- `DATA_CONTRACTS.md` / `ARCHITECTURE.md` / `MIGRATION_PLAN.md` / `P4_*` synced to dual-path + honest RiskAuth
-- Contract tests: `test_mtf_data_contracts.py`
+## Docs / identity hardening (post-da7e90f)
+- RiskAuth docs: confirm does **not** pass `proposed_stake` → `stake_amount` typically 0.0
+- Canonical ID: reject negative index; `remember()` validates mismatched IDs
+- DB-backed persist test: `test_mtf_candidate_id_db_persist.py`
 
 ## Next
 - Commit docs+hardening batch when ready

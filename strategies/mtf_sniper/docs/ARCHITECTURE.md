@@ -115,11 +115,10 @@ confirm_trade_entry
 | Does | Does **not** (yet) |
 |---|---|
 | Max open / circuit / directional lock / distress | Stop-distance risk budgeting |
-| Echo stake/leverage/SL metadata on `RiskAuthorization` | Drive Freqtrade stake/leverage from `auth.*` |
+| Fill `RiskAuthorization` metadata fields | Drive Freqtrade stake/leverage from `auth.*` |
 | `custom_stoploss` → `get_stoploss()` | Own exchange SL placement outside FT callbacks |
 
-`sizing_method="freqtrade_proposed"`; `risk_budget_used_pct` / `risk_per_trade_pct` stay `None` until implemented. Details: `DATA_CONTRACTS.md` §3.5.
-
+**Confirm path today:** Strategy returns only `auth.is_approved`. It does **not** pass `proposed_stake` / `max_stake`, so `auth.stake_amount` is typically **`0.0`** and `auth.leverage` is the configured max-leverage metadata — not the live order size. Details: `DATA_CONTRACTS.md` §3.5.
 ---
 
 ## 4. Candidate ID lifecycle

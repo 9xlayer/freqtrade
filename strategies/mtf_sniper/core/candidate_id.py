@@ -47,11 +47,16 @@ def make_candidate_id(
     Canonical candidate_id:
 
         ``{pair}_{side}_{utc_epoch}_{candle_index}``
+
+    ``candle_index`` must be a non-negative integer.
     """
+    idx = int(candle_index)
+    if idx < 0:
+        raise ValueError(f"candle_index must be >= 0, got {candle_index!r}")
     side_v = side.value if isinstance(side, TradeSide) else str(side).lower()
     ts = normalize_utc(timestamp)
     epoch = int(ts.timestamp())
-    return f"{pair}_{side_v}_{epoch}_{int(candle_index)}"
+    return f"{pair}_{side_v}_{epoch}_{idx}"
 
 
 def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
@@ -59,6 +64,7 @@ def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
     Parse ``{pair}_{side}_{utc_epoch}_{candle_index}``.
 
     ``pair`` may contain underscores; ``side`` must be ``long`` or ``short``.
+    ``candle_index`` must be a non-negative integer (negative indexes are rejected).
     """
     if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
         return None
@@ -66,7 +72,8 @@ def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
     if len(parts) != 3:
         return None
     prefix, epoch_s, idx_s = parts
-    if not epoch_s.isdigit() or not idx_s.lstrip("-").isdigit():
+    # Reject negatives: isdigit() is False for "-1"
+    if not epoch_s.isdigit() or not idx_s.isdigit():
         return None
     # Split ``{pair}_{side}`` from the right — side is always the last token.
     pair_side = prefix.rsplit("_", 1)
@@ -90,6 +97,27 @@ def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
 def is_canonical_candidate_id(candidate_id: str) -> bool:
     """True when ID matches ``{pair}_{side}_{utc_epoch}_{candle_index}`` with valid side."""
     return parse_candidate_id(candidate_id) is not None
+
+
+def candidate_id_matches_fields(
+    candidate_id: str,
+    *,
+    pair: str,
+    side: Union[TradeSide, str],
+    timestamp: Union[datetime, pd.Timestamp, Any],
+    candle_index: int,
+) -> bool:
+    """True when ``candidate_id`` is canonical and matches the given identity fields."""
+    parsed = parse_candidate_id(candidate_id)
+    if parsed is None:
+        return False
+    side_l = side.value if isinstance(side, TradeSide) else str(side).lower()
+    if parsed.pair != str(pair) or parsed.side != side_l:
+        return False
+    if int(candle_index) < 0 or parsed.candle_index != int(candle_index):
+        return False
+    epoch = int(normalize_utc(timestamp).timestamp())
+    return parsed.epoch == epoch
 
 
 def candidate_id_matches_trade(

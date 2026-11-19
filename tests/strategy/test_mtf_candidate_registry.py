@@ -159,6 +159,57 @@ class TestCandidateRegistryLifecycle(unittest.TestCase):
             c1.candidate_id,
         )
 
+    def test_remember_replaces_mismatched_provided_id(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        expected = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 5)
+        wrong = make_candidate_id("ETH/USDT:USDT", TradeSide.LONG, ts, 9)
+        cand = TradeCandidate(
+            candidate_id=wrong,
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="setup:sniper_short",
+            secondary_sensors=[],
+            confluence_count=4,
+            timestamp=ts,
+            candle_index=5,
+            raw_features={},
+        )
+        reg = CandidateRegistry()
+        reg.remember(cand, "short_A80plus")
+        self.assertEqual(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            ),
+            expected,
+        )
+
+    def test_remember_skips_negative_candle_index(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        cand = TradeCandidate(
+            candidate_id="ignored",
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="setup:sniper_short",
+            secondary_sensors=[],
+            confluence_count=4,
+            timestamp=ts,
+            candle_index=-1,
+            raw_features={},
+        )
+        reg = CandidateRegistry()
+        reg.remember(cand, "short_A80plus")
+        self.assertIsNone(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
