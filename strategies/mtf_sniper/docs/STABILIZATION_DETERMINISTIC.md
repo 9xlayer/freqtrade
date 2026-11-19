@@ -75,6 +75,8 @@ confirm_trade_entry
 27. **Canonical ID hardening** — reject negative `candle_index`; `remember()` validates / replaces mismatched provided IDs.
 28. **RiskAuth docs honesty** — confirm path does not pass `proposed_stake`; `stake_amount`/`leverage` are not live order echoes.
 29. **Canonical uniqueness** — reject uppercase side / leading-zero epoch-index; `make→parse→make` round-trip; registry `lookup` fail-closed without `current_time`.
+30. **Strict typed identity** — `candle_index` Integral only (no float/bool/str truncate); timestamp must be `datetime`/`Timestamp`.
+31. **Risk docs split** — `RiskAuthorization` ≠ Freqtrade `leverage()` / `custom_stake_amount()` sizing path.
 
 ## Semantics: Policy vs Decision
 

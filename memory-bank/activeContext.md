@@ -59,11 +59,11 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Retargeted broken `user_data/strategies/*` symlinks away from deleted `strategies/active/`
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
-## Docs / identity hardening (post-4070115)
-- RiskAuth docs: confirm does **not** pass `proposed_stake` → `stake_amount` typically 0.0
-- Canonical ID: unique form only (no UPPER side / leading zeros); make→parse→make round-trip
-- Registry `lookup` fail-closed without `current_time` (opt-in `allow_unbounded`)
-- DB persist: expire/reload session + exit ledger; ≠ full live bot restart
+## Docs / identity hardening (post-0666c1a / final)
+- RiskAuth vs FT sizing callbacks documented separately (`leverage` / `custom_stake_amount`)
+- Canonical ID: Integral index only (no float/bool/str); timestamp datetime/Timestamp only
+- Registry fail-closed on invalid identity; lookup needs `current_time`
+- DB persist expire/reload covered; full process/Docker restart still ops-only
 
 ## Next
 - Commit docs+hardening batch when ready
