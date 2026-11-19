@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import numpy as np
 import pandas as pd
@@ -49,7 +49,7 @@ def _event(
         sensor_type=sensor_type,
         side=side,
         pair=pair,
-        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, tzinfo=UTC),
         candle_index=candle_index,
         raw_metrics={"close": 100.0},
     )

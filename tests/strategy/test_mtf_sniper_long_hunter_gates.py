@@ -1,4 +1,5 @@
 """Unit tests for P4 Long Hunter breakout gates."""
+
 from __future__ import annotations
 
 import unittest
@@ -10,20 +11,20 @@ from strategies.mtf_sniper.directional.long.hunter_gates import (
 
 
 def _row(**overrides):
-    base = dict(
-        open=100.0,
-        close=101.5,
-        high=101.8,
-        low=99.8,
-        ema_21=101.0,
-        rsi=58.0,
-        upper_wick_ratio=0.10,
-        close_pos_ratio=0.80,
-        macdhist_4h=0.2,
-        is_bull_wave_4h=0,
-        dist_from_ema_200_1d=0.25,
-        long_score=60.0,
-    )
+    base = {
+        "open": 100.0,
+        "close": 101.5,
+        "high": 101.8,
+        "low": 99.8,
+        "ema_21": 101.0,
+        "rsi": 58.0,
+        "upper_wick_ratio": 0.10,
+        "close_pos_ratio": 0.80,
+        "macdhist_4h": 0.2,
+        "is_bull_wave_4h": 0,
+        "dist_from_ema_200_1d": 0.25,
+        "long_score": 60.0,
+    }
     base.update(overrides)
     return base
 

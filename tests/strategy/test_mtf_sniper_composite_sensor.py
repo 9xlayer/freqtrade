@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
-from strategies.mtf_sniper.core.contracts import TriggerEvent
 from strategies.mtf_sniper.core.enums import SensorType, TradeSide
 from strategies.mtf_sniper.signals.base_sensor import BaseSensor
 from strategies.mtf_sniper.signals.composite_catalog import example_hunter_strict_short

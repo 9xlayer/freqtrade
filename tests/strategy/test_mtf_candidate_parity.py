@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import numpy as np
@@ -22,37 +22,37 @@ def _param(value):
 
 
 def _make_strategy(**overrides):
-    base = dict(
-        high_vol_pct=_param(90.0),
-        block_high_vol=_param(True),
-        min_adx_4h=_param(18.0),
-        short_max_dist_ema21=_param(1.0),
-        short_candle_body_ratio_min=_param(0.62),
-        short_loc_tolerance_1h=_param(0.991),
-        short_min_1h_rsi_exhaustion=_param(55.1),
-        short_min_rsi_entry=_param(27.8),
-        short_cooldown_candles=_param(1),
-        long_max_dist_ema21=_param(3.3),
-        long_candle_body_ratio_min=_param(0.63),
-        long_loc_tolerance_1h=_param(1.008),
-        long_max_1h_rsi_exhaustion=_param(62.4),
-        long_lookback_resistance=_param(22),
-        long_max_rsi_entry=_param(67.6),
-        long_cooldown_candles=_param(1),
-        long_overextended_dist_max=_param(0.59),
-        long_block_1d_macd=_param(True),
-        block_4h_counter_wave=_param(True),
-        block_1d_counter_wave=_param(True),
-        filter_wick_rejection=_param(True),
-        max_rejection_wick_ratio=_param(0.25),
-        min_close_pos_ratio_long=_param(0.65),
-        max_close_pos_ratio_short=_param(0.35),
-        filter_pdh_ceiling=_param(True),
-        enable_hunter_long=False,
-        enable_jev_hunter=False,
-        block_macro_bull_shorts=False,
-        _get_pair_params=lambda pair: {},
-    )
+    base = {
+        "high_vol_pct": _param(90.0),
+        "block_high_vol": _param(True),
+        "min_adx_4h": _param(18.0),
+        "short_max_dist_ema21": _param(1.0),
+        "short_candle_body_ratio_min": _param(0.62),
+        "short_loc_tolerance_1h": _param(0.991),
+        "short_min_1h_rsi_exhaustion": _param(55.1),
+        "short_min_rsi_entry": _param(27.8),
+        "short_cooldown_candles": _param(1),
+        "long_max_dist_ema21": _param(3.3),
+        "long_candle_body_ratio_min": _param(0.63),
+        "long_loc_tolerance_1h": _param(1.008),
+        "long_max_1h_rsi_exhaustion": _param(62.4),
+        "long_lookback_resistance": _param(22),
+        "long_max_rsi_entry": _param(67.6),
+        "long_cooldown_candles": _param(1),
+        "long_overextended_dist_max": _param(0.59),
+        "long_block_1d_macd": _param(True),
+        "block_4h_counter_wave": _param(True),
+        "block_1d_counter_wave": _param(True),
+        "filter_wick_rejection": _param(True),
+        "max_rejection_wick_ratio": _param(0.25),
+        "min_close_pos_ratio_long": _param(0.65),
+        "max_close_pos_ratio_short": _param(0.35),
+        "filter_pdh_ceiling": _param(True),
+        "enable_hunter_long": False,
+        "enable_jev_hunter": False,
+        "block_macro_bull_shorts": False,
+        "_get_pair_params": lambda pair: {},
+    }
     base.update(overrides)
     strat = SimpleNamespace(**base)
     from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
@@ -178,7 +178,7 @@ def _semantic_view(cand) -> dict:
     """Fields that must match across fast/event (excludes provenance signal_source)."""
     feats = cand.raw_features or {}
     score_keys = sorted(
-        k for k in feats.keys() if k.endswith("_score") or k in ("short_score", "long_score")
+        k for k in feats if k.endswith("_score") or k in ("short_score", "long_score")
     )
     return {
         "candidate_id": cand.candidate_id,
@@ -240,17 +240,17 @@ def _assert_path_parity(self, pipe, df, pair, idx, side, part_names, expected_ta
 class TestCandidateIdContract(unittest.TestCase):
     def test_normalize_naive_to_utc(self):
         ts = normalize_utc(datetime(2024, 1, 1, 12, 0, 0))
-        self.assertEqual(ts.tzinfo, timezone.utc)
+        self.assertEqual(ts.tzinfo, UTC)
 
     def test_make_candidate_id_stable(self):
-        ts = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
         a = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         b = make_candidate_id("BTC/USDT:USDT", "short", ts, 42)
         self.assertEqual(a, b)
         self.assertTrue(a.startswith("BTC/USDT:USDT_short_"))
 
     def test_builder_uses_canonical_id(self):
-        ts = datetime(2024, 6, 1, 15, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 15, 0, tzinfo=UTC)
         events = [
             TriggerEvent(
                 sensor_name="short_structure",
@@ -276,7 +276,7 @@ class TestCandidateIdContract(unittest.TestCase):
         self.assertEqual(len(cands), 1)
         expected = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 10)
         self.assertEqual(cands[0].candidate_id, expected)
-        self.assertEqual(cands[0].timestamp.tzinfo, timezone.utc)
+        self.assertEqual(cands[0].timestamp.tzinfo, UTC)
 
 
 class TestFastVsEventCandidateParity(unittest.TestCase):
@@ -295,7 +295,7 @@ class TestFastVsEventCandidateParity(unittest.TestCase):
             120,
             TradeSide.SHORT,
             SHORT_SNIPER_PART_NAMES,
-            "short_A80plus",
+            "short_A80_plus",
         )
 
     def test_long_setup_contract_and_policy_parity(self):
@@ -311,7 +311,7 @@ class TestFastVsEventCandidateParity(unittest.TestCase):
             120,
             TradeSide.LONG,
             LONG_SNIPER_PART_NAMES,
-            "long_A80plus",
+            "long_A80_plus",
         )
 
     def test_apply_entry_registers_canonical_id(self):

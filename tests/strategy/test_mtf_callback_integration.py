@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -44,13 +44,13 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         strat.enable_telemetry = True
         strat._trade_ledger_recorded_ids = set()
 
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         trade = _FakeTrade(
             id=7,
             pair="BTC/USDT:USDT",
             is_short=True,
-            enter_tag="short_A80plus",
+            enter_tag="short_A80_plus",
             open_date_utc=ts,
             close_date_utc=ts,
             is_open=True,
@@ -83,7 +83,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
 
     def test_persist_returns_false_on_set_failure(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         trade = _FakeTrade(id=1, _fail_persist=True)
         self.assertFalse(strat._persist_candidate_id(trade, cid))
@@ -104,12 +104,12 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
     def test_order_filled_entry_binds_ram_even_if_persist_fails(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
         strat._candidate_registry = CandidateRegistry()
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         trade = _FakeTrade(
             id=9,
             is_short=True,
-            enter_tag="short_A80plus",
+            enter_tag="short_A80_plus",
             open_date_utc=ts,
             is_open=True,
             amount=1.0,
@@ -128,7 +128,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
         strat._candidate_registry = CandidateRegistry()
         strat.timeframe = "15m"
-        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        base = datetime(2024, 1, 1, tzinfo=UTC)
         n = 100
         dates = [base + timedelta(minutes=15 * i) for i in range(n)]
         enter = [False] * n
@@ -136,7 +136,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         # Sparse hits at absolute positions 10, 40, 70 — last hit position 70
         for pos in (10, 40, 70):
             enter[pos] = True
-            tags[pos] = "short_A80plus"
+            tags[pos] = "short_A80_plus"
         df = pd.DataFrame(
             {
                 "date": dates,
@@ -149,7 +149,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         cid = strat._resolve_candidate_id(
             "BTC/USDT:USDT",
             "short",
-            "short_A80plus",
+            "short_A80_plus",
             dates[70],
         )
         self.assertIsNotNone(cid)
@@ -167,8 +167,8 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         missing = strat._resolve_candidate_id(
             "BTC/USDT:USDT",
             "short",
-            "short_A80plus",
-            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "short_A80_plus",
+            datetime(2024, 1, 1, tzinfo=UTC),
         )
         self.assertIsNone(missing)
 
@@ -177,7 +177,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
         strat._candidate_registry = CandidateRegistry()
         strat.timeframe = "15m"
-        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        base = datetime(2024, 1, 1, tzinfo=UTC)
         # Two rows share label 7; only the second has the enter signal.
         dates = [
             base,
@@ -189,7 +189,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             {
                 "date": dates,
                 "enter_short": [False, False, True, True],
-                "enter_tag": ["", "", "short_A80plus", "short_A80plus"],
+                "enter_tag": ["", "", "short_A80_plus", "short_A80_plus"],
             },
             index=[5, 7, 7, 9],
         )
@@ -201,7 +201,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         cid = strat._resolve_candidate_id(
             "BTC/USDT:USDT",
             "short",
-            "short_A80plus",
+            "short_A80_plus",
             dates[3],
         )
         self.assertIsNotNone(cid)
@@ -212,7 +212,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             {
                 "date": dates,
                 "enter_short": [False, False, True, False],
-                "enter_tag": ["", "", "short_A80plus", ""],
+                "enter_tag": ["", "", "short_A80_plus", ""],
             },
             index=[5, 7, 7, 9],
         )
@@ -220,7 +220,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         cid_mid = strat._resolve_candidate_id(
             "BTC/USDT:USDT",
             "short",
-            "short_A80plus",
+            "short_A80_plus",
             dates[3],
         )
         self.assertIsNotNone(cid_mid)
@@ -231,7 +231,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             {
                 "date": dates,
                 "enter_short": [False, False, False, True],
-                "enter_tag": ["", "", "", "short_A80plus"],
+                "enter_tag": ["", "", "", "short_A80_plus"],
             },
             index=[7, 7, 7, 7],
         )
@@ -239,7 +239,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         cid2 = strat._resolve_candidate_id(
             "BTC/USDT:USDT",
             "short",
-            "short_A80plus",
+            "short_A80_plus",
             dates[3],
         )
         self.assertIsNotNone(cid2)
@@ -251,7 +251,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         strat.dp.get_analyzed_dataframe.return_value = (df3, None)
         self.assertIsNone(
             strat._resolve_candidate_id(
-                "BTC/USDT:USDT", "short", "short_A80plus", dates[3]
+                "BTC/USDT:USDT", "short", "short_A80_plus", dates[3]
             )
         )
 
@@ -303,8 +303,8 @@ class TestRiskAuthPairStoploss(unittest.TestCase):
                 amount=1.0,
                 rate=100.0,
                 time_in_force="GTC",
-                current_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
-                entry_tag="short_A80plus",
+                current_time=datetime(2024, 1, 1, tzinfo=UTC),
+                entry_tag="short_A80_plus",
                 side="short",
             )
         finally:
@@ -329,7 +329,7 @@ class TestConfirmExitHardPaths(unittest.TestCase):
                     rate=100.0,
                     time_in_force="GTC",
                     exit_reason=reason,
-                    current_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    current_time=datetime(2024, 1, 1, tzinfo=UTC),
                 )
             )
 

@@ -9,18 +9,20 @@ Tests correctness, fail-safe resilience, data contracts, and risk gating across:
 5. StrategyMTFSniper Integration & Risk Gating
 """
 
-import os
-import sys
 import json
-import sqlite3
+import os
 import shutil
+import sqlite3
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
+
 
 workspace_dir = Path(__file__).resolve().parents[2]
 if str(workspace_dir) not in sys.path:
@@ -31,38 +33,34 @@ _archive_short = workspace_dir / "strategies" / "archive" / "short_sniper"
 if str(_archive_short) not in sys.path:
     sys.path.insert(0, str(_archive_short))
 
+from StrategyMTFShortSniper import StrategyMTFShortSniper
+
+from freqtrade.configuration import Configuration
 from strategies.mtf_sniper.intelligence.jev_decision import (
+    PROMPT_VERSION_EXTERNAL,
     CandleTrajectoryExtractor,
     JevDecisionEngine,
-    JevDecision,
-    JevSide,
     JevStatus,
-    JevMarketRegime,
-    make_verdict,
-    build_decision_cache_key,
     _parse_unit_interval,
-    ENGINE_VERSION as DECISION_ENGINE_VERSION,
-    PROMPT_VERSION_NATIVE,
-    PROMPT_VERSION_EXTERNAL,
+    build_decision_cache_key,
+    make_verdict,
 )
 from strategies.mtf_sniper.intelligence.jev_entry_hunter import (
-    MomentumRadar,
-    JevHunterEngine,
-    JevHunterCache,
+    HUNTER_ENGINE_VERSION,
+    HUNTER_MODEL_VERSION_EXTERNAL,
+    HUNTER_MODEL_VERSION_NATIVE,
     JevHunterAction,
-    JevSetupType,
+    JevHunterCache,
+    JevHunterEngine,
     JevHunterStatus,
-    is_setup_valid_for_side,
+    JevSetupType,
+    MomentumRadar,
     build_canonical_payload,
     compute_payload_hash,
     is_mutable_model_id,
-    HUNTER_ENGINE_VERSION,
-    HUNTER_MODEL_VERSION_NATIVE,
-    HUNTER_MODEL_VERSION_EXTERNAL
+    is_setup_valid_for_side,
 )
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
-from StrategyMTFShortSniper import StrategyMTFShortSniper
-from freqtrade.configuration import Configuration
 
 
 class TestCandleTrajectoryExtractor(unittest.TestCase):
@@ -252,7 +250,7 @@ class TestJevHunterCacheAndEngine(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, "test_hunter.sqlite")
+        self.db_path = str(Path(self.temp_dir) / "test_hunter.sqlite")
         self.cache = JevHunterCache(self.db_path)
         self.engine = JevHunterEngine(cache_db=self.db_path, mode="native")
 
@@ -491,7 +489,7 @@ class TestJevDecisionEngine(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, "test_decision.sqlite")
+        self.db_path = str(Path(self.temp_dir) / "test_decision.sqlite")
         self.engine = JevDecisionEngine(cache_db=self.db_path, mode="native")
 
         dates = pd.date_range("2026-01-01", periods=32, freq="15min")
@@ -949,7 +947,7 @@ class TestHunterExternalModelIdentity(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, "hunter_identity.sqlite")
+        self.db_path = str(Path(self.temp_dir) / "hunter_identity.sqlite")
         idx = pd.date_range("2026-01-01", periods=32, freq="15min", tz="UTC")
         self.df = pd.DataFrame(
             {
@@ -1205,13 +1203,13 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
                 self.pair = "BTC/USDT:USDT"
                 self.calc_profit_ratio = lambda p: 0.0
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
 
         # Case 1: 3 severe losses <= -0.10 -> Circuit breaker triggers (False)
         t_severe = [
-            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.10, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=UTC)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=UTC)),
+            MockTrade(-0.10, datetime(2026, 11, 15, 9, 0, tzinfo=UTC)),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_severe
@@ -1219,9 +1217,9 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
 
         # Case 2: 3 minor losses > -0.10 (-0.05, -0.02, -0.01) -> Does NOT trigger
         t_minor = [
-            MockTrade(-0.05, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.02, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.01, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.05, datetime(2026, 11, 15, 11, 0, tzinfo=UTC)),
+            MockTrade(-0.02, datetime(2026, 11, 15, 10, 0, tzinfo=UTC)),
+            MockTrade(-0.01, datetime(2026, 11, 15, 9, 0, tzinfo=UTC)),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_minor
@@ -1229,10 +1227,10 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
 
         # Case 3: Streak reset by minor loss: -0.15, -0.12, -0.05, -0.14 -> Streak is 2, Does NOT trigger
         t_reset = [
-            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=UTC)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=UTC)),
+            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=UTC)),
+            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=UTC)),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else t_reset
@@ -1252,13 +1250,13 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
                 self.pair = "BTC/USDT:USDT"
                 self.calc_profit_ratio = lambda p: 0.0
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
         # Sequence: -15%, -12%, -5% (broke streak), -14% -> Consecutive losses is 2, NOT 3
         trades = [
-            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)),
-            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=timezone.utc)),
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=UTC)),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=UTC)),
+            MockTrade(-0.05, datetime(2026, 11, 15, 9, 0, tzinfo=UTC)),
+            MockTrade(-0.14, datetime(2026, 11, 15, 8, 0, tzinfo=UTC)),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else trades
@@ -1301,13 +1299,13 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
                 self.strategy = strategy_name
                 self.calc_profit_ratio = lambda p: 0.0
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
 
         # 3 consecutive severe losses belonging exclusively to StrategyMTFShortSniper
         short_sniper_losses = [
-            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc), "StrategyMTFShortSniper"),
-            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc), "StrategyMTFShortSniper"),
-            MockTrade(-0.14, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc), "StrategyMTFShortSniper"),
+            MockTrade(-0.15, datetime(2026, 11, 15, 11, 0, tzinfo=UTC), "StrategyMTFShortSniper"),
+            MockTrade(-0.12, datetime(2026, 11, 15, 10, 0, tzinfo=UTC), "StrategyMTFShortSniper"),
+            MockTrade(-0.14, datetime(2026, 11, 15, 9, 0, tzinfo=UTC), "StrategyMTFShortSniper"),
         ]
 
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
@@ -1330,7 +1328,7 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         cfg = Configuration.from_files(["user_data/config.json"])
         short_strat = StrategyMTFShortSniper(config=cfg)
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
         self.assertEqual(short_strat.leverage("BTC/USDT:USDT", now, 100.0, 1.0, 125.0, "entry", "short"), 10.0)
         self.assertEqual(short_strat.leverage("BTC/USDT:USDT", now, 100.0, 1.0, 5.0, "entry", "short"), 5.0)
         self.assertEqual(short_strat.leverage("BTC/USDT:USDT", now, 100.0, 1.0, 10.0, "entry", "short"), 10.0)
@@ -1412,7 +1410,7 @@ class TestExternalModelVersionImmutability(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, "test_ext_cache.sqlite")
+        self.db_path = str(Path(self.temp_dir) / "test_ext_cache.sqlite")
         self.cache = JevHunterCache(self.db_path)
 
     def tearDown(self):
@@ -1530,11 +1528,11 @@ class TestCircuitBreakerIsolationScenarios(unittest.TestCase):
                 self.is_short = False
                 self.calc_profit_ratio = lambda p: 0.0
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
         none_trades = [
-            MockTrade(-0.25, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc), strategy=None),
-            MockTrade(-0.20, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc), strategy=None),
-            MockTrade(-0.15, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc), strategy=None),
+            MockTrade(-0.25, datetime(2026, 11, 15, 11, 0, tzinfo=UTC), strategy=None),
+            MockTrade(-0.20, datetime(2026, 11, 15, 10, 0, tzinfo=UTC), strategy=None),
+            MockTrade(-0.15, datetime(2026, 11, 15, 9, 0, tzinfo=UTC), strategy=None),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else none_trades
@@ -1552,11 +1550,11 @@ class TestCircuitBreakerIsolationScenarios(unittest.TestCase):
                 self.is_short = False
                 self.calc_profit_ratio = lambda p: 0.0
 
-        now = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
         other_trades = [
-            MockTrade(-0.25, datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc), strategy="OtherStrategy"),
-            MockTrade(-0.20, datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc), strategy="OtherStrategy"),
-            MockTrade(-0.15, datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc), strategy="OtherStrategy"),
+            MockTrade(-0.25, datetime(2026, 11, 15, 11, 0, tzinfo=UTC), strategy="OtherStrategy"),
+            MockTrade(-0.20, datetime(2026, 11, 15, 10, 0, tzinfo=UTC), strategy="OtherStrategy"),
+            MockTrade(-0.15, datetime(2026, 11, 15, 9, 0, tzinfo=UTC), strategy="OtherStrategy"),
         ]
         with patch("freqtrade.persistence.Trade.get_trades_proxy") as mock_proxy:
             mock_proxy.side_effect = lambda is_open=False: [] if is_open else other_trades
@@ -1576,7 +1574,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, "test_concurrency.sqlite")
+        self.db_path = str(Path(self.temp_dir) / "test_concurrency.sqlite")
         self.cache = JevHunterCache(self.db_path)
 
     def tearDown(self):
@@ -1603,8 +1601,10 @@ class TestRealSqliteConcurrency(unittest.TestCase):
                 errors.append(e)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
         self.assertEqual(len(errors), 0, f"Thread write errors: {errors}")
 
@@ -1635,8 +1635,10 @@ class TestRealSqliteConcurrency(unittest.TestCase):
                 assert hit is not None and hit["raw_response"]["p"] == proc_id
 
         procs = [ctx.Process(target=proc_worker, args=(i, self.db_path)) for i in range(num_procs)]
-        for p in procs: p.start()
-        for p in procs: p.join()
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join()
 
         for p in procs:
             self.assertEqual(p.exitcode, 0, "Child process failed with error")
@@ -1650,7 +1652,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
     def test_concurrent_initialization_migration(self):
         """Simultaneous instantiation of JevHunterCache from multiple threads on same DB must succeed without lock collision."""
         import threading
-        new_db = os.path.join(self.temp_dir, "fresh_concurrent.sqlite")
+        new_db = str(Path(self.temp_dir) / "fresh_concurrent.sqlite")
         errors = []
 
         def init_worker():
@@ -1662,8 +1664,10 @@ class TestRealSqliteConcurrency(unittest.TestCase):
                 errors.append(e)
 
         threads = [threading.Thread(target=init_worker) for _ in range(5)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
         self.assertEqual(len(errors), 0, f"Concurrent init errors: {errors}")
         with sqlite3.connect(new_db) as conn:

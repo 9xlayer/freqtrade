@@ -16,6 +16,8 @@
 - Docker Telegram Proxy resolution: whitelisted `telegram.org,api.telegram.org` in `NO_PROXY`.
 - **VS Code Problems Tab & Linter Quality Gate (100% Resolved):**
   - Resolved all 64 Ruff warnings on `scripts/lint_guardrails.py` (`UP035`, `UP006`, `UP045`, `PTH123`, `UP015`, `E501`, `C901`, `SIM102`, `PIE810`).
+  - Standardized trigger tag naming across setups and tests to snake_case: `short_A80_plus`, `short_B65_plus`, `long_A80_plus` (preserving legacy aliases for backwards compatibility).
+  - Cleaned all Pyrefly (`missing-attribute`, `bad-argument-type`) and Ruff (`C408`, `UP017`, `I001`, `F401`, `SIM118`) diagnostics across all test suites (`tests/strategy/`), bringing Pyright to 0 errors / 0 warnings and test suite to 100% clean.
   - Integrated Meta Pyrefly (`LINT015`) into `scripts/lint_guardrails.py` with 0 errors / 0 warnings across all 18 strategy files.
   - Codified formal architectural boundary rules in `scripts/lint_guardrails.py`:
     - `LINT007`: Layer 0 (`core/`) absolute isolation from higher layers.

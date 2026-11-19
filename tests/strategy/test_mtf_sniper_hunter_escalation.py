@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -32,7 +32,7 @@ def _candidate(
         primary_sensor=primary,
         secondary_sensors=[],
         confluence_count=1,
-        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, tzinfo=UTC),
         candle_index=idx,
         raw_features={},
     )
@@ -50,13 +50,13 @@ def _reject(*codes: str, score: float = 0.7) -> PolicyEvaluationResult:
     )
 
 
-def _gw_config(**kwargs) -> HunterEscalationConfig:
+def _gw_config(**kwargs: Any) -> HunterEscalationConfig:
     """Default test config: scorer always passes so Hunter path can be asserted."""
-    base = dict(
-        enabled=True,
-        allow_long_promotion=False,
-        score=ScoreConfig(pass_threshold=0.0),
-    )
+    base: dict[str, Any] = {
+        "enabled": True,
+        "allow_long_promotion": False,
+        "score": ScoreConfig(pass_threshold=0.0),
+    }
     base.update(kwargs)
     return HunterEscalationConfig(**base)
 
@@ -78,9 +78,9 @@ def _df(n: int = 50) -> pd.DataFrame:
     )
 
 
-def _promote_row(**overrides: Any) -> Dict[str, Any]:
+def _promote_row(**overrides: Any) -> dict[str, Any]:
     """Row that clears legacy short waterfall post-AI gates."""
-    row: Dict[str, Any] = {
+    row: dict[str, Any] = {
         "close": 100.0,
         "open": 101.0,
         "high": 101.2,
@@ -105,7 +105,7 @@ def _promote_row(**overrides: Any) -> Dict[str, Any]:
 
 
 class _FakeHunter:
-    def __init__(self, verdict: Dict[str, Any]) -> None:
+    def __init__(self, verdict: dict[str, Any]) -> None:
         self.verdict = verdict
         self.calls = 0
 

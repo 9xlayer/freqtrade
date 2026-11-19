@@ -6,8 +6,11 @@ from __future__ import annotations
 DEFAULT_LEVERAGE = 10.0
 
 _TAG_MULTIPLIERS = (
+    ("long_A80_plus", 1.10),
     ("long_A80plus", 1.10),
+    ("short_A80_plus", 1.10),
     ("short_A80plus", 1.10),
+    ("short_B65_plus", 1.00),
     ("short_B65plus", 1.00),
     ("short_C_sub65", 0.85),
     ("jev_hunter", 1.00),

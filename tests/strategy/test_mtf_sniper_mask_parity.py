@@ -1,12 +1,15 @@
 """Part sensors + SetupComposer + deterministic EntryPipeline (AND-mask parity)."""
+
 from __future__ import annotations
 
 import unittest
+from datetime import UTC
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
+from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.common_gates import (
     data_ready_mask,
     sideway_safe_mask,
@@ -26,7 +29,6 @@ from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
     cached_sniper_parts,
     short_sniper_part_sensors,
 )
-from strategies.mtf_sniper.core.enums import TradeSide
 
 
 def _param(value):
@@ -34,37 +36,37 @@ def _param(value):
 
 
 def _make_strategy(**overrides):
-    base = dict(
-        high_vol_pct=_param(90.0),
-        block_high_vol=_param(True),
-        min_adx_4h=_param(18.0),
-        short_max_dist_ema21=_param(1.0),
-        short_candle_body_ratio_min=_param(0.62),
-        short_loc_tolerance_1h=_param(0.991),
-        short_min_1h_rsi_exhaustion=_param(55.1),
-        short_min_rsi_entry=_param(27.8),
-        short_cooldown_candles=_param(1),
-        long_max_dist_ema21=_param(3.3),
-        long_candle_body_ratio_min=_param(0.63),
-        long_loc_tolerance_1h=_param(1.008),
-        long_max_1h_rsi_exhaustion=_param(62.4),
-        long_lookback_resistance=_param(22),
-        long_max_rsi_entry=_param(67.6),
-        long_cooldown_candles=_param(1),
-        long_overextended_dist_max=_param(0.59),
-        long_block_1d_macd=_param(True),
-        block_4h_counter_wave=_param(True),
-        block_1d_counter_wave=_param(True),
-        filter_wick_rejection=_param(True),
-        max_rejection_wick_ratio=_param(0.25),
-        min_close_pos_ratio_long=_param(0.65),
-        max_close_pos_ratio_short=_param(0.35),
-        filter_pdh_ceiling=_param(True),
-        enable_hunter_long=False,
-        enable_jev_hunter=False,
-        block_macro_bull_shorts=False,
-        _get_pair_params=lambda pair: {},
-    )
+    base = {
+        "high_vol_pct": _param(90.0),
+        "block_high_vol": _param(True),
+        "min_adx_4h": _param(18.0),
+        "short_max_dist_ema21": _param(1.0),
+        "short_candle_body_ratio_min": _param(0.62),
+        "short_loc_tolerance_1h": _param(0.991),
+        "short_min_1h_rsi_exhaustion": _param(55.1),
+        "short_min_rsi_entry": _param(27.8),
+        "short_cooldown_candles": _param(1),
+        "long_max_dist_ema21": _param(3.3),
+        "long_candle_body_ratio_min": _param(0.63),
+        "long_loc_tolerance_1h": _param(1.008),
+        "long_max_1h_rsi_exhaustion": _param(62.4),
+        "long_lookback_resistance": _param(22),
+        "long_max_rsi_entry": _param(67.6),
+        "long_cooldown_candles": _param(1),
+        "long_overextended_dist_max": _param(0.59),
+        "long_block_1d_macd": _param(True),
+        "block_4h_counter_wave": _param(True),
+        "block_1d_counter_wave": _param(True),
+        "filter_wick_rejection": _param(True),
+        "max_rejection_wick_ratio": _param(0.25),
+        "min_close_pos_ratio_long": _param(0.65),
+        "max_close_pos_ratio_short": _param(0.35),
+        "filter_pdh_ceiling": _param(True),
+        "enable_hunter_long": False,
+        "enable_jev_hunter": False,
+        "block_macro_bull_shorts": False,
+        "_get_pair_params": lambda pair: {},
+    }
     base.update(overrides)
     strat = SimpleNamespace(**base)
     from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
@@ -183,13 +185,25 @@ class TestCombinationMaskLivePath(unittest.TestCase):
         vol = volatility_safe_mask(strat, df)
         sideway = sideway_safe_mask(strat, df)
         parts = build_short_sniper_parts(
-            strat, df, pair, {}, data_ready=ready, cond_volatility_safe=vol, cond_sideway_safe=sideway
+            strat,
+            df,
+            pair,
+            {},
+            data_ready=ready,
+            cond_volatility_safe=vol,
+            cond_sideway_safe=sideway,
         )
         and_parts = parts[SHORT_SNIPER_PART_NAMES[0]]
         for name in SHORT_SNIPER_PART_NAMES[1:]:
             and_parts = and_parts & parts[name]
         mono = build_raw_sniper_short_mask(
-            strat, df, pair, {}, data_ready=ready, cond_volatility_safe=vol, cond_sideway_safe=sideway
+            strat,
+            df,
+            pair,
+            {},
+            data_ready=ready,
+            cond_volatility_safe=vol,
+            cond_sideway_safe=sideway,
         )
         pd.testing.assert_series_equal(and_parts.astype(bool), mono.astype(bool))
 
@@ -224,7 +238,7 @@ class TestCombinationMaskLivePath(unittest.TestCase):
         _force_short_sniper_bar(df, 120)
         out = apply_entry_pipeline(strat, df, {"pair": "BTC/USDT:USDT"})
         self.assertEqual(int(out.loc[120, "enter_short"]), 1)
-        self.assertEqual(out.loc[120, "enter_tag"], "short_A80plus")
+        self.assertEqual(out.loc[120, "enter_tag"], "short_A80_plus")
 
     def test_incomplete_parts_do_not_enter(self):
         strat = _make_strategy()
@@ -252,7 +266,7 @@ class TestCombinationMaskLivePath(unittest.TestCase):
         self.assertEqual({s.name for s in pipe.sensor_suite.sensors}, names)
 
     def test_setup_composer_marks_complete_recipe(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from strategies.mtf_sniper.core.contracts import TradeCandidate
         from strategies.mtf_sniper.core.enums import TradeSide
@@ -264,7 +278,7 @@ class TestCombinationMaskLivePath(unittest.TestCase):
             primary_sensor="short_structure",
             secondary_sensors=list(SHORT_SNIPER_PART_NAMES[1:]),
             confluence_count=4,
-            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
             candle_index=10,
             raw_features={
                 "sensors": list(SHORT_SNIPER_PART_NAMES),

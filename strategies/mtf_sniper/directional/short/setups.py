@@ -10,8 +10,8 @@ from pandas import DataFrame
 
 
 class ShortSetup(Enum):
-    A80_PLUS = "short_A80plus"
-    B65_PLUS = "short_B65plus"
+    A80_PLUS = "short_A80_plus"
+    B65_PLUS = "short_B65_plus"
     C_SUB65 = "short_C_sub65"
     WATERFALL_COLLAPSE = "jev_hunter_waterfall_collapse"
     SWING_BREAKOUT = "short_swing_breakout"

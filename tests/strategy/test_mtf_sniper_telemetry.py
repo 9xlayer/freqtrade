@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
+from freqtrade.persistence import Order, Trade
 from strategies.mtf_sniper.core.contracts import (
     TelemetryDecisionRecord,
     TelemetryTradeRecord,
@@ -21,14 +23,14 @@ from tests.strategy.test_mtf_sniper_risk import _trade
 class TestDecisionLedger(unittest.TestCase):
     def test_record_and_filter(self):
         ledger = DecisionLedger(enabled=True)
-        now = datetime(2024, 1, 10, tzinfo=timezone.utc).isoformat()
+        now = datetime(2024, 1, 10, tzinfo=UTC).isoformat()
         ledger.record(
             TelemetryDecisionRecord(
                 candidate_id="c1",
                 timestamp=now,
                 pair="BTC/USDT:USDT",
                 side="long",
-                sensors_triggered=["long_A80plus"],
+                sensors_triggered=["long_A80_plus"],
                 confluence_count=1,
                 market_regime="",
                 policy_score=0.0,
@@ -79,7 +81,7 @@ class TestDecisionLedger(unittest.TestCase):
                 timestamp="2024-01-10T00:00:00+00:00",
                 pair="BTC/USDT:USDT",
                 side="long",
-                sensors_triggered=["long_A80plus"],
+                sensors_triggered=["long_A80_plus"],
                 confluence_count=1,
                 market_regime="",
                 policy_score=0.0,
@@ -162,7 +164,7 @@ class TestStrategyOrderFilledTradeLedger(unittest.TestCase):
         strat._trade_ledger_recorded_ids = set()
         strat._decision_ledger = None
 
-        now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        now = datetime(2024, 1, 2, tzinfo=UTC)
         trade = _trade(
             id=42,
             is_short=False,
@@ -175,25 +177,28 @@ class TestStrategyOrderFilledTradeLedger(unittest.TestCase):
             close_profit=None,
             close_profit_abs=None,
             exit_reason="roi",
-            enter_tag="long_A80plus",
+            enter_tag="long_A80_plus",
             amount=1.0,
             exit_side="sell",
-            open_date_utc=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            open_date_utc=datetime(2024, 1, 1, tzinfo=UTC),
             close_date_utc=None,
             is_open=True,
         )
         trade.calc_profit_ratio = lambda rate: (rate - 100.0) / 100.0
         trade.calc_profit = lambda rate: rate - 100.0
 
-        order = SimpleNamespace(
-            ft_order_side="sell",
-            safe_amount=1.0,
-            filled=1.0,
-            average=105.0,
-            price=105.0,
-            ft_price=105.0,
+        order = cast(
+            Order,
+            SimpleNamespace(
+                ft_order_side="sell",
+                safe_amount=1.0,
+                filled=1.0,
+                average=105.0,
+                price=105.0,
+                ft_price=105.0,
+            ),
         )
-        strat.order_filled("BTC/USDT:USDT", trade, order, now)
+        strat.order_filled("BTC/USDT:USDT", cast(Trade, trade), order, now)
         self.assertEqual(len(strat._trade_ledger.all()), 1)
         row = strat._trade_ledger.all()[0]
         self.assertEqual(row.trade_id, 42)
@@ -201,7 +206,7 @@ class TestStrategyOrderFilledTradeLedger(unittest.TestCase):
         self.assertAlmostEqual(row.max_favorable_excursion, 0.08)
         self.assertAlmostEqual(row.max_adverse_excursion, -0.03)
         # Dedup
-        strat.order_filled("BTC/USDT:USDT", trade, order, now)
+        strat.order_filled("BTC/USDT:USDT", cast(Trade, trade), order, now)
         self.assertEqual(len(strat._trade_ledger.all()), 1)
 
     def test_entry_fill_ignored(self):
@@ -213,9 +218,12 @@ class TestStrategyOrderFilledTradeLedger(unittest.TestCase):
         strat._trade_ledger = TradeLedger(enabled=True)
         strat._trade_ledger_recorded_ids = set()
         trade = _trade(is_open=True, amount=1.0, exit_side="sell")
-        order = SimpleNamespace(ft_order_side="buy", safe_amount=1.0, filled=1.0)
+        order = cast(
+            Order,
+            SimpleNamespace(ft_order_side="buy", safe_amount=1.0, filled=1.0),
+        )
         strat.order_filled(
-            "BTC/USDT:USDT", trade, order, datetime(2024, 1, 1, tzinfo=timezone.utc)
+            "BTC/USDT:USDT", cast(Trade, trade), order, datetime(2024, 1, 1, tzinfo=UTC)
         )
         self.assertEqual(strat._trade_ledger.all(), [])
 
@@ -225,7 +233,7 @@ class TestRiskEngineDecisionLedger(unittest.TestCase):
     def test_authorize_logs_reject(self):
         ledger = DecisionLedger(enabled=True)
         engine = RiskEngine(decision_ledger=ledger)
-        now = datetime(2024, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2024, 1, 10, tzinfo=UTC)
         auth = engine.authorize_entry(
             strategy_name="StrategyMTFSniper",
             pair="BTC/USDT:USDT",
@@ -235,19 +243,19 @@ class TestRiskEngineDecisionLedger(unittest.TestCase):
             open_trades=[_trade(is_short=True)],
             get_price=lambda p, t: 100.0,
             jev_confirm=lambda: True,
-            entry_tag="long_A80plus",
+            entry_tag="long_A80_plus",
         )
         self.assertFalse(auth.is_approved)
         self.assertEqual(len(ledger.rejected()), 1)
         row = ledger.rejected()[0]
         self.assertIn(RejectionReasonCode.RISK_DIRECTIONAL_LOCK.value, row.final_reasons)
-        self.assertEqual(row.sensors_triggered, ["long_A80plus"])
+        self.assertEqual(row.sensors_triggered, ["long_A80_plus"])
         self.assertEqual(row.final_action, "REJECT")
 
     def test_authorize_logs_enter(self):
         ledger = DecisionLedger(enabled=True)
         engine = RiskEngine(decision_ledger=ledger)
-        now = datetime(2024, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2024, 1, 10, tzinfo=UTC)
         auth = engine.authorize_entry(
             strategy_name="StrategyMTFSniper",
             pair="BTC/USDT:USDT",
@@ -257,7 +265,7 @@ class TestRiskEngineDecisionLedger(unittest.TestCase):
             open_trades=[],
             get_price=lambda p, t: 100.0,
             jev_confirm=lambda: True,
-            entry_tag="long_A80plus",
+            entry_tag="long_A80_plus",
         )
         self.assertTrue(auth.is_approved)
         self.assertEqual(len(ledger.entered()), 1)
