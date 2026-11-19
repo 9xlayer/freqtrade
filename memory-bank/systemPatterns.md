@@ -44,6 +44,61 @@
 - Correlation-aware exposure
 - Liquidation distance guard + exchange SL verification as first-class ops checks
 
+---
+
+## Trade Lifecycle Statechart & Invariants (Formal Architecture Standards)
+
+### 1. Invariants (Bất biến hệ thống không thể vi phạm)
+- **Invariant 1 (Ủy quyền Vào lệnh Tuyệt đối):** Không có lệnh nào được mở nếu không vượt qua cả Bộ lọc Thiết lập (Setup Eligibility) và Bộ lọc Hướng/Chính sách (Directional Policy).
+- **Invariant 2 (Bảo vệ Hai Vùng Đà Rơi - Dual-Regime):** Tín hiệu Waterfall phải thuộc Vùng Chân Không (`floor_dist <= 0` không dãn đáy kiệt sức) hoặc Vùng Động Lượng Trong Hộp (`floor_dist > 0` kèm hội tụ biến động mở rộng và không chống sóng lớn).
+- **Invariant 3 (Kỷ luật Quản trị Vốn):** Không bao giờ vượt quá 2 vị thế đồng thời (`max_open_trades = 2`); tuân thủ tuyệt đối thời gian hồi nến (cooldown bars) giữa các lệnh cùng chiều.
+- **Invariant 4 (Bảo vệ Chiều Giảm Một Chiều):** Dừng lỗ động (Trailing Stoploss) chỉ được dịch chuyển theo hướng bảo toàn vốn hoặc khóa lợi nhuận (ratchet up), tuyệt đối không bao giờ nới lỏng xuống mức rủi ro sâu hơn.
+
+### 2. Sơ đồ Vòng đời Vị thế (User-Centric Statechart)
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    [*] --> QuetTinHieu: Nến 15m Đóng
+    
+    state QuetTinHieu {
+        direction LR
+        KiemDuyetQuyTac --> DauHieuXacLap: Đạt Setup MTF Sniper
+        KiemDuyetQuyTac --> DauHieuDaRoi: Đạt Sóng Xả Waterfall
+    }
+
+    state BoLocKiemDuyet {
+        [*] --> KiemTraRuiRoViMo
+        KiemTraRuiRoViMo --> DuocChapThuan: Đạt chuẩn hội tụ xu hướng
+        KiemTraRuiRoViMo --> TuChoiRuiRo: Bán kiệt sức hoặc ngược trend lớn
+    }
+
+    DauHieuXacLap --> BoLocKiemDuyet
+    DauHieuDaRoi --> BoLocKiemDuyet
+
+    state ViTheMo {
+        [*] --> TheoDoiLoiNhuan
+        TheoDoiLoiNhuan --> BaoVeHoaVon: Lợi nhuận đạt ngưỡng an toàn
+        BaoVeHoaVon --> KhoaLaiTungPhan: Lợi nhuận tăng tiếp
+        KhoaLaiTungPhan --> BamSatXuHuong: Chạy hết sóng động lượng
+    }
+
+    DuocChapThuan --> ViTheMo: Khớp lệnh Mở Vị Thế (10x Leverage)
+    TuChoiRuiRo --> [*]:::danger: Hủy Tín Hiệu (Bảo toàn vốn)
+
+    ViTheMo --> DongLenhDungLo:::danger: Chạm Dừng Lỗ Khẩn Cấp (-25% đến -28%)
+    ViTheMo --> DongLenhKhoaLai:::success: Chạm Dừng Lỗ Động Bảo Toàn Lãi
+
+    DongLenhDungLo --> [*]
+    DongLenhKhoaLai --> [*]
+
+    classDef danger fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b
+    classDef success fill:#dcfce7,stroke:#22c55e,stroke-width:2px,color:#15803d
+```
+
+---
+
 ## Important anti-patterns discovered
 - Long Hunter prompt historically mean-reversion while strategy philosophy is trend-follow.
 - Strategy gate required `breakout_expansion` while Hunter never emitted it → Long Hunter dead path.

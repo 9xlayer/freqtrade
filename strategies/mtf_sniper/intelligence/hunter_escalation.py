@@ -202,11 +202,11 @@ class HunterEscalationGateway:
                 outcome="hard_or_ineligible", score_verdict=score_verdict
             )
 
-        idx = int(candidate.candle_index)
+        idx = candidate.candle_index
         if idx < 0 or idx >= len(dataframe):
             return EscalationAttempt(outcome="error", score_verdict=score_verdict)
 
-        lookback = max(16, int(self.config.lookback_bars))
+        lookback = max(16, self.config.lookback_bars)
         start = max(0, idx + 1 - lookback)
         df_window = dataframe.iloc[start : idx + 1]
         if len(df_window) < 16:

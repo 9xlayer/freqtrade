@@ -45,7 +45,7 @@ def normalize_utc(ts: Union[datetime, pd.Timestamp]) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-def _canonical_side(side: Union[TradeSide, str]) -> str:
+def _canonical_side(side: Any) -> str:
     """
     Return canonical side token.
 
@@ -69,7 +69,7 @@ def _canonical_side(side: Union[TradeSide, str]) -> str:
     return side_v
 
 
-def _canonical_pair(pair: str) -> str:
+def _canonical_pair(pair: Any) -> str:
     if not isinstance(pair, str):
         raise ValueError(f"pair must be str, got {type(pair).__name__}={pair!r}")
     p = pair.strip()
@@ -167,7 +167,7 @@ def is_canonical_candidate_id(candidate_id: str) -> bool:
     if parsed is None:
         return False
     remade = f"{parsed.pair}_{parsed.side}_{parsed.epoch}_{parsed.candle_index}"
-    return remade == str(candidate_id)
+    return remade == candidate_id
 
 
 def candidate_id_matches_fields(

@@ -1,22 +1,23 @@
 """Core enumerations for the MTF Sniper unified trading engine."""
-from enum import Enum
+
+from enum import Enum, StrEnum
 
 
-class TradeSide(str, Enum):
+class TradeSide(Enum):
     """Direction of the trade."""
 
     LONG = "long"
     SHORT = "short"
 
 
-class SensorType(str, Enum):
+class SensorType(Enum):
     """Classification of the market sensor."""
 
-    ANOMALY = "anomaly"  # Volatility / volume spikes, extreme price displacement
-    PATTERN = "pattern"  # Technical confluence, EMA formations, breakout structures
+    ANOMALY = "anomaly"
+    PATTERN = "pattern"
 
 
-class MarketRegime(str, Enum):
+class MarketRegime(Enum):
     """Macro and intermediate market regime classification."""
 
     BULL_EXPANSION = "bull_expansion"
@@ -27,7 +28,7 @@ class MarketRegime(str, Enum):
     VOLATILITY_SQUEEZE = "volatility_squeeze"
 
 
-class DecisionAction(str, Enum):
+class DecisionAction(StrEnum):
     """Verdict issued by strategic policy or AI gatekeeper."""
 
     CONFIRM = "confirm"
@@ -35,15 +36,13 @@ class DecisionAction(str, Enum):
     HOLD = "hold"
 
 
-class RejectionReasonCode(str, Enum):
+class RejectionReasonCode(StrEnum):
     """Standardized rejection reason codes for telemetry and audit."""
 
-    # Sensor & Builder reasons
     COOLDOWN_ACTIVE = "COOLDOWN_ACTIVE"
     CONTRADICTORY_SIGNALS = "CONTRADICTORY_SIGNALS"
     INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
 
-    # Directional Engine reasons
     REJECT_REGIME_INCOMPATIBLE = "REJECT_REGIME_INCOMPATIBLE"
     REJECT_UPPER_WICK_REJECTION = "REJECT_UPPER_WICK_REJECTION"
     REJECT_LOWER_WICK_REJECTION = "REJECT_LOWER_WICK_REJECTION"
@@ -52,12 +51,10 @@ class RejectionReasonCode(str, Enum):
     REJECT_EMA_DISTANCE_TOO_FAR = "REJECT_EMA_DISTANCE_TOO_FAR"
     REJECT_SCORE_BELOW_THRESHOLD = "REJECT_SCORE_BELOW_THRESHOLD"
 
-    # JEV AI reasons
     AI_VETO_CHOPPY_REGIME = "AI_VETO_CHOPPY_REGIME"
     AI_VETO_LOW_CONFIDENCE = "AI_VETO_LOW_CONFIDENCE"
     AI_FAIL_SAFE_REJECT = "AI_FAIL_SAFE_REJECT"
 
-    # Risk Engine reasons
     RISK_CIRCUIT_BREAKER_ACTIVE = "RISK_CIRCUIT_BREAKER_ACTIVE"
     RISK_DIRECTIONAL_LOCK = "RISK_DIRECTIONAL_LOCK"
     RISK_PORTFOLIO_DISTRESSED = "RISK_PORTFOLIO_DISTRESSED"

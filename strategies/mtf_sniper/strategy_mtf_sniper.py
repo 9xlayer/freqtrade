@@ -40,9 +40,8 @@ class StrategyMTFSniper(IStrategy):
     can_short: bool = True
     startup_candle_count: int = 400
 
-    # Default fallback flags (overridden by config.json / env vars / runtime mode)
     enable_jev_decision: bool = True
-    # Live EntryPipeline ignores Hunter; keep flag false unless explicitly re-enabled.
+    enable_waterfall: bool = True
     enable_jev_hunter: bool = False
     enable_hunter_long: bool = False
     block_macro_bull_shorts: bool = False
@@ -154,19 +153,21 @@ class StrategyMTFSniper(IStrategy):
         # Decision mode is passed explicitly to JevDecisionAdapter — do not mutate
         # process-global os.environ["JEV_MODE"] (cross-strategy / multi-instance safe).
 
-        # Macro Bull Short Guard
         if "block_macro_bull_shorts" in strat_cfg:
             self.block_macro_bull_shorts = self._to_bool(strat_cfg["block_macro_bull_shorts"], False)
         else:
             self.block_macro_bull_shorts = self._to_bool(os.environ.get("BLOCK_MACRO_BULL_SHORTS", "false"), False)
 
-        # Dynamic Stake Sizing
+        if "enable_waterfall" in strat_cfg:
+            self.enable_waterfall = self._to_bool(strat_cfg["enable_waterfall"], True)
+        else:
+            self.enable_waterfall = self._to_bool(os.environ.get("ENABLE_WATERFALL", "true"), True)
+
         if "enable_dynamic_sizing" in strat_cfg:
             self.enable_dynamic_sizing = self._to_bool(strat_cfg["enable_dynamic_sizing"], False)
         else:
             self.enable_dynamic_sizing = self._to_bool(os.environ.get("ENABLE_DYNAMIC_SIZING", "false"), False)
 
-        # JEV Fail Policy ('reject' / 'allow')
         if "jev_fail_policy" in strat_cfg:
             self.jev_fail_policy = str(strat_cfg["jev_fail_policy"]).lower()
         else:
@@ -223,6 +224,7 @@ class StrategyMTFSniper(IStrategy):
             f"(jev_mode={getattr(profile, 'decision_jev_mode', 'native')}, "
             f"external_ai={getattr(profile, 'allow_external_ai', False)}) "
             f"Hunter={self.enable_jev_hunter} (long_promote={self.enable_hunter_long}) "
+            f"Waterfall={self.enable_waterfall} "
             f"block_macro_bull_shorts={self.block_macro_bull_shorts} "
             f"dynamic_sizing={self.enable_dynamic_sizing} "
             f"telemetry={self.enable_telemetry}"
@@ -331,10 +333,6 @@ class StrategyMTFSniper(IStrategy):
         "720": 0.70,
     }
 
-    # =========================================================================
-    # 1. ENTRY PARAMETERS (HYPEROPT-READY)
-    # =========================================================================
-    # Short Confluence Parameters
     short_loc_tolerance_1h = DecimalParameter(0.990, 1.005, default=0.991, decimals=3, space="buy", optimize=False)
     short_min_1h_rsi_exhaustion = DecimalParameter(52.0, 70.0, default=55.1, decimals=1, space="buy", optimize=False)
     short_lookback_support = IntParameter(12, 30, default=17, space="buy", optimize=False)
@@ -343,8 +341,6 @@ class StrategyMTFSniper(IStrategy):
     short_min_rsi_entry = DecimalParameter(20.0, 35.0, default=27.8, decimals=1, space="buy", optimize=False)
     short_cooldown_candles = IntParameter(48, 120, default=96, space="buy", optimize=False)
 
-    # Long Confluence Parameters (HO Ep46 effective set, 2026-11-18).
-    # body/dist defaults match custom_pair_params (those pair keys win in setups).
     long_loc_tolerance_1h = DecimalParameter(0.980, 1.010, default=0.988, decimals=3, space="buy", optimize=True)
     long_max_1h_rsi_exhaustion = DecimalParameter(40.0, 68.0, default=57.1, decimals=1, space="buy", optimize=True)
     long_lookback_resistance = IntParameter(8, 25, default=15, space="buy", optimize=True)
@@ -359,7 +355,6 @@ class StrategyMTFSniper(IStrategy):
     block_1d_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     min_adx_4h = DecimalParameter(12.0, 25.0, default=18.0, decimals=1, space="buy", optimize=False)
 
-    # --- AI AGENT LENS ENHANCEMENTS ---
     block_high_vol = BooleanParameter(default=True, space="buy", optimize=False)
     high_vol_pct = DecimalParameter(85.0, 95.0, default=90.0, decimals=1, space="buy", optimize=False)
     filter_wick_rejection = BooleanParameter(default=True, space="buy", optimize=False)
@@ -368,9 +363,6 @@ class StrategyMTFSniper(IStrategy):
     max_close_pos_ratio_short = DecimalParameter(0.25, 0.45, default=0.35, decimals=2, space="buy", optimize=False)
     filter_pdh_ceiling = BooleanParameter(default=True, space="buy", optimize=False)
 
-    # =========================================================================
-    # 2. DAILY MACRO FRAME (INFORMATIVE 1D)
-    # =========================================================================
     @informative("1d")
     def populate_indicators_1d(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         return market_indicators.populate_indicators_1d(dataframe)
@@ -398,17 +390,11 @@ class StrategyMTFSniper(IStrategy):
         from strategies.mtf_sniper.execution.entry_pipeline import apply_entry_pipeline
         return apply_entry_pipeline(self, dataframe, metadata)
 
-    # =========================================================================
-    # 7. EXIT TREND (POPULATE EXIT TREND)
-    # =========================================================================
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["exit_short"] = 0
         dataframe["exit_long"] = 0
         return dataframe
 
-    # =========================================================================
-    # 8. CONFIRM TRADE ENTRY (CIRCUIT BREAKER & CORRELATION GUARDS)
-    # =========================================================================
     def _jev_confirm_entry(self, pair: str, side: str, current_time: datetime) -> bool:
         """JEV Decision Gate for confirm_trade_entry (fail policy preserved)."""
         if not getattr(self, "enable_jev_decision", False):
@@ -517,7 +503,7 @@ class StrategyMTFSniper(IStrategy):
         except Exception:
             df = None
         if df is not None and not df.empty and "date" in df.columns:
-            side_l = str(side).lower()
+            side_l = side.lower()
             col = "enter_short" if side_l == "short" else "enter_long"
             if col in df.columns:
                 ct = normalize_utc(current_time)
@@ -567,16 +553,13 @@ class StrategyMTFSniper(IStrategy):
             if arr.size:
                 return int(arr.ravel()[-1])
             return None
-        except KeyError:
-            pass
-        except Exception:
-            pass
-        try:
-            indexer = df.index.get_indexer([label])
-            if len(indexer) and int(indexer[0]) >= 0:
-                return int(indexer[0])
-        except Exception:
-            pass
+        except (KeyError, TypeError, IndexError):
+            try:
+                indexer = df.index.get_indexer([label])
+                if len(indexer) and int(indexer[0]) >= 0:
+                    return int(indexer[0])
+            except (KeyError, TypeError, IndexError) as err:
+                logger.debug(f"Label indexing fallback failed for {label}: {err}")
         return None
 
     def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> bool:
@@ -692,9 +675,6 @@ class StrategyMTFSniper(IStrategy):
         )
         return bool(auth.is_approved)
 
-    # =========================================================================
-    # 9. CUSTOM EXIT (TREND INVALIDATION & TIMEOUT)
-    # =========================================================================
     def custom_exit(self, pair: str, trade: Trade, current_time: datetime, current_rate: float,
                     current_profit: float, **kwargs):
         from strategies.mtf_sniper.execution.exit_policy import (
@@ -715,9 +695,6 @@ class StrategyMTFSniper(IStrategy):
             row=row,
         )
 
-    # =========================================================================
-    # 10. DYNAMIC CUSTOM STOPLOSS
-    # =========================================================================
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
                         current_rate: float, current_profit: float, **kwargs) -> float:
         return self._get_risk_engine().get_stoploss(
@@ -728,9 +705,6 @@ class StrategyMTFSniper(IStrategy):
             default_stoploss=self.stoploss,
         )
 
-    # =========================================================================
-    # 11. CONFIRM TRADE EXIT (DYNAMIC RUNNER & CONFLICT RESOLUTION)
-    # =========================================================================
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str, amount: float,
                            rate: float, time_in_force: str, exit_reason: str,
                            current_time: datetime, **kwargs) -> bool:
@@ -751,9 +725,6 @@ class StrategyMTFSniper(IStrategy):
             row=row,
         )
 
-    # =========================================================================
-    # 12. TELEMETRY — trade ledger on closed fills
-    # =========================================================================
     def _get_candidate_registry(self):
         from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
 

@@ -48,8 +48,8 @@ class CandidateRegistry:
         maxlen_trades: int = 256,
         lookup_max_age: timedelta = DEFAULT_LOOKUP_MAX_AGE,
     ) -> None:
-        self._maxlen = max(1, int(maxlen_per_key))
-        self._maxlen_trades = max(1, int(maxlen_trades))
+        self._maxlen = max(1, maxlen_per_key)
+        self._maxlen_trades = max(1, maxlen_trades)
         self._lookup_max_age = lookup_max_age
         # key → list of (candle_index, utc_ts, candidate_id) newest last
         self._store: Dict[_EntryKey, list[Tuple[int, datetime, str]]] = {}
@@ -143,8 +143,8 @@ class CandidateRegistry:
         - Never returns a future candidate when ``current_time`` is set.
         """
         key = _EntryKey(
-            pair=str(pair),
-            side=str(side).lower(),
+            pair=pair,
+            side=side.lower(),
             entry_tag=str(entry_tag or ""),
         )
         bucket = self._store.get(key)
@@ -171,26 +171,24 @@ class CandidateRegistry:
         return None
 
     def bind_trade(self, trade_id: int, candidate_id: str) -> None:
-        tid = int(trade_id)
+        tid = trade_id
         if tid <= 0 or not candidate_id:
             return
         if tid not in self._by_trade:
             self._trade_order.append(tid)
-        self._by_trade[tid] = str(candidate_id)
+        self._by_trade[tid] = candidate_id
         while len(self._trade_order) > self._maxlen_trades:
             old = self._trade_order.pop(0)
             self._by_trade.pop(old, None)
 
     def lookup_trade(self, trade_id: int) -> Optional[str]:
-        return self._by_trade.get(int(trade_id))
+        return self._by_trade.get(trade_id)
 
     def unbind_trade(self, trade_id: int) -> None:
-        tid = int(trade_id)
+        tid = trade_id
         self._by_trade.pop(tid, None)
-        try:
+        if tid in self._trade_order:
             self._trade_order.remove(tid)
-        except ValueError:
-            pass
 
     def clear(self) -> None:
         self._store.clear()
