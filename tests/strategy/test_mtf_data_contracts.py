@@ -149,6 +149,20 @@ class TestCandidateIdContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, ts, -1)
 
+    def test_rejects_non_integral_candle_index_and_bad_timestamp(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        # No silent float truncate
+        for bad_idx in (12.0, 12.9, True, False, "12"):
+            with self.assertRaises(ValueError):
+                make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, ts, bad_idx)
+        # Valid exact int
+        cid = make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, ts, 12)
+        self.assertTrue(cid.endswith("_12"))
+        # Bad timestamps
+        for bad_ts in (1717243200, 1717243200.5, True, "2024-06-01"):
+            with self.assertRaises(ValueError):
+                make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, bad_ts, 1)
+
     def test_missing_sentinel_and_custom_data_key(self):
         self.assertEqual(CANDIDATE_ID_CUSTOM_DATA_KEY, "mtf_candidate_id")
         self.assertFalse(is_canonical_candidate_id(CANDIDATE_ID_MISSING))

@@ -110,15 +110,15 @@ confirm_trade_entry
   → strategy returns bool(auth.is_approved) only
 ```
 
-**RiskEngine today** = portfolio **authorization gate** + stoploss ladder helper.
+**RiskEngine** serves two **different** Freqtrade surfaces (see `DATA_CONTRACTS.md` §3.5):
 
-| Does | Does **not** (yet) |
-|---|---|
-| Max open / circuit / directional lock / distress | Stop-distance risk budgeting |
-| Fill `RiskAuthorization` metadata fields | Drive Freqtrade stake/leverage from `auth.*` |
-| `custom_stoploss` → `get_stoploss()` | Own exchange SL placement outside FT callbacks |
+| Surface | What it does | What it does **not** |
+|---|---|---|
+| `confirm_trade_entry` → `authorize_entry` → `RiskAuthorization` | Portfolio guards + optional Decision; Strategy uses **`is_approved` only** | Allocate live stake/leverage (`auth.stake_amount` often `0.0` because confirm omits proposed stake) |
+| `leverage()` / `custom_stake_amount()` | Return values Freqtrade applies (`get_leverage` / `get_stake_amount`) | Stop-distance risk budgeting |
+| `custom_stoploss()` | Ladder via `get_stoploss()` | Exchange SL outside FT callbacks |
 
-**Confirm path today:** Strategy returns only `auth.is_approved`. It does **not** pass `proposed_stake` / `max_stake`, so `auth.stake_amount` is typically **`0.0`** and `auth.leverage` is the configured max-leverage metadata — not the live order size. Details: `DATA_CONTRACTS.md` §3.5.
+Default stake path: proposed stake × **1.0** (dynamic sizing off) capped by `max_stake`; leverage `min(10x, max_leverage)`.
 ---
 
 ## 4. Candidate ID lifecycle

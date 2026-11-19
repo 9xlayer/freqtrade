@@ -61,35 +61,37 @@ class CandidateRegistry:
             side=str(candidate.side.value).lower(),
             entry_tag=tag,
         )
-        ts = normalize_utc(candidate.timestamp)
-        idx = int(candidate.candle_index)
-        if idx < 0:
-            logger.warning(
-                f"[CandidateRegistry] Refusing remember with negative candle_index="
-                f"{idx} for {candidate.pair} {key.side}"
-            )
-            return
+        # Fail-closed: do not invent identity from untrusted / mistyped fields.
         try:
-            expected = make_candidate_id(candidate.pair, candidate.side, ts, idx)
+            ts = normalize_utc(candidate.timestamp)
+            expected = make_candidate_id(
+                candidate.pair, candidate.side, ts, candidate.candle_index
+            )
         except ValueError as exc:
-            logger.warning(f"[CandidateRegistry] Refusing remember: {exc}")
+            logger.warning(
+                f"[CandidateRegistry] Refusing remember (invalid identity): {exc}"
+            )
             return
 
+        idx = int(candidate.candle_index)  # validated as Integral by make_candidate_id
         provided = (candidate.candidate_id or "").strip()
-        if provided and not candidate_id_matches_fields(
-            provided,
-            pair=str(candidate.pair),
-            side=candidate.side,
-            timestamp=ts,
-            candle_index=idx,
-        ):
-            logger.warning(
-                f"[CandidateRegistry] Ignoring mismatched candidate_id={provided!r}; "
-                f"storing canonical {expected!r}"
-            )
-            cid = expected
+        if provided:
+            if not candidate_id_matches_fields(
+                provided,
+                pair=str(candidate.pair),
+                side=candidate.side,
+                timestamp=ts,
+                candle_index=candidate.candle_index,
+            ):
+                logger.warning(
+                    f"[CandidateRegistry] Ignoring mismatched candidate_id={provided!r}; "
+                    f"storing canonical {expected!r}"
+                )
+                cid = expected
+            else:
+                cid = provided
         else:
-            cid = provided or expected
+            cid = expected
 
         bucket = self._store.setdefault(key, [])
         bucket.append((idx, ts, cid))

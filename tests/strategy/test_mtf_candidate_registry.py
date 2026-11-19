@@ -220,6 +220,31 @@ class TestCandidateRegistryLifecycle(unittest.TestCase):
             )
         )
 
+    def test_remember_skips_float_and_bool_index(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        reg = CandidateRegistry()
+        for bad_idx in (12.0, 12.9, True):
+            cand = TradeCandidate(
+                candidate_id="",
+                pair="BTC/USDT:USDT",
+                side=TradeSide.SHORT,
+                primary_sensor="setup:sniper_short",
+                secondary_sensors=[],
+                confluence_count=4,
+                timestamp=ts,
+                candle_index=bad_idx,  # type: ignore[arg-type]
+                raw_features={},
+            )
+            reg.remember(cand, "short_A80plus")
+        self.assertIsNone(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

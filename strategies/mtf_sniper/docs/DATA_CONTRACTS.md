@@ -32,7 +32,7 @@ Examples: `BTC/USDT:USDT_short_1717243200_42`
 
 | Helper | Role |
 |---|---|
-| `make_candidate_id` | Build canonical ID; validates pair (`/`), side exact `long`/`short`, `candle_index >= 0` |
+| `make_candidate_id` | Build canonical ID; validates pair (`/`), side exact `long`/`short`, Integral `candle_index >= 0`, `datetime`/`Timestamp` only |
 | `parse_candidate_id` | Parse unique canonical form only |
 | `is_canonical_candidate_id` | Parse + remake equality (round-trip stable) |
 | `candidate_id_matches_fields` | Match ID vs pair/side/timestamp/candle_index |
@@ -104,31 +104,41 @@ Produced by **either** the vectorized fast path **or** SensorSuite → Builder �
 | `payload_hash` | `str` |
 | `timestamp` | `datetime` |
 
-### 3.5 `RiskAuthorization` (frozen) — authorization gate, not sizing authority
+### 3.5 Risk: two separate mechanisms (do not conflate)
 
-| Field | Type | Live meaning on `confirm_trade_entry` path |
+#### A. `RiskAuthorization` — confirm-path **authorization gate** only
+
+Returned by `RiskEngine.authorize_entry()` and consumed in `confirm_trade_entry()` as:
+
+```text
+return bool(auth.is_approved)
+```
+
+| Field | Live meaning on confirm path |
+|---|---|
+| `is_approved` | **Only field Strategy uses** to allow/deny entry |
+| `stake_amount` | **Not** the live order stake — confirm does **not** pass `proposed_stake` / `max_stake`, so this is typically **`0.0`** |
+| `leverage` | Metadata from authorize defaults (`max_leverage` → target 10x), **not** the leverage Freqtrade applied via `leverage()` |
+| `stoploss_rate` | Pair/default SL passed into authorize (context only) |
+| `risk_budget_used_pct` / `risk_per_trade_pct` | **`None`** — stop-distance risk sizing **not** implemented |
+| `sizing_method` | Label `"freqtrade_proposed"`; not proof that authorize sized the order |
+| other fields | Portfolio / fingerprint / exposure metadata — see `core/contracts.py` |
+
+**Do not describe `RiskAuthorization` as the capital allocator for the order.**
+
+#### B. Freqtrade sizing callbacks — values that actually size the order
+
+| Callback | Strategy → RiskEngine | Behavior (`risk/position_sizing.py`) |
 |---|---|---|
-| `is_approved` | `bool` | **Only field the Strategy currently consumes** (`return bool(auth.is_approved)`) |
-| `stake_amount` | `float` | **Not** a live Freqtrade stake echo today — confirm does **not** pass `proposed_stake` / `max_stake`, so defaults yield **`0.0`** when approved |
-| `leverage` | `float` | Metadata from `max_leverage` default (**10.0**), not the leverage Freqtrade already applied to the order |
-| `stoploss_rate` | `float` | Pair/default SL rate passed into `authorize_entry` (auth context only) |
-| `rejection_reasons` | `List[str]` | |
-| `risk_budget_used_pct` | `Optional[float]` | **`None`** until stop-distance budgeting exists |
-| `risk_per_trade_pct` | `Optional[float]` | **`None`** until implemented |
-| `stop_distance_pct` | `float` | |
-| `max_open_positions` | `int` | |
-| `open_positions` | `int` | |
-| `directional_open` | `int` | |
-| `total_exposure_notional` | `float` | From **open trades** (`sum(stake * leverage)`); does not include the pending order’s `auth.stake_amount` when that is 0 |
-| `total_exposure_pct` | `Optional[float]` | Only when `wallet_equity` known |
-| `wallet_equity` | `Optional[float]` | Confirm currently does not pass equity → usually `None` |
-| `sizing_method` | `str` | Default `"freqtrade_proposed"` (label only while confirm omits stake args) |
-| `config_fingerprint` | `str` | |
-| `stage_rejected` | `str` | `entry\|portfolio\|sizing\|leverage\|stoploss\|""` |
+| `leverage()` | `RiskEngine.get_leverage(max_leverage)` | `min(target_leverage, max_leverage)`; target default **10x** |
+| `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Keeps Freqtrade `proposed_stake`, capped by `max_stake` |
+| | | `enable_dynamic_sizing=False` (default) → multiplier **1.0** |
+| | | If dynamic sizing **on** → tag multipliers from `_TAG_MULTIPLIERS`, then `min(proposed * mult, max_stake)` |
 
-**Confirm call site (current):** passes portfolio context, Decision callback, `candidate_id`, and `default_stoploss` — **not** `proposed_stake`, `max_stake`, or `enable_dynamic_sizing`. Do not treat `auth.stake_amount` / `auth.leverage` as the live order size.
+Stoploss ladder remains `custom_stoploss` → `RiskEngine.get_stoploss()` (separate from authorize metadata).
 
-**Not implemented (do not document as live):** stop-distance risk budgeting; RiskEngine driving exchange stake/leverage from `auth.*`. Stoploss updates still flow through Freqtrade `custom_stoploss` → `RiskEngine.get_stoploss()`. Dynamic sizing expansion is **out of scope** for stabilization.
+**Stabilization scope:** do not expand dynamic sizing; do not implement stop-distance risk budgeting.
+
 ### 3.6 Telemetry
 
 **`TelemetryDecisionRecord`** (frozen) — base decision fields plus:

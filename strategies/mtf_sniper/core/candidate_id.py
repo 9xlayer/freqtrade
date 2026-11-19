@@ -1,6 +1,7 @@
 """Stable candidate identity helpers shared by fast-path and builder path."""
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional, Union
@@ -26,12 +27,19 @@ class ParsedCandidateId:
     candle_index: int
 
 
-def normalize_utc(ts: Union[datetime, pd.Timestamp, Any]) -> datetime:
-    """Normalize timestamps to timezone-aware UTC datetimes."""
+def normalize_utc(ts: Union[datetime, pd.Timestamp]) -> datetime:
+    """
+    Normalize ``datetime`` / ``pd.Timestamp`` to timezone-aware UTC.
+
+    Rejects bool / int / float / str and other coerced forms — callers must
+    pass an explicit temporal type so identity is not ambiguous.
+    """
     if isinstance(ts, pd.Timestamp):
         ts = ts.to_pydatetime()
     if not isinstance(ts, datetime):
-        ts = pd.Timestamp(ts).to_pydatetime()
+        raise ValueError(
+            f"timestamp must be datetime or pandas.Timestamp, got {type(ts).__name__}={ts!r}"
+        )
     if ts.tzinfo is None:
         return ts.replace(tzinfo=timezone.utc)
     return ts.astimezone(timezone.utc)
@@ -51,10 +59,28 @@ def _canonical_side(side: Union[TradeSide, str]) -> str:
 
 
 def _canonical_pair(pair: str) -> str:
-    p = str(pair).strip()
+    if not isinstance(pair, str):
+        raise ValueError(f"pair must be str, got {type(pair).__name__}={pair!r}")
+    p = pair.strip()
     if not p or "/" not in p:
         raise ValueError(f"pair must be a market symbol containing '/', got {pair!r}")
     return p
+
+
+def _require_nonneg_int(value: Any, name: str) -> int:
+    """
+    Accept only integral values (incl. numpy integers). Reject bool, float, str.
+
+    Never silently truncate floats (``int(12.9)``) or treat ``True`` as ``1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        raise ValueError(
+            f"{name} must be a non-negative integer, got {type(value).__name__}={value!r}"
+        )
+    idx = int(value)
+    if idx < 0:
+        raise ValueError(f"{name} must be >= 0, got {value!r}")
+    return idx
 
 
 def _is_canonical_int_token(token: str) -> bool:
@@ -69,7 +95,7 @@ def _is_canonical_int_token(token: str) -> bool:
 def make_candidate_id(
     pair: str,
     side: Union[TradeSide, str],
-    timestamp: Union[datetime, pd.Timestamp, Any],
+    timestamp: Union[datetime, pd.Timestamp],
     candle_index: int,
 ) -> str:
     """
@@ -77,14 +103,12 @@ def make_candidate_id(
 
         ``{pair}_{side}_{utc_epoch}_{candle_index}``
 
-    Validates pair (must contain ``/``), side (exact ``long``/``short``), and
-    non-negative ``candle_index``. Does not change the format.
+    Validates pair, side (exact ``long``/``short``), timestamp type, and
+    non-negative integral ``candle_index``. Does not change the format.
     """
     pair_v = _canonical_pair(pair)
     side_v = _canonical_side(side)
-    idx = int(candle_index)
-    if idx < 0:
-        raise ValueError(f"candle_index must be >= 0, got {candle_index!r}")
+    idx = _require_nonneg_int(candle_index, "candle_index")
     ts = normalize_utc(timestamp)
     epoch = int(ts.timestamp())
     return f"{pair_v}_{side_v}_{epoch}_{idx}"
@@ -101,7 +125,9 @@ def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
     """
     if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
         return None
-    parts = str(candidate_id).rsplit("_", 2)
+    if not isinstance(candidate_id, str):
+        return None
+    parts = candidate_id.rsplit("_", 2)
     if len(parts) != 3:
         return None
     prefix, epoch_s, idx_s = parts
@@ -129,10 +155,7 @@ def is_canonical_candidate_id(candidate_id: str) -> bool:
     parsed = parse_candidate_id(candidate_id)
     if parsed is None:
         return False
-    # Round-trip: remake from parsed fields must equal the original string.
-    remade = (
-        f"{parsed.pair}_{parsed.side}_{parsed.epoch}_{parsed.candle_index}"
-    )
+    remade = f"{parsed.pair}_{parsed.side}_{parsed.epoch}_{parsed.candle_index}"
     return remade == str(candidate_id)
 
 
@@ -141,7 +164,7 @@ def candidate_id_matches_fields(
     *,
     pair: str,
     side: Union[TradeSide, str],
-    timestamp: Union[datetime, pd.Timestamp, Any],
+    timestamp: Union[datetime, pd.Timestamp],
     candle_index: int,
 ) -> bool:
     """True when ``candidate_id`` is canonical and matches the given identity fields."""
@@ -151,13 +174,14 @@ def candidate_id_matches_fields(
     try:
         side_l = _canonical_side(side)
         pair_v = _canonical_pair(pair)
+        idx = _require_nonneg_int(candle_index, "candle_index")
+        epoch = int(normalize_utc(timestamp).timestamp())
     except ValueError:
         return False
     if parsed.pair != pair_v or parsed.side != side_l:
         return False
-    if int(candle_index) < 0 or parsed.candle_index != int(candle_index):
+    if parsed.candle_index != idx:
         return False
-    epoch = int(normalize_utc(timestamp).timestamp())
     return parsed.epoch == epoch
 
 
