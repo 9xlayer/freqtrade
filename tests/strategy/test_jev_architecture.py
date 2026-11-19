@@ -812,6 +812,137 @@ class TestJevDecisionEngine(unittest.TestCase):
         self.assertIsNone(_parse_unit_interval(1.5))
         self.assertEqual(_parse_unit_interval(0.6), 0.6)
 
+    def test_hybrid_score_calculation(self):
+        """Hybrid score tests: AI noul shifts score as a bounded term, not a binary gatekeeper."""
+        payload = CandleTrajectoryExtractor.build_payload(self.df_32, "BTC/USDT:USDT", "long")
+
+        class MockResponse:
+            def __init__(self, data_dict):
+                self.data_dict = data_dict
+
+            def read(self):
+                return json.dumps(self.data_dict).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        ext_engine = JevDecisionEngine(
+            cache_db=":memory:",
+            mode="external",
+            api_url="http://localhost:8000/predict",
+            api_key="mock_key",
+        )
+
+        # Baseline native score of df_32 is 0.60
+        # 1. High AI conviction (noul 0.85 -> delta +0.07 with w_ai=0.10) lifts 0.60 to 0.67
+        high_ai = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "confirm_trade": {"type": "noul", "noul": 0.85},
+                "market_regime": {"type": "choice", "choice": "trend_expansion"},
+            },
+        }
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.65", "JEV_DECISION_WEIGHT_AI": "0.10"}):
+            with patch("urllib.request.urlopen", return_value=MockResponse(high_ai)):
+                v = ext_engine.evaluate(payload)
+        self.assertEqual(v["decision"], "CONFIRM")
+        self.assertEqual(v["confidence"], 0.67)
+        self.assertTrue(any("Hybrid score: 0.67" in r for r in v["reasons"]))
+
+        # 2. Low AI conviction (noul 0.15 -> delta -0.07 with w_ai=0.10) demotes 0.60 to 0.53
+        low_ai = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "confirm_trade": {"type": "noul", "noul": 0.15},
+                "market_regime": {"type": "choice", "choice": "trend_expansion"},
+            },
+        }
+        with patch.dict(os.environ, {"JEV_CONFIRM_THRESHOLD": "0.55", "JEV_DECISION_WEIGHT_AI": "0.10"}):
+            with patch("urllib.request.urlopen", return_value=MockResponse(low_ai)):
+                v = ext_engine.evaluate(payload)
+        self.assertEqual(v["decision"], "VETO")
+        self.assertEqual(v["confidence"], 0.53)
+
+        # 3. Choppy regime penalty applies
+        choppy_ai = {
+            "model": "jev-1.14.0",
+            "answers": {
+                "confirm_trade": {"type": "noul", "noul": 0.85},
+                "market_regime": {"type": "choice", "choice": "choppy_ranging"},
+            },
+        }
+        with patch.dict(os.environ, {
+            "JEV_CONFIRM_THRESHOLD": "0.60",
+            "JEV_DECISION_WEIGHT_AI": "0.10",
+            "JEV_DECISION_CHOPPY_PENALTY": "0.10",
+        }):
+            with patch("urllib.request.urlopen", return_value=MockResponse(choppy_ai)):
+                v = ext_engine.evaluate(payload)
+        # 0.60 + 0.07 - 0.10 = 0.57 < 0.60 -> VETO
+        self.assertEqual(v["decision"], "VETO")
+        self.assertEqual(v["confidence"], 0.57)
+        self.assertTrue(any("choppy" in r.lower() for r in v["reasons"]))
+
+        # 4. Fail policy fallback_native
+        fallback_engine = JevDecisionEngine(
+            cache_db=":memory:",
+            mode="external",
+            api_url="http://127.0.0.1:59999/nonexistent",
+            api_key="mock_key",
+            fail_policy="fallback_native",
+        )
+        v_fb = fallback_engine.evaluate(payload)
+        self.assertEqual(v_fb["source"], "native_fallback")
+        self.assertEqual(v_fb["confidence"], 0.60)
+
+    def test_high_runway_confluence_and_trap_penalty(self):
+        """Verify native heuristic correctly rewards high-runway momentum and penalizes counter-trend traps."""
+        native_engine = JevDecisionEngine(cache_db=":memory:", mode="native")
+
+        # Create clean bearish dataframe for SHORT candidate
+        df_short = self.df_32.copy()
+        df_short["open"] = np.linspace(105, 100, 32)
+        df_short["close"] = np.linspace(104.8, 99.8, 32)
+        df_short["high"] = np.linspace(106, 101, 32)
+        df_short["low"] = np.linspace(104.5, 99.5, 32)
+        df_short.loc[df_short.index[-1], "open"] = 101.0
+        df_short.loc[df_short.index[-1], "high"] = 101.2
+        df_short.loc[df_short.index[-1], "low"] = 99.8
+        df_short.loc[df_short.index[-1], "close"] = 100.0
+
+        # 1. High-runway SHORT candidate: floor_dist >= 15%, ema50_dist < 0, rsi_1h < 50
+        payload_short_runway = CandleTrajectoryExtractor.build_payload(df_short, "ETH/USDT:USDT", "short")
+        payload_short_runway["macro_context"] = {
+            "floor_20d_dist_pct": 20.0,
+            "ema_50_1h_dist_pct": -0.80,
+            "rsi_1h": 46.0,
+            "trend_4h": "NEUTRAL",
+            "short_score": 65.0,
+            "atr_percentile": 50.0,
+        }
+        v_runway = native_engine.evaluate(payload_short_runway)
+        self.assertEqual(v_runway["confidence"], 0.70)
+        self.assertEqual(v_runway["decision"], "CONFIRM")
+        self.assertTrue(any("High-runway short momentum" in r for r in v_runway["reasons"]))
+
+        # 2. Counter-trend trap SHORT candidate: floor_dist < 8% or above 1H EMA50 with bullish RSI
+        payload_short_trap = CandleTrajectoryExtractor.build_payload(df_short, "ETH/USDT:USDT", "short")
+        payload_short_trap["macro_context"] = {
+            "floor_20d_dist_pct": 7.0,
+            "ema_50_1h_dist_pct": 0.50,
+            "rsi_1h": 54.0,
+            "trend_4h": "NEUTRAL",
+            "short_score": 65.0,
+            "atr_percentile": 50.0,
+        }
+        v_trap = native_engine.evaluate(payload_short_trap)
+        self.assertEqual(v_trap["confidence"], 0.50)
+        self.assertEqual(v_trap["decision"], "VETO")
+        self.assertTrue(any("Counter-trend trap" in r for r in v_trap["reasons"]))
+
 
 class TestHunterExternalModelIdentity(unittest.TestCase):
     """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""
