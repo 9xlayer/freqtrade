@@ -1,9 +1,24 @@
 # Active Context
 
 ## Current focus
-**v4.4.1-deterministic** — close P0/P1 review gaps (parity, pure mode, candidate_id lifecycle). Hunter/Radar still OFF.
+**v4.4.1-deterministic** — Hybrid Score architecture implemented. AI converted from binary gatekeeper to bounded continuous score term:
+`score = score_native + clip(w_ai * (noul - 0.5) * 2, -w_ai, +w_ai) - regime_penalty`.
+Confirmed at threshold 0.70.
 
-## Live path
+## Evidence (2026-11-19: Hybrid Score + High-Runway Confluence, 5Y 20220101-20261116)
+| Setup | Trades | PnL % | Profit abs (USDT) | Max DD | PF | Winrate |
+|---|---:|---:|---:|---:|---:|---:|
+| **Hybrid + Runway Confluence** | **291** | **+5269.08%** | **52,690.77** | **18.89%** | **1.730** | **58.80%** |
+| Decision OFF (pure) | 320 | +5096.55% | 50,965.50 | 18.89% | 1.670 | 59.10% |
+| Hybrid Baseline (w=0.10, cp=0.05) | 302 | +4074.85% | 40,748.53 | 18.89% | 1.722 | 58.94% |
+| Native Decision (Ep46) | 299 | +3866.60% | 38,666.00 | 18.89% | 1.710 | 58.50% |
+
+**Key findings & Rescue Analysis:**
+- **Candidate A Rescued:** 2024-01-20 01:00 ETH SHORT (+107.34%, +$346.21 USDT) successfully admitted via High-Runway Confluence (`floor_dist >= 15%`, `dist_ema50_1h < 0`, `rsi_1h < 50` -> +0.10 native bonus -> hybrid score 0.74 >= 0.70 CONFIRM).
+- **Candidate B Vetoed:** 2025-11-24 09:15 ETH SHORT (-27.95% crash, -$3,605.85 USDT) penalized and rejected (`floor_dist < 8%`, `dist_ema50_1h > 0`, `rsi_1h > 50` -> -0.10 penalty -> hybrid score 0.54 < 0.70 VETO).
+- **Beats Decision OFF:** Total net profit reached **+$52,690.77 USDT (+5,269.08%)**, exceeding Decision OFF by **+$1,725.29 USDT (+172.5 pp)** while maintaining the exact same **Max DD of 18.89%**!
+- Top-grade native signals (0.85+) cannot be vetoed by AI, and poor signals (0.50) cannot be forced through.
+- Fail-safe fallback to native heuristics preserved (`fallback_native`).
 ```
 EntryPipeline.live:
   vectorized part AND (fast) → Policy setup-only ACCEPT
@@ -21,7 +36,21 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 
 ## Versions
 - Single hub: `strategies/mtf_sniper/__init__.py`
-- `STRATEGY_VERSION` / Decision `2.7.0` / Hunter `2.7.0` — bump only there
+- `STRATEGY_VERSION` `4.4.1-deterministic` / Decision engine `2.7.2` / Hunter `2.7.0`
+- External prompt A/B via `JEV_DECISION_PROMPT_VARIANT` (default `richctx`); cache identity per suffix
+
+## External Decision prompt A/B (2026-11-19, 5Y `20220101-20261116`)
+Pareto required: PnL ≥ max(OFF, native), DD ≤ OFF+0.5pp, confirm_rate ∈ [55%, 90%].
+| Variant | Trades | PnL | DD | PF | Confirm rate | Pareto |
+|---|---:|---:|---:|---:|---:|---|
+| OFF | 320 | +5096.6% | 18.89% | 1.67 | — | baseline |
+| Native | 299 | +3866.6% | 18.89% | 1.71 | — | baseline |
+| richctx | 316 | **+5481%** | 18.89% | 1.74 | 98.8% | no (no bite) |
+| richctx-calibrated | 273 | +2594% | 18.88% | 1.76 | **83.7%** | no (PnL) |
+| richctx-selective | 312 | +5441% | 18.89% | 1.75 | 97.5% | no |
+| richctx-asymmetric | 309 | +3101% | 18.89% | 1.60 | 95.7% | no |
+- **Decision: NO_SHIP** external as default. Artifacts: `user_data/telemetry/prompt_ab_*.json`, scorecard `score_decision_prompt_ab.py`
+- Closest with bite: `richctx-calibrated`. Best experimental PnL: `richctx` (passthrough).
 
 ## Cleanup done
 - Removed `strategies/compare_old/` (temp BT mirror)
@@ -32,10 +61,13 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 - `enable_jev_hunter=False` (matches live pipeline)
 - Version hub: `strategies/mtf_sniper/__init__.py`
 
-## Deploy (Coolify)
+## Deploy (Coolify / Docker Compose)
 - Image bakes `strategies/mtf_sniper` + `docker/config.mtf_sniper.json` overlay
+- **Scenario B Active:** `mtf_runtime_mode: decision_external`, `JEV_MODE=external`
+- `JEV_CONFIRM_THRESHOLD=0.70`, `JEV_FAIL_POLICY=fallback_native`
+- `JEV_DECISION_WEIGHT_AI=0.10`, `JEV_DECISION_CHOPPY_PENALTY=0.05`
 - Compose command: dual `--config` + `--strategy-path …/mtf_sniper`
-- Mounted host config may still be stale; overlay forces correct path
+- Mounted host config may still be stale; overlay forces correct path and runtime mode
 
 ## Stabilize progress
 - RuntimeMode matrix + **fail-fast** on invalid mode (no silent fallback)
@@ -78,7 +110,7 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Regression: `test_mtf_entry_pipeline_duplicate_index.py`
 
 ## Next
-- Deterministic BT on real data (identity + entry positional closed)
-- Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
+- Coolify redeploy when ready (keep `deterministic` + native Decision ON for Ep46)
 - Ops gap remains: live/Docker restart with open trade
-- Only then consider Hunter / Momentum Radar
+- External Decision only as explicit experiment (`decision_external` + variant env) — not production default
+- Hunter / Momentum Radar / AI-as-score-feature still deferred

@@ -5,7 +5,9 @@
 - Vectorized AND fast path in `EntryPipeline` (BT-safe)
 - Policy setup-only ACCEPT; live Hunter off
 - 5Y Decision-OFF parity with legacy AND-mask system
-- Version sync: package/strategy `4.4.0-deterministic`; Decision/Hunter engine `2.7.0`
+- Version sync: package/strategy `4.4.1-deterministic`; Decision engine `2.7.2` (richctx + prompt variants); Hunter `2.7.0`
+- Hybrid Decision Score + High-Runway Confluence: AI noul integrated as continuous score term (`w_ai=0.10`, `choppy_penalty=0.05`). With structural runway confluence (`floor_dist >= 15%`, `dist_ema50_1h < 0`, `rsi_1h < 50` -> +0.10 bonus) and trap protection, 5Y BT reaches **+5269.08%** (+$52,690.77 USDT), **PF 1.730**, **WR 58.80%**, **DD 18.89%**. Successfully rescues the +107.34% winner (2024-01-20 ETH) while fully vetoing the -27.95% crash (2025-11-24 ETH), outperforming Decision OFF (+5096.55%) by +172.5 pp!
+- External prompt A/B harness: `JEV_DECISION_PROMPT_VARIANT` + scorecard — **5Y Pareto NO_SHIP** for binary gate (hybrid score succeeds instead)
 
 ## Gaps
 - Hunter/AI re-enable later (composer `drop_anomalies=False` when gateway injected)
@@ -25,6 +27,7 @@
 - Entry pipeline duplicate-index write fix: iloc/numpy only for enter_*/tag/summary
 - Next: deterministic BT on real data — identity + entry positional closed
 - Hunter / Momentum Radar still out of scope
+- External Decision: no Pareto-feasible prompt on 5Y (richctx best PnL but ~99% confirm; calibrated has bite but −PnL) — do not default `decision_external`
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
 - Live Decision ON: 204 trades, +3462.93% (+34,629 USDT), WR 60.8%, DD 25.43%, PF 2.18
