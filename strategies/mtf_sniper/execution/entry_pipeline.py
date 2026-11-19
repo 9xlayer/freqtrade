@@ -93,8 +93,8 @@ class EntryPipeline:
 
     @classmethod
     def live(cls, strategy: Any, hunter_escalation: Optional[HunterEscalationGateway] = None) -> "EntryPipeline":
-        # Production path: Hunter off until deterministic sniper is re-validated.
-        _ = hunter_escalation  # reserved for future re-enable
+        _ = hunter_escalation
+        enable_waterfall = bool(getattr(strategy, "enable_waterfall", False))
         return cls(
             sensor_suite=SensorSuite.live(strategy),
             hunter_escalation=None,
@@ -106,7 +106,7 @@ class EntryPipeline:
                 block_macro_bull_shorts=bool(
                     getattr(strategy, "block_macro_bull_shorts", False)
                 ),
-                allow_anomaly_entries=False,
+                allow_anomaly_entries=enable_waterfall,
             ),
         )
 
@@ -197,14 +197,16 @@ class EntryPipeline:
             accepted.append((candidate, final))
             # candle_index is an absolute iloc position — never write via index label
             # (duplicate labels would mark multiple rows).
-            pos = int(candidate.candle_index)
+            pos = candidate.candle_index
             tag = str(final.metadata.get("entry_tag") or final.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
-                enter_long.iloc[pos] = True
-                enter_tag.iloc[pos] = tag
+                if not enter_long.iloc[pos]:
+                    enter_long.iloc[pos] = True
+                    enter_tag.iloc[pos] = tag
             else:
-                enter_short.iloc[pos] = True
-                enter_tag.iloc[pos] = tag
+                if not enter_short.iloc[pos]:
+                    enter_short.iloc[pos] = True
+                    enter_tag.iloc[pos] = tag
 
         # Element-wise via numpy so duplicate index labels cannot realign/explode.
         long_arr = enter_long.to_numpy(dtype=bool, copy=True)
@@ -256,7 +258,7 @@ class EntryPipeline:
         if strategy is None:
             return None
 
-        min_history = max(int(getattr(s, "min_history", 100)) for s in sensors)
+        min_history = max(getattr(s, "min_history", 100) for s in sensors)
         short_parts = cached_sniper_parts(strategy, dataframe, pair, TradeSide.SHORT)
         long_parts = cached_sniper_parts(strategy, dataframe, pair, TradeSide.LONG)
 
@@ -305,6 +307,40 @@ class EntryPipeline:
                 score_key="long_score",
             )
         )
+        if getattr(self.engine.short_policy.config, "allow_anomaly_entries", False):
+            from strategies.mtf_sniper.intelligence.jev_entry_hunter import MomentumRadar
+
+            radar_cands = MomentumRadar.find_candidates(
+                dataframe, cooldown_bars=12, directional_cooldown=True
+            )
+            has_date = "date" in dataframe.columns
+            for pos, event_type in radar_cands:
+                if "SHORT" not in event_type:
+                    continue
+                i = pos
+                row = dataframe.iloc[i]
+                ts = normalize_utc(row["date"]) if has_date else normalize_utc(datetime(1970, 1, 1))
+                feats = {
+                    "setup_name": "waterfall_collapse",
+                    "signal_source": "momentum_radar",
+                    "event_trigger": event_type,
+                    "short_score": float(row.get("short_score", 0.0) or 0.0),
+                }
+                candidates.append(
+                    TradeCandidate(
+                        candidate_id=make_candidate_id(pair, TradeSide.SHORT, ts, i),
+                        pair=pair,
+                        side=TradeSide.SHORT,
+                        primary_sensor="waterfall_drop",
+                        secondary_sensors=[],
+                        confluence_count=1,
+                        timestamp=ts,
+                        candle_index=i,
+                        raw_features=feats,
+                        cooldown_bars=0,
+                    )
+                )
+
         candidates.sort(key=lambda c: (c.candle_index, c.side.value))
         return candidates
 
@@ -465,21 +501,23 @@ def _summarize_live_entries(dataframe: DataFrame) -> List[dict]:
     )
     has_date = "date" in dataframe.columns
     for pos in long_pos:
-        row = dataframe.iloc[int(pos)]
+        p = int(pos)
+        row = dataframe.iloc[p]
         rows.append(
             {
                 "side": "long",
                 "tag": str(row.get("enter_tag") or ""),
-                "date": str(row["date"]) if has_date else str(dataframe.index[int(pos)]),
+                "date": str(row["date"]) if has_date else str(dataframe.index[p]),
             }
         )
     for pos in short_pos:
-        row = dataframe.iloc[int(pos)]
+        p = int(pos)
+        row = dataframe.iloc[p]
         rows.append(
             {
                 "side": "short",
                 "tag": str(row.get("enter_tag") or ""),
-                "date": str(row["date"]) if has_date else str(dataframe.index[int(pos)]),
+                "date": str(row["date"]) if has_date else str(dataframe.index[p]),
             }
         )
     return rows

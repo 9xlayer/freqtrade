@@ -69,7 +69,6 @@ class ShortPolicy:
         close = float(row.get("close", 0.0) or 0.0)
 
         if is_setup_pass:
-            # Setup eligibility is independent of quality grade.
             short_score = float(
                 candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
             )
@@ -79,7 +78,7 @@ class ShortPolicy:
             return PolicyEvaluationResult(
                 is_valid=True,
                 score=score,
-                quality_grade=grade,  # honest grade; do not remap REJECT→B
+                quality_grade=grade,
                 reasons=["ACCEPT"],
                 suggested_stop_distance_pct=cfg.base_stop_distance_pct,
                 target_rr=cfg.target_rr,
@@ -103,7 +102,6 @@ class ShortPolicy:
                 },
             )
 
-        # --- Anomaly path (re-enable with allow_anomaly_entries=True + Hunter) ---
         ema_50_1d = row.get("ema_50_1d")
         ema_200_1d = row.get("ema_200_1d")
         if cfg.block_macro_bull_shorts and ema_50_1d is not None and ema_200_1d is not None:
@@ -112,18 +110,46 @@ class ShortPolicy:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         if is_waterfall:
-            is_bear_macro = (
-                float(row.get("is_macro_bear_market_1d", 0) or 0) == 1
-                or (ema_50_1d is not None and close < float(ema_50_1d))
-                or float(row.get("is_bear_wave_4h", 0) or 0) == 1
-                or float(row.get("macdhist_4h", 0) or 0) < 0
-            )
-            is_bull_macro = (
-                float(row.get("is_macro_bull_run_1d", 0) or 0) == 1
-                or (ema_50_1d is not None and close > float(ema_50_1d))
-                or float(row.get("is_bull_wave_4h", 0) or 0) == 1
-            )
-            if not is_bear_macro or is_bull_macro:
+            c_range = float(row.get("high", 0.0) - row.get("low", 0.0))
+            c_body = float(abs(row.get("close", 0.0) - row.get("open", 0.0)))
+            body_ratio = c_body / c_range if c_range > 0 else 0.5
+            is_red = close < float(row.get("open", close))
+            if not (is_red and body_ratio >= 0.50):
+                reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
+
+            sw_low = float(row.get("swing_low_20d_1d", 0.0) or 0.0)
+            floor_dist_pct = ((close - sw_low) / sw_low * 100.0) if sw_low > 0 else 0.0
+
+            ema50_4h = float(row.get("ema_50_4h", 0.0) or 0.0)
+            dist_ema50_4h = ((close - ema50_4h) / ema50_4h * 100.0) if ema50_4h > 0 else 0.0
+
+            ema50_1d_val = float(row.get("ema_50_1d", 0.0) or 0.0)
+            dist_ema50_1d = ((close - ema50_1d_val) / ema50_1d_val * 100.0) if ema50_1d_val > 0 else 0.0
+
+            ema200_1d_val = float(row.get("ema_200_1d", 0.0) or 0.0)
+            dist_ema200_1d = ((close - ema200_1d_val) / ema200_1d_val * 100.0) if ema200_1d_val > 0 else 0.0
+
+            macdhist_4h = float(row.get("macdhist_4h", 0.0) or 0.0)
+            bb_width_4h = float(row.get("bb_width_4h", 0.05) or 0.05)
+            vol_ratio = float(row.get("rel_vol", 1.0) or 1.0)
+
+            is_vacuum_breakdown = floor_dist_pct <= 0.0
+            if is_vacuum_breakdown:
+                is_capitulation_climax = dist_ema50_4h < -6.0 or dist_ema50_1d < -15.0
+                if is_capitulation_climax:
+                    reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+            else:
+                is_overextended = dist_ema50_4h < -3.5 or dist_ema50_1d < -12.0
+                is_macro_bull = dist_ema200_1d > 5.0
+                is_bull_impulse = macdhist_4h > 35.0
+                is_chop_squeeze = bb_width_4h < 0.035
+                is_high_floor_trap = (floor_dist_pct > 10.0) and (vol_ratio < 4.0) and (bb_width_4h < 0.06)
+
+                if is_overextended or is_macro_bull or is_bull_impulse or is_chop_squeeze or is_high_floor_trap:
+                    reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+
+            atr_pct = float(row.get("atr_pct", 50.0) or 50.0)
+            if atr_pct >= 90.0:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         if cfg.filter_wick_rejection:
@@ -160,6 +186,9 @@ class ShortPolicy:
                 floor_safe = floor_dist >= floor_min
             if not floor_safe:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+        else:
+            if is_waterfall:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         short_score = float(
             candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
@@ -184,7 +213,12 @@ class ShortPolicy:
             )
 
         entry_tag = setup.value
-        if setup in (ShortSetup.A80_PLUS, ShortSetup.B65_PLUS, ShortSetup.C_SUB65):
+        if setup in (
+            ShortSetup.A80_PLUS,
+            ShortSetup.B65_PLUS,
+            ShortSetup.C_SUB65,
+            ShortSetup.WATERFALL_COLLAPSE,
+        ):
             entry_tag = setup.value
         elif short_score >= 80:
             entry_tag = ShortSetup.A80_PLUS.value

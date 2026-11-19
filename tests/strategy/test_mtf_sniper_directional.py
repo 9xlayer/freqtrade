@@ -148,6 +148,51 @@ class TestShortPolicy(unittest.TestCase):
         result = policy.evaluate(cand, row)
         self.assertFalse(result.is_valid)
 
+    def test_waterfall_dual_regime_vacuum_accepted(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
+        # Floor breakdown: close 72,000 below swing_low 72,500 (floor_dist < 0)
+        row = {
+            "open": 72800.0,
+            "high": 72900.0,
+            "low": 71900.0,
+            "close": 72000.0,
+            "swing_low_20d_1d": 72500.0,
+            "ema_50_4h": 74500.0,  # -3.3%
+            "ema_50_1d": 78000.0,  # -7.7%
+            "ema_200_1d": 75000.0,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 30.0,
+            "ema_21": 72600.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+
+    def test_waterfall_climax_overextended_rejected(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
+        # Extreme oversold 4h (> -6%) and 1d (> -15%)
+        row = {
+            "open": 50000.0,
+            "high": 50100.0,
+            "low": 49000.0,
+            "close": 49200.0,
+            "swing_low_20d_1d": 52000.0,  # floor_dist < 0
+            "ema_50_4h": 55000.0,  # -10.5% (climax)
+            "ema_50_1d": 62000.0,  # -20.6% (climax)
+            "ema_200_1d": 65000.0,
+            "lower_wick_ratio": 0.15,
+            "close_pos_ratio": 0.18,
+            "rsi": 22.0,
+            "ema_21": 49800.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertFalse(result.is_valid)
+
 
 class TestDirectionalEngine(unittest.TestCase):
     def test_routes_by_side(self):
@@ -198,6 +243,13 @@ class TestEntryPipeline(unittest.TestCase):
         self.assertIsNone(pipe.hunter_escalation)
         self.assertFalse(pipe.engine.long_policy.config.allow_anomaly_entries)
         self.assertFalse(pipe.engine.short_policy.config.allow_anomaly_entries)
+
+    def test_live_factory_enables_waterfall_when_requested(self):
+        strat = type("S", (), {"block_macro_bull_shorts": False, "enable_waterfall": True})()
+        pipe = EntryPipeline.live(strat)
+        self.assertIsNone(pipe.hunter_escalation)
+        self.assertFalse(pipe.engine.long_policy.config.allow_anomaly_entries)
+        self.assertTrue(pipe.engine.short_policy.config.allow_anomaly_entries)
 
 
 if __name__ == "__main__":
