@@ -5,10 +5,11 @@ Extracted from hunter_merge for parity with long/hunter_gates.py.
 Defaults preserve the live short-hunter behavior that contributes positively
 in baseline backtests.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ def evaluate_short_hunter_waterfall(
     confidence: float,
     vol_safe: bool,
     sideway_safe: bool,
-    config: Optional[ShortHunterGateConfig] = None,
+    config: ShortHunterGateConfig | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Return (accepted, rejection_reasons).

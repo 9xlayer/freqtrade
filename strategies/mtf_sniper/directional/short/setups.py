@@ -49,7 +49,7 @@ def resolve_short_setup(primary_sensor: str, raw_features: dict) -> ShortSetup:
     ):
         return ShortSetup.WATERFALL_COLLAPSE
 
-    if "short_score" in raw_features and not str(primary_sensor).startswith("composite_"):
+    if "short_score" in raw_features and not primary_sensor.startswith("composite_"):
         score = float(raw_features.get("short_score", 0.0) or 0.0)
         if score >= 80.0:
             return ShortSetup.A80_PLUS
