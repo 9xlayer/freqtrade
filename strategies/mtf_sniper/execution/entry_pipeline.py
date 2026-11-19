@@ -195,25 +195,34 @@ class EntryPipeline:
                 continue
 
             accepted.append((candidate, final))
-            idx = dataframe.index[candidate.candle_index]
+            # candle_index is an absolute iloc position — never write via index label
+            # (duplicate labels would mark multiple rows).
+            pos = int(candidate.candle_index)
             tag = str(final.metadata.get("entry_tag") or final.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
-                enter_long.loc[idx] = True
-                enter_tag.loc[idx] = tag
+                enter_long.iloc[pos] = True
+                enter_tag.iloc[pos] = tag
             else:
-                enter_short.loc[idx] = True
-                enter_tag.loc[idx] = tag
+                enter_short.iloc[pos] = True
+                enter_tag.iloc[pos] = tag
 
-        both = enter_long & enter_short
-        if both.any():
-            enter_long = enter_long & ~both
-            enter_short = enter_short & ~both
-            enter_tag.loc[both] = ""
+        # Element-wise via numpy so duplicate index labels cannot realign/explode.
+        long_arr = enter_long.to_numpy(dtype=bool, copy=True)
+        short_arr = enter_short.to_numpy(dtype=bool, copy=True)
+        both_arr = long_arr & short_arr
+        if both_arr.any():
+            long_arr &= ~both_arr
+            short_arr &= ~both_arr
+            tag_arr = enter_tag.to_numpy(copy=True)
+            tag_arr[both_arr] = ""
+            enter_long = pd.Series(long_arr, index=dataframe.index)
+            enter_short = pd.Series(short_arr, index=dataframe.index)
+            enter_tag = pd.Series(tag_arr, index=dataframe.index)
             rejected.append(
                 {
                     "pair": pair,
                     "reason": "CONTRADICTORY_SIGNALS",
-                    "bars": int(both.sum()),
+                    "bars": int(both_arr.sum()),
                 }
             )
 
@@ -263,10 +272,15 @@ class EntryPipeline:
             short_and.iloc[:min_history] = False
             long_and.iloc[:min_history] = False
 
-        both = short_and & long_and
-        if both.any():
-            short_and = short_and & ~both
-            long_and = long_and & ~both
+        # Positional cancel — Series & under duplicate labels can mis-align.
+        short_arr = short_and.to_numpy(dtype=bool, copy=True)
+        long_arr = long_and.to_numpy(dtype=bool, copy=True)
+        both_arr = short_arr & long_arr
+        if both_arr.any():
+            short_arr &= ~both_arr
+            long_arr &= ~both_arr
+            short_and = pd.Series(short_arr, index=dataframe.index)
+            long_and = pd.Series(long_arr, index=dataframe.index)
 
         candidates: List[TradeCandidate] = []
         candidates.extend(
@@ -382,18 +396,27 @@ def apply_entry_pipeline(
     final_long = strategy.apply_cooldown(cand_long, long_cd)
     final_short = strategy.apply_cooldown(cand_short, short_cd)
 
-    both_mask = final_long & final_short
-    if both_mask.any():
+    # Positional masks — avoid Series & / .loc[label] under duplicate indexes.
+    long_arr = final_long.to_numpy(dtype=bool, copy=True)
+    short_arr = final_short.to_numpy(dtype=bool, copy=True)
+    both_arr = long_arr & short_arr
+    if both_arr.any():
         logger.warning(
-            f"[RiskGate] Simultaneous Long & Short on {both_mask.sum()} bars — cancel both."
+            f"[RiskGate] Simultaneous Long & Short on {int(both_arr.sum())} bars — cancel both."
         )
-        final_long = final_long & (~both_mask)
-        final_short = final_short & (~both_mask)
+        long_arr &= ~both_arr
+        short_arr &= ~both_arr
 
-    dataframe.loc[final_short, "enter_short"] = 1
-    dataframe.loc[final_long, "enter_long"] = 1
-    for idx in dataframe.index[final_long | final_short]:
-        dataframe.loc[idx, "enter_tag"] = tags.loc[idx]
+    n = len(dataframe)
+    enter_short_out = np.zeros(n, dtype=np.int64)
+    enter_long_out = np.zeros(n, dtype=np.int64)
+    enter_short_out[short_arr] = 1
+    enter_long_out[long_arr] = 1
+    tag_src = tags.to_numpy()
+    tag_out = np.where(long_arr | short_arr, tag_src, "")
+    dataframe["enter_short"] = enter_short_out
+    dataframe["enter_long"] = enter_long_out
+    dataframe["enter_tag"] = tag_out
 
     # Correlate Candidate → confirm_trade_entry / Risk telemetry
     _remember_accepted_candidates(strategy, result)
@@ -432,23 +455,31 @@ def _remember_accepted_candidates(strategy: Any, result: EntryPipelineResult) ->
 
 
 def _summarize_live_entries(dataframe: DataFrame) -> List[dict]:
+    """One summary row per positional enter_* signal (safe under duplicate index)."""
     rows: List[dict] = []
-    long_mask = dataframe["enter_long"].fillna(0).astype(bool)
-    short_mask = dataframe["enter_short"].fillna(0).astype(bool)
-    for idx in dataframe.index[long_mask]:
+    long_pos = np.flatnonzero(
+        dataframe["enter_long"].fillna(0).to_numpy(dtype=bool)
+    )
+    short_pos = np.flatnonzero(
+        dataframe["enter_short"].fillna(0).to_numpy(dtype=bool)
+    )
+    has_date = "date" in dataframe.columns
+    for pos in long_pos:
+        row = dataframe.iloc[int(pos)]
         rows.append(
             {
                 "side": "long",
-                "tag": str(dataframe.loc[idx, "enter_tag"] or ""),
-                "date": str(dataframe.loc[idx, "date"]) if "date" in dataframe.columns else str(idx),
+                "tag": str(row.get("enter_tag") or ""),
+                "date": str(row["date"]) if has_date else str(dataframe.index[int(pos)]),
             }
         )
-    for idx in dataframe.index[short_mask]:
+    for pos in short_pos:
+        row = dataframe.iloc[int(pos)]
         rows.append(
             {
                 "side": "short",
-                "tag": str(dataframe.loc[idx, "enter_tag"] or ""),
-                "date": str(dataframe.loc[idx, "date"]) if "date" in dataframe.columns else str(idx),
+                "tag": str(row.get("enter_tag") or ""),
+                "date": str(row["date"]) if has_date else str(dataframe.index[int(pos)]),
             }
         )
     return rows
