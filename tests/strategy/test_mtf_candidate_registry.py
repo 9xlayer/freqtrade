@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id
 from strategies.mtf_sniper.core.candidate_registry import (
@@ -243,6 +244,144 @@ class TestCandidateRegistryLifecycle(unittest.TestCase):
                 entry_tag="short_A80plus",
                 current_time=ts,
             )
+        )
+
+    def test_remember_fail_closed_on_malformed_identity_no_raise(self):
+        """Malformed identity fields must not raise or store; bad ID alone still canonicizes."""
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        reg = CandidateRegistry()
+        # Identity-field failures → no registry write
+        bad_cases = [
+            None,
+            SimpleNamespace(
+                pair=None,
+                side=TradeSide.SHORT,
+                timestamp=ts,
+                candle_index=1,
+                candidate_id="",
+            ),
+            SimpleNamespace(
+                pair=42,
+                side=TradeSide.SHORT,
+                timestamp=ts,
+                candle_index=1,
+                candidate_id="",
+            ),
+            SimpleNamespace(
+                pair="BTC/USDT:USDT",
+                side=None,
+                timestamp=ts,
+                candle_index=1,
+                candidate_id="",
+            ),
+            SimpleNamespace(
+                pair="BTC/USDT:USDT",
+                side="invalid",
+                timestamp=ts,
+                candle_index=1,
+                candidate_id="",
+            ),
+            SimpleNamespace(
+                pair="BTC/USDT:USDT",
+                side=object(),
+                timestamp=ts,
+                candle_index=1,
+                candidate_id="",
+            ),
+            SimpleNamespace(
+                pair="BTC/USDT:USDT",
+                side=TradeSide.SHORT,
+                timestamp=1717243200,
+                candle_index=1,
+                candidate_id="",
+            ),
+        ]
+        for bad in bad_cases:
+            try:
+                reg.remember(bad, "short_A80plus")
+            except Exception as exc:  # pragma: no cover - must not happen
+                self.fail(f"remember raised on malformed candidate: {exc!r}")
+        self.assertIsNone(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            )
+        )
+        # Non-str candidate_id with valid identity → no raise, store canonical
+        expected = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 1)
+        try:
+            reg.remember(
+                SimpleNamespace(
+                    pair="BTC/USDT:USDT",
+                    side=TradeSide.SHORT,
+                    timestamp=ts,
+                    candle_index=1,
+                    candidate_id=123,
+                ),
+                "short_A80plus",
+            )
+        except Exception as exc:  # pragma: no cover
+            self.fail(f"remember raised on non-str candidate_id: {exc!r}")
+        self.assertEqual(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            ),
+            expected,
+        )
+
+    def test_remember_none_candidate_id_uses_canonical(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        expected = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 3)
+        reg = CandidateRegistry()
+        reg.remember(
+            SimpleNamespace(
+                pair="BTC/USDT:USDT",
+                side=TradeSide.SHORT,
+                timestamp=ts,
+                candle_index=3,
+                candidate_id=None,
+            ),
+            "short_A80plus",
+        )
+        self.assertEqual(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            ),
+            expected,
+        )
+
+    def test_remember_mismatched_id_with_valid_fields_stores_canonical(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        expected = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 4)
+        cand = TradeCandidate(
+            candidate_id="BTC/USDT:USDT_short_999_0",
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="setup:sniper_short",
+            secondary_sensors=[],
+            confluence_count=4,
+            timestamp=ts,
+            candle_index=4,
+            raw_features={},
+        )
+        reg = CandidateRegistry()
+        reg.remember(cand, "short_A80plus")
+        self.assertEqual(
+            reg.lookup(
+                pair="BTC/USDT:USDT",
+                side="short",
+                entry_tag="short_A80plus",
+                current_time=ts,
+            ),
+            expected,
         )
 
 

@@ -65,8 +65,13 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Registry fail-closed on invalid identity; lookup needs `current_time`
 - DB persist expire/reload covered; full process/Docker restart still ops-only
 
+## Final stabilization patch (on `pi-deploy`)
+- P1: `CandidateRegistry.remember()` validates pair/side/ts/index before any strip/key write; outer except fail-closed; mismatch → canonical when fields valid
+- P2: `_resolve_candidate_id` DF fallback uses `np.flatnonzero(mask)` absolute positions (safe under duplicate index)
+- Verification: 89 passed (hardening/registry/db_persist/parity/callback/contracts/policy/risk/runtime/lookahead)
+- Fast Path / Event Path / Policy / sizing untouched
+
 ## Next
-- Commit docs+hardening batch when ready
-- Operational verification: bot restart with open trade; dry-run callback lifecycle
+- Deterministic BT / ops verification on real data (stop code refactor)
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
 - Only then consider Hunter / Momentum Radar

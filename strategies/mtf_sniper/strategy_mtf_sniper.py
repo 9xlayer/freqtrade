@@ -510,6 +510,8 @@ class StrategyMTFSniper(IStrategy):
                 return found
 
         # Reconstruct canonical ID from last matching enter_* bar (same max-age as registry).
+        # Absolute row positions come from the boolean mask — never index-label→position
+        # (duplicate labels would otherwise pick the wrong candle_index).
         try:
             df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         except Exception:
@@ -522,28 +524,22 @@ class StrategyMTFSniper(IStrategy):
                 mask = (df["date"] <= current_time) & (df[col].fillna(0).astype(bool))
                 if entry_tag and "enter_tag" in df.columns:
                     mask = mask & (df["enter_tag"].astype(str) == str(entry_tag))
-                hits = df.loc[mask]
-                if not hits.empty:
-                    label = hits.index[-1]
-                    row = hits.iloc[-1]
-                    ts = normalize_utc(row["date"])
-                    if ts > ct:
-                        return None  # never reconstruct from a future bar
-                    if (ct - ts) > DEFAULT_LOOKUP_MAX_AGE:
-                        logger.warning(
-                            f"[CandidateID] DataFrame fallback stale for {pair} {side_l}: "
-                            f"signal_age={(ct - ts)} > max={DEFAULT_LOOKUP_MAX_AGE}"
-                        )
-                        return None
-                    candle_index = self._dataframe_position(df, label)
-                    if candle_index is None:
-                        logger.warning(
-                            f"[CandidateID] Cannot resolve candle position for "
-                            f"{pair} label={label!r} — refusing non-canonical invent"
-                        )
-                        return None
-                    trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
-                    return make_candidate_id(pair, trade_side, ts, candle_index)
+                positions = np.flatnonzero(mask.fillna(False).to_numpy(dtype=bool))
+                if len(positions) == 0:
+                    return None
+                candle_index = int(positions[-1])
+                row = df.iloc[candle_index]
+                ts = normalize_utc(row["date"])
+                if ts > ct:
+                    return None  # never reconstruct from a future bar
+                if (ct - ts) > DEFAULT_LOOKUP_MAX_AGE:
+                    logger.warning(
+                        f"[CandidateID] DataFrame fallback stale for {pair} {side_l}: "
+                        f"signal_age={(ct - ts)} > max={DEFAULT_LOOKUP_MAX_AGE}"
+                    )
+                    return None
+                trade_side = TradeSide.SHORT if side_l == "short" else TradeSide.LONG
+                return make_candidate_id(pair, trade_side, ts, candle_index)
 
         return None
 

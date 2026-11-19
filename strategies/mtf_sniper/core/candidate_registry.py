@@ -13,9 +13,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from strategies.mtf_sniper.core.candidate_id import (
+    _canonical_pair,
+    _canonical_side,
+    _require_nonneg_int,
     candidate_id_matches_fields,
     make_candidate_id,
     normalize_utc,
@@ -54,49 +57,68 @@ class CandidateRegistry:
         self._by_trade: Dict[int, str] = {}
         self._trade_order: list[int] = []
 
-    def remember(self, candidate: TradeCandidate, entry_tag: str) -> None:
-        tag = str(entry_tag or "")
-        key = _EntryKey(
-            pair=str(candidate.pair),
-            side=str(candidate.side.value).lower(),
-            entry_tag=tag,
-        )
-        # Fail-closed: do not invent identity from untrusted / mistyped fields.
+    def remember(self, candidate: Any, entry_tag: str) -> None:
+        """
+        Store a candidate_id for (pair, side, entry_tag).
+
+        Fail-closed: malformed identity never raises into the entry pipeline and
+        never writes the registry. When identity fields are valid but a provided
+        ``candidate_id`` mismatches, store the canonical ID rebuilt from fields.
+        """
         try:
-            ts = normalize_utc(candidate.timestamp)
-            expected = make_candidate_id(
-                candidate.pair, candidate.side, ts, candidate.candle_index
+            if candidate is None:
+                logger.warning("[CandidateRegistry] Refusing remember: candidate is None")
+                return
+
+            pair = _canonical_pair(getattr(candidate, "pair", None))
+            side = _canonical_side(getattr(candidate, "side", None))
+            ts = normalize_utc(getattr(candidate, "timestamp", None))
+            idx = _require_nonneg_int(
+                getattr(candidate, "candle_index", None), "candle_index"
             )
-        except ValueError as exc:
+            expected = make_candidate_id(pair, side, ts, idx)
+
+            raw_id = getattr(candidate, "candidate_id", None)
+            if raw_id is None or raw_id == "":
+                cid = expected
+            elif not isinstance(raw_id, str):
+                logger.warning(
+                    f"[CandidateRegistry] Ignoring non-str candidate_id="
+                    f"{type(raw_id).__name__}={raw_id!r}; storing canonical {expected!r}"
+                )
+                cid = expected
+            else:
+                provided = raw_id.strip()
+                if provided and not candidate_id_matches_fields(
+                    provided,
+                    pair=pair,
+                    side=side,
+                    timestamp=ts,
+                    candle_index=idx,
+                ):
+                    logger.warning(
+                        f"[CandidateRegistry] Ignoring mismatched candidate_id="
+                        f"{provided!r}; storing canonical {expected!r}"
+                    )
+                    cid = expected
+                else:
+                    cid = provided or expected
+
+            # Only after full validation — never build key from untrusted fields.
+            key = _EntryKey(
+                pair=pair,
+                side=side,
+                entry_tag=str(entry_tag or ""),
+            )
+            bucket = self._store.setdefault(key, [])
+            bucket.append((idx, ts, cid))
+            if len(bucket) > self._maxlen:
+                del bucket[0 : len(bucket) - self._maxlen]
+        except Exception as exc:
             logger.warning(
                 f"[CandidateRegistry] Refusing remember (invalid identity): {exc}"
             )
             return
-
-        idx = int(candidate.candle_index)  # validated as Integral by make_candidate_id
-        provided = (candidate.candidate_id or "").strip()
-        if provided:
-            if not candidate_id_matches_fields(
-                provided,
-                pair=str(candidate.pair),
-                side=candidate.side,
-                timestamp=ts,
-                candle_index=candidate.candle_index,
-            ):
-                logger.warning(
-                    f"[CandidateRegistry] Ignoring mismatched candidate_id={provided!r}; "
-                    f"storing canonical {expected!r}"
-                )
-                cid = expected
-            else:
-                cid = provided
-        else:
-            cid = expected
-
-        bucket = self._store.setdefault(key, [])
-        bucket.append((idx, ts, cid))
-        if len(bucket) > self._maxlen:
-            del bucket[0 : len(bucket) - self._maxlen]
 
     def lookup(
         self,
