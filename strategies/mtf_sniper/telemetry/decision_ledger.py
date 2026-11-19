@@ -1,11 +1,12 @@
 """Append-only decision ledger (ACCEPT / REJECT with reason codes)."""
+
 from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 from strategies.mtf_sniper.core.contracts import TelemetryDecisionRecord
 
@@ -17,11 +18,11 @@ class DecisionLedger:
     Thread-safe append. Also keeps an in-memory buffer for unit tests / inspection.
     """
 
-    def __init__(self, path: Optional[str | Path] = None, *, enabled: bool = True) -> None:
+    def __init__(self, path: str | Path | None = None, *, enabled: bool = True) -> None:
         self.enabled = enabled
         self.path = Path(path) if path else None
         self._lock = threading.Lock()
-        self._buffer: List[TelemetryDecisionRecord] = []
+        self._buffer: list[TelemetryDecisionRecord] = []
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,14 +50,14 @@ class DecisionLedger:
         self.record(row)
         return row
 
-    def all(self) -> List[TelemetryDecisionRecord]:
+    def all(self) -> list[TelemetryDecisionRecord]:
         with self._lock:
             return list(self._buffer)
 
-    def rejected(self) -> List[TelemetryDecisionRecord]:
+    def rejected(self) -> list[TelemetryDecisionRecord]:
         return [r for r in self.all() if r.final_action == "REJECT"]
 
-    def entered(self) -> List[TelemetryDecisionRecord]:
+    def entered(self) -> list[TelemetryDecisionRecord]:
         return [r for r in self.all() if r.final_action == "ENTER"]
 
     def clear_buffer(self) -> None:
@@ -66,7 +67,7 @@ class DecisionLedger:
     def load_from_disk(self) -> Iterable[TelemetryDecisionRecord]:
         if self.path is None or not self.path.exists():
             return []
-        rows: List[TelemetryDecisionRecord] = []
+        rows: list[TelemetryDecisionRecord] = []
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()

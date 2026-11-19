@@ -1,8 +1,9 @@
 """Unit tests for DirectionalTradingEngine and EntryPipeline (P2)."""
+
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from strategies.mtf_sniper.core.contracts import TradeCandidate
 from strategies.mtf_sniper.core.enums import TradeSide
@@ -27,7 +28,7 @@ def _candidate(
         primary_sensor=primary,
         secondary_sensors=[],
         confluence_count=confluence,
-        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, tzinfo=UTC),
         candle_index=idx,
         raw_features=features or {},
     )
@@ -182,7 +183,7 @@ class TestShortPolicy(unittest.TestCase):
             "close": 49200.0,
             "swing_low_20d_1d": 52000.0,  # floor_dist < 0
             "ema_50_4h": 55000.0,  # -10.5% (climax)
-            "ema_50_1d": 62000.0,  # -20.6% (climax)
+            "ema_50_1d": 62000.0,
             "ema_200_1d": 65000.0,
             "lower_wick_ratio": 0.15,
             "close_pos_ratio": 0.18,
@@ -192,6 +193,74 @@ class TestShortPolicy(unittest.TestCase):
         }
         result = policy.evaluate(cand, row)
         self.assertFalse(result.is_valid)
+
+    def test_waterfall_eth_rejected_above_ema50_4h(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = TradeCandidate(
+            candidate_id="ETH_short_0_105",
+            pair="ETH/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="waterfall_drop",
+            secondary_sensors=[],
+            confluence_count=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=105,
+            raw_features={},
+        )
+        row = {
+            "open": 3100.0,
+            "high": 3110.0,
+            "low": 3040.0,
+            "close": 3050.0,
+            "swing_low_20d_1d": 2900.0,
+            "ema_50_4h": 3000.0,
+            "ema_50_1d": 3300.0,
+            "ema_200_1d": 3200.0,
+            "macdhist_4h": 5.0,
+            "bb_width_4h": 0.08,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 40.0,
+            "ema_21": 3080.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertFalse(result.is_valid)
+        self.assertIn("REJECT_REGIME_INCOMPATIBLE", result.reasons)
+
+    def test_waterfall_eth_accepted_below_ema50_4h(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = TradeCandidate(
+            candidate_id="ETH_short_0_105",
+            pair="ETH/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="waterfall_drop",
+            secondary_sensors=[],
+            confluence_count=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=105,
+            raw_features={},
+        )
+        row = {
+            "open": 2980.0,
+            "high": 2990.0,
+            "low": 2930.0,
+            "close": 2940.0,
+            "swing_low_20d_1d": 2800.0,
+            "ema_50_4h": 3000.0,
+            "ema_50_1d": 3300.0,
+            "ema_200_1d": 3200.0,
+            "macdhist_4h": -5.0,
+            "bb_width_4h": 0.08,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 40.0,
+            "ema_21": 2960.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
 
 
 class TestDirectionalEngine(unittest.TestCase):

@@ -1,10 +1,11 @@
 """Authoritative effective configuration + fingerprint for MTF Sniper."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
 from strategies.mtf_sniper import STRATEGY_VERSION
 from strategies.mtf_sniper.core.runtime_mode import RuntimeProfile, build_runtime_profile
@@ -25,9 +26,9 @@ class EffectiveConfig:
     enable_dynamic_sizing: bool
     jev_fail_policy: str
     # Long effective (strategy Parameter defaults after JSON load)
-    long_params: Dict[str, Any] = field(default_factory=dict)
-    short_params: Dict[str, Any] = field(default_factory=dict)
-    pair_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    long_params: dict[str, Any] = field(default_factory=dict)
+    short_params: dict[str, Any] = field(default_factory=dict)
+    pair_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
     source: str = ""
 
     def fingerprint(self) -> str:
@@ -35,7 +36,7 @@ class EffectiveConfig:
         blob = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
-    def to_log_dict(self) -> Dict[str, Any]:
+    def to_log_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["fingerprint"] = self.fingerprint()
         return d
@@ -44,7 +45,7 @@ class EffectiveConfig:
 def build_effective_config(
     strategy: Any,
     *,
-    profile: Optional[RuntimeProfile] = None,
+    profile: RuntimeProfile | None = None,
 ) -> EffectiveConfig:
     """Snap strategy Parameter values + runtime profile into one object."""
     strat_cfg = {}
@@ -104,17 +105,23 @@ def warn_pair_override_divergences(effective: EffectiveConfig) -> list[str]:
     warnings: list[str] = []
     for pair, ov in (effective.pair_overrides or {}).items():
         for key in ("long_max_dist_ema21", "long_candle_body_ratio_min"):
-            if key in ov and key in effective.long_params:
-                if ov[key] != effective.long_params[key]:
-                    warnings.append(
-                        f"{pair}: pair override {key}={ov[key]} masks "
-                        f"strategy Parameter {effective.long_params[key]}"
-                    )
+            if (
+                key in ov
+                and key in effective.long_params
+                and ov[key] != effective.long_params[key]
+            ):
+                warnings.append(
+                    f"{pair}: pair override {key}={ov[key]} masks "
+                    f"strategy Parameter {effective.long_params[key]}"
+                )
         for key in ("short_max_dist_ema21", "short_candle_body_ratio_min"):
-            if key in ov and key in effective.short_params:
-                if ov[key] != effective.short_params[key]:
-                    warnings.append(
-                        f"{pair}: pair override {key}={ov[key]} masks "
-                        f"strategy Parameter {effective.short_params[key]}"
-                    )
+            if (
+                key in ov
+                and key in effective.short_params
+                and ov[key] != effective.short_params[key]
+            ):
+                warnings.append(
+                    f"{pair}: pair override {key}={ov[key]} masks "
+                    f"strategy Parameter {effective.short_params[key]}"
+                )
     return warnings

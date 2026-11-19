@@ -24,10 +24,11 @@ services:
       - ENABLE_JEV_DECISION=${ENABLE_JEV_DECISION:-true}
       - ENABLE_JEV_HUNTER=${ENABLE_JEV_HUNTER:-false}
       - ENABLE_HUNTER_LONG=${ENABLE_HUNTER_LONG:-false}
+      - ENABLE_WATERFALL=${ENABLE_WATERFALL:-true}
       - ENABLE_DYNAMIC_SIZING=${ENABLE_DYNAMIC_SIZING:-true}
       - HTTPS_PROXY=${HTTPS_PROXY:-http://192.168.68.100:40002}
       - HTTP_PROXY=${HTTP_PROXY:-http://192.168.68.100:40002}
-      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,binance.com,api.binance.com,fapi.binance.com,typesafe.ai,api.typesafe.ai}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,binance.com,api.binance.com,fapi.binance.com,typesafe.ai,api.typesafe.ai,telegram.org,api.telegram.org}
     volumes:
       # Persistent data only — strategies come from the image build
       - "/data/freqtrade/user_data:/freqtrade/user_data"

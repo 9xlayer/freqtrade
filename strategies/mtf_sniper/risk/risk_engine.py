@@ -10,11 +10,13 @@ Stages (Phase 4):
 
 JEV Decision Gate remains optional and is invoked here so Strategy stays thin.
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any
 
 from strategies.mtf_sniper.core.contracts import RiskAuthorization, TelemetryDecisionRecord
 from strategies.mtf_sniper.core.enums import RejectionReasonCode
@@ -25,6 +27,7 @@ from strategies.mtf_sniper.risk.portfolio_protection import (
 )
 from strategies.mtf_sniper.risk.position_sizing import resolve_leverage, resolve_stake_amount
 from strategies.mtf_sniper.risk.stoploss_ladder import resolve_custom_stoploss
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,37 @@ class RiskEngine:
         self.max_open_trades = max_open_trades
         self.config_fingerprint = config_fingerprint
 
+    def _check_portfolio_blocks(
+        self,
+        strategy_name: str,
+        pair: str,
+        side: str,
+        current_time: datetime,
+        closed_trades: Sequence[Any],
+        open_trades: Sequence[Any],
+        get_price: Callable[[str, datetime], float | None],
+        open_n: int,
+    ) -> tuple[list[str], str]:
+        reasons: list[str] = []
+        stage = ""
+        if self.max_open_trades > 0 and open_n >= self.max_open_trades:
+            reasons.append(RejectionReasonCode.RISK_EXPOSURE_LIMIT_EXCEEDED.value)
+            stage = "portfolio"
+        if circuit_breaker_blocks(
+            closed_trades, strategy_name=strategy_name, current_time=current_time
+        ):
+            reasons.append(RejectionReasonCode.RISK_CIRCUIT_BREAKER_ACTIVE.value)
+            stage = stage or "portfolio"
+        if directional_lock_blocks(open_trades, side):
+            reasons.append(RejectionReasonCode.RISK_DIRECTIONAL_LOCK.value)
+            stage = stage or "portfolio"
+        if distress_guard_blocks(
+            open_trades, pair=pair, current_time=current_time, get_price=get_price
+        ):
+            reasons.append(RejectionReasonCode.RISK_PORTFOLIO_DISTRESSED.value)
+            stage = stage or "portfolio"
+        return reasons, stage
+
     def authorize_entry(
         self,
         *,
@@ -52,10 +86,10 @@ class RiskEngine:
         current_time: datetime,
         closed_trades: Sequence[Any],
         open_trades: Sequence[Any],
-        get_price: Callable[[str, datetime], Optional[float]],
-        jev_confirm: Optional[Callable[[], bool]] = None,
-        entry_tag: Optional[str] = None,
-        sensors_triggered: Optional[List[str]] = None,
+        get_price: Callable[[str, datetime], float | None],
+        jev_confirm: Callable[[], bool] | None = None,
+        entry_tag: str | None = None,
+        sensors_triggered: list[str] | None = None,
         confluence_count: int = 1,
         market_regime: str = "",
         policy_score: float = 0.0,
@@ -63,19 +97,19 @@ class RiskEngine:
         policy_verdict: str = "",
         ai_verdict: str = "",
         ai_confidence: float = 0.0,
-        ai_model_version: Optional[str] = None,
-        candidate_id: Optional[str] = None,
+        ai_model_version: str | None = None,
+        candidate_id: str | None = None,
         setup_type: str = "",
         signal_source: str = "",
         policy_version: str = "",
-        feature_snapshot: Optional[dict] = None,
+        feature_snapshot: dict | None = None,
         proposed_stake: float = 0.0,
         max_stake: float = 0.0,
         enable_dynamic_sizing: bool = False,
         max_leverage: float = 10.0,
         default_stoploss: float = -0.28,
         stop_distance_pct: float = 0.0,
-        wallet_equity: Optional[float] = None,
+        wallet_equity: float | None = None,
     ) -> RiskAuthorization:
         reasons: list[str] = []
         stage = ""
@@ -90,36 +124,26 @@ class RiskEngine:
         )
 
         # --- Stage: portfolio authorization ---
-        if self.max_open_trades > 0 and open_n >= self.max_open_trades:
-            reasons.append(RejectionReasonCode.RISK_EXPOSURE_LIMIT_EXCEEDED.value)
-            stage = "portfolio"
-
-        if circuit_breaker_blocks(
-            closed_trades, strategy_name=strategy_name, current_time=current_time
-        ):
-            reasons.append(RejectionReasonCode.RISK_CIRCUIT_BREAKER_ACTIVE.value)
-            stage = stage or "portfolio"
-
-        if directional_lock_blocks(open_trades, side):
-            reasons.append(RejectionReasonCode.RISK_DIRECTIONAL_LOCK.value)
-            stage = stage or "portfolio"
-
-        if distress_guard_blocks(
-            open_trades, pair=pair, current_time=current_time, get_price=get_price
-        ):
-            reasons.append(RejectionReasonCode.RISK_PORTFOLIO_DISTRESSED.value)
-            stage = stage or "portfolio"
+        reasons, stage = self._check_portfolio_blocks(
+            strategy_name=strategy_name,
+            pair=pair,
+            side=side,
+            current_time=current_time,
+            closed_trades=closed_trades,
+            open_trades=open_trades,
+            get_price=get_price,
+            open_n=open_n,
+        )
 
         ai_verdict_out = ai_verdict
         ai_confidence_out = ai_confidence
 
         # Decision Gate is entry-eligibility adjacent (confirm path)
-        if not reasons and jev_confirm is not None:
-            if not jev_confirm():
-                reasons.append(RejectionReasonCode.AI_VETO_LOW_CONFIDENCE.value)
-                stage = stage or "entry"
-                if not ai_verdict_out:
-                    ai_verdict_out = "VETO"
+        if not reasons and jev_confirm is not None and not jev_confirm():
+            reasons.append(RejectionReasonCode.AI_VETO_LOW_CONFIDENCE.value)
+            stage = stage or "entry"
+            if not ai_verdict_out:
+                ai_verdict_out = "VETO"
 
         approved = len(reasons) == 0
 
@@ -142,12 +166,12 @@ class RiskEngine:
                 total_exposure += float(getattr(t, "stake_amount", 0.0) or 0.0) * float(
                     getattr(t, "leverage", 1.0) or 1.0
                 )
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 continue
         if approved:
             total_exposure += float(stake) * float(lev or 1.0)
 
-        equity: Optional[float] = None
+        equity: float | None = None
         if wallet_equity is not None:
             try:
                 eq = wallet_equity
@@ -155,11 +179,9 @@ class RiskEngine:
                     equity = eq
             except (TypeError, ValueError):
                 equity = None
-        exposure_pct: Optional[float] = (
-            (total_exposure / equity) if equity is not None else None
-        )
+        exposure_pct: float | None = (total_exposure / equity) if equity is not None else None
         # Stop-distance risk budget is not implemented — leave None (unavailable).
-        risk_per_trade: Optional[float] = None
+        risk_per_trade: float | None = None
         if stop_distance_pct and stop_distance_pct > 0 and equity is not None:
             # Only claim per-trade risk when an explicit stop distance was supplied
             # AND we sized from it (we do not today). Keep None until that lands.
@@ -174,9 +196,9 @@ class RiskEngine:
             risk_budget_used_pct=None,
             risk_per_trade_pct=risk_per_trade,
             stop_distance_pct=float(stop_distance_pct or 0.0),
-            max_open_positions=int(self.max_open_trades),
+            max_open_positions=self.max_open_trades,
             open_positions=open_n,
-            directional_open=int(directional_open),
+            directional_open=directional_open,
             total_exposure_notional=float(total_exposure),
             total_exposure_pct=exposure_pct,
             wallet_equity=equity,
@@ -216,7 +238,7 @@ class RiskEngine:
         current_time: datetime,
         pair: str,
         side: str,
-        sensors_triggered: List[str],
+        sensors_triggered: list[str],
         confluence_count: int,
         market_regime: str,
         policy_score: float,
@@ -224,12 +246,12 @@ class RiskEngine:
         policy_verdict: str,
         ai_verdict: str,
         ai_confidence: float,
-        ai_model_version: Optional[str],
+        ai_model_version: str | None,
         auth: RiskAuthorization,
         setup_type: str = "",
         signal_source: str = "",
         policy_version: str = "",
-        feature_snapshot: Optional[dict] = None,
+        feature_snapshot: dict | None = None,
     ) -> None:
         if self.decision_ledger is None:
             return
@@ -270,7 +292,7 @@ class RiskEngine:
         *,
         proposed_stake: float,
         max_stake: float,
-        entry_tag: Optional[str],
+        entry_tag: str | None,
         enable_dynamic_sizing: bool,
     ) -> float:
         return resolve_stake_amount(

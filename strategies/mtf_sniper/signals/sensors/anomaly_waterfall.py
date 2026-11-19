@@ -1,7 +1,6 @@
 """Waterfall drop anomaly sensor (acute breakdown through swing support)."""
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -16,7 +15,7 @@ class WaterfallDropSensor(BaseSensor):
     Detect sudden dump through recent swing low with elevated volume pressure.
 
     Short-only sensor. Wakeups aligned to MomentumRadar MEGA_SURGE_SHORT
-    (vol≥4x, range≥2.2×ATR) plus decisive red breakdown through swing low.
+    (vol>=4x, range>=2.2x ATR) plus decisive red breakdown through swing low.
     """
 
     name = "waterfall_drop"
@@ -33,8 +32,8 @@ class WaterfallDropSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         indices = self._resolve_indices(dataframe, candle_index)
         if not indices:
             return []
@@ -64,7 +63,7 @@ class WaterfallDropSensor(BaseSensor):
             & (body_ratio >= self.body_ratio_min)
         )
 
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         for i in indices:
             if not bool(mask.iloc[i]):
                 continue
@@ -78,7 +77,9 @@ class WaterfallDropSensor(BaseSensor):
                         "vol_ratio": float(vol_ratio.iloc[i]),
                         "range_atr_ratio": float(range_ratio.iloc[i]),
                         "body_ratio": float(body_ratio.iloc[i]),
-                        "swing_low": float(swing_low.iloc[i]) if pd.notna(swing_low.iloc[i]) else None,
+                        "swing_low": float(swing_low.iloc[i])
+                        if pd.notna(swing_low.iloc[i])
+                        else None,
                         "close": float(dataframe.iloc[i]["close"]),
                     },
                 )

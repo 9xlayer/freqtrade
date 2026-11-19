@@ -4,6 +4,7 @@ Named composite recipes for experiments (not live sniper path).
 Live sniper combination lives in ``directional.setup_composer`` (4a).
 Keep ``CompositeSensor`` here for ad-hoc anomaly combos / tests.
 """
+
 from __future__ import annotations
 
 from strategies.mtf_sniper.core.enums import SensorType, TradeSide
@@ -13,10 +14,8 @@ from strategies.mtf_sniper.signals.sensors.anomaly_volatility import VolatilityE
 from strategies.mtf_sniper.signals.sensors.anomaly_volume_surge import VolumeSurgeSensor
 from strategies.mtf_sniper.signals.sensors.anomaly_waterfall import WaterfallDropSensor
 
-from typing import List
 
-
-def atomic_anomaly_sensors() -> List[BaseSensor]:
+def atomic_anomaly_sensors() -> list[BaseSensor]:
     """Unchanged atomic Hunter wakeups."""
     return [
         VolumeSurgeSensor(),

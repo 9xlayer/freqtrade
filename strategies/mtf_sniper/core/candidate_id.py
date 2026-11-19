@@ -1,14 +1,16 @@
 """Stable candidate identity helpers shared by fast-path and builder path."""
+
 from __future__ import annotations
 
 import numbers
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
 from strategies.mtf_sniper.core.enums import TradeSide
+
 
 # Persist on Trade via set_custom_data — survives bot restart (unlike RAM registry).
 CANDIDATE_ID_CUSTOM_DATA_KEY = "mtf_candidate_id"
@@ -27,7 +29,7 @@ class ParsedCandidateId:
     candle_index: int
 
 
-def normalize_utc(ts: Union[datetime, pd.Timestamp]) -> datetime:
+def normalize_utc(ts: datetime | pd.Timestamp) -> datetime:
     """
     Normalize ``datetime`` / ``pd.Timestamp`` to timezone-aware UTC.
 
@@ -41,8 +43,8 @@ def normalize_utc(ts: Union[datetime, pd.Timestamp]) -> datetime:
             f"timestamp must be datetime or pandas.Timestamp, got {type(ts).__name__}={ts!r}"
         )
     if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(timezone.utc)
+        return ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
 
 
 def _canonical_side(side: Any) -> str:
@@ -59,13 +61,10 @@ def _canonical_side(side: Any) -> str:
         side_v = side
     else:
         raise ValueError(
-            f"side must be TradeSide or str 'long'/'short', "
-            f"got {type(side).__name__}={side!r}"
+            f"side must be TradeSide or str 'long'/'short', got {type(side).__name__}={side!r}"
         )
     if side_v not in _VALID_SIDES:
-        raise ValueError(
-            f"side must be exactly 'long' or 'short' (lowercase), got {side!r}"
-        )
+        raise ValueError(f"side must be exactly 'long' or 'short' (lowercase), got {side!r}")
     return side_v
 
 
@@ -98,15 +97,13 @@ def _is_canonical_int_token(token: str) -> bool:
     """Digits only, no leading zeros (except the value ``0`` itself)."""
     if not token.isdigit():
         return False
-    if len(token) > 1 and token[0] == "0":
-        return False
-    return True
+    return not (len(token) > 1 and token[0] == "0")
 
 
 def make_candidate_id(
     pair: str,
-    side: Union[TradeSide, str],
-    timestamp: Union[datetime, pd.Timestamp],
+    side: TradeSide | str,
+    timestamp: datetime | pd.Timestamp,
     candle_index: int,
 ) -> str:
     """
@@ -125,7 +122,7 @@ def make_candidate_id(
     return f"{pair_v}_{side_v}_{epoch}_{idx}"
 
 
-def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
+def parse_candidate_id(candidate_id: str) -> ParsedCandidateId | None:
     """
     Parse the **single** canonical representation:
 
@@ -174,8 +171,8 @@ def candidate_id_matches_fields(
     candidate_id: str,
     *,
     pair: str,
-    side: Union[TradeSide, str],
-    timestamp: Union[datetime, pd.Timestamp],
+    side: TradeSide | str,
+    timestamp: datetime | pd.Timestamp,
     candle_index: int,
 ) -> bool:
     """True when ``candidate_id`` is canonical and matches the given identity fields."""
@@ -199,8 +196,8 @@ def candidate_id_matches_fields(
 def candidate_id_matches_trade(
     candidate_id: str,
     *,
-    pair: Optional[str] = None,
-    side: Optional[Union[TradeSide, str]] = None,
+    pair: str | None = None,
+    side: TradeSide | str | None = None,
 ) -> bool:
     """
     Canonical parse plus optional pair/side context checks.

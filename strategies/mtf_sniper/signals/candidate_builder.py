@@ -1,8 +1,9 @@
 """Sensor fusion: confluence merge, opposite-side neutralize, directional cooldown."""
+
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TradeCandidate, TriggerEvent
@@ -35,16 +36,16 @@ class CandidateBuilder:
         self,
         cooldown_bars: int = 12,
         *,
-        side_cooldowns: Optional[Dict[TradeSide, int]] = None,
+        side_cooldowns: dict[TradeSide, int] | None = None,
     ) -> None:
         self.cooldown_bars = cooldown_bars
         # Optional per-side overrides (parity: long=18, short=96)
-        self.side_cooldowns: Dict[TradeSide, int] = dict(side_cooldowns or {})
+        self.side_cooldowns: dict[TradeSide, int] = dict(side_cooldowns or {})
         # (pair, side) -> last accepted candle_index
-        self._last_accepted: Dict[Tuple[str, TradeSide], int] = {}
+        self._last_accepted: dict[tuple[str, TradeSide], int] = {}
 
     def cooldown_for(self, side: TradeSide) -> int:
-        return int(self.side_cooldowns.get(side, self.cooldown_bars))
+        return self.side_cooldowns.get(side, self.cooldown_bars)
 
     def reset(self) -> None:
         self._last_accepted.clear()
@@ -53,8 +54,8 @@ class CandidateBuilder:
         self,
         events: Sequence[TriggerEvent],
         *,
-        rejected: Optional[List[dict]] = None,
-    ) -> List[TradeCandidate]:
+        rejected: list[dict] | None = None,
+    ) -> list[TradeCandidate]:
         """
         Fuse a batch of TriggerEvents into TradeCandidates.
 
@@ -65,13 +66,13 @@ class CandidateBuilder:
         if not events:
             return []
 
-        grouped: Dict[Tuple[str, int], List[TriggerEvent]] = defaultdict(list)
+        grouped: dict[tuple[str, int], list[TriggerEvent]] = defaultdict(list)
         for event in events:
             grouped[(event.pair, event.candle_index)].append(event)
 
         # Chronological order across candles
         ordered_keys = sorted(grouped.keys(), key=lambda k: (k[1], k[0]))
-        candidates: List[TradeCandidate] = []
+        candidates: list[TradeCandidate] = []
 
         for pair, candle_index in ordered_keys:
             group = grouped[(pair, candle_index)]
@@ -110,12 +111,12 @@ class CandidateBuilder:
 
     def _resolve_side_groups(
         self,
-        long_events: List[TriggerEvent],
-        short_events: List[TriggerEvent],
+        long_events: list[TriggerEvent],
+        short_events: list[TriggerEvent],
         pair: str,
         candle_index: int,
-        rejected: Optional[List[dict]],
-    ) -> List[List[TriggerEvent]]:
+        rejected: list[dict] | None,
+    ) -> list[list[TriggerEvent]]:
         """Decide which side event lists become candidates on this bar."""
         if long_events and not short_events:
             return [long_events]
@@ -156,17 +157,17 @@ class CandidateBuilder:
         self,
         events: Iterable[TriggerEvent],
         *,
-        rejected: Optional[List[dict]] = None,
-    ) -> List[TradeCandidate]:
+        rejected: list[dict] | None = None,
+    ) -> list[TradeCandidate]:
         """Alias for process — accepts any iterable of events."""
         return self.process(list(events), rejected=rejected)
 
-    def _merge_same_side(self, events: Sequence[TriggerEvent]) -> Optional[TradeCandidate]:
+    def _merge_same_side(self, events: Sequence[TriggerEvent]) -> TradeCandidate | None:
         if not events:
             return None
 
         # Deduplicate by sensor_name while preserving first-seen order
-        unique: Dict[str, TriggerEvent] = {}
+        unique: dict[str, TriggerEvent] = {}
         for event in events:
             if event.sensor_name not in unique:
                 unique[event.sensor_name] = event
@@ -180,16 +181,14 @@ class CandidateBuilder:
         secondary = [e.sensor_name for e in ranked[1:]]
 
         # Merge raw metrics (later sensors overwrite colliding keys)
-        raw_features: Dict = {}
+        raw_features: dict = {}
         for event in ordered:
             raw_features.update(event.raw_metrics)
         raw_features["sensors"] = [e.sensor_name for e in ranked]
         raw_features["sensor_types"] = {e.sensor_name: e.sensor_type.value for e in ranked}
 
         ts = normalize_utc(primary.timestamp)
-        candidate_id = make_candidate_id(
-            primary.pair, primary.side, ts, primary.candle_index
-        )
+        candidate_id = make_candidate_id(primary.pair, primary.side, ts, primary.candle_index)
         return TradeCandidate(
             candidate_id=candidate_id,
             pair=primary.pair,

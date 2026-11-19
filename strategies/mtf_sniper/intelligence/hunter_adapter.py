@@ -1,7 +1,8 @@
 """Hunter adapter — wraps in-package JevHunterEngine / MomentumRadar (archive API)."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from pandas import DataFrame
 
@@ -35,7 +36,7 @@ class JevHunterAdapter:
         *,
         cooldown_bars: int = 12,
         directional_cooldown: bool = True,
-    ) -> List[Tuple[int, str]]:
+    ) -> list[tuple[int, str]]:
         return self._radar.find_candidates(
             dataframe,
             cooldown_bars=cooldown_bars,
@@ -48,6 +49,6 @@ class JevHunterAdapter:
         pair: str,
         ts_str: str,
         event_type: str,
-        macro_info: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        macro_info: dict[str, Any],
+    ) -> dict[str, Any]:
         return self._engine.evaluate_candidate(df_32, pair, ts_str, event_type, macro_info)

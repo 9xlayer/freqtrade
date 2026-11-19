@@ -4,10 +4,12 @@ Long strategic policy — Directional 4b.
 Deterministic phase: only complete sniper setups (4a) ACCEPT.
 Anomaly path behind ``allow_anomaly_entries`` (default False / AI off).
 """
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate
 from strategies.mtf_sniper.core.enums import RejectionReasonCode, TradeSide
@@ -38,75 +40,53 @@ class LongPolicyConfig:
     target_rr: float = 2.0
     enable_hunter_long: bool = False
     allow_anomaly_entries: bool = False
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class LongPolicy:
     """Evaluate a LONG TradeCandidate from the entry pipeline."""
 
-    def __init__(self, config: Optional[LongPolicyConfig] = None) -> None:
+    def __init__(self, config: LongPolicyConfig | None = None) -> None:
         self.config = config or LongPolicyConfig()
 
-    def evaluate(
-        self,
-        candidate: TradeCandidate,
-        row: Mapping[str, Any],
+    def _evaluate_setup_pass(
+        self, candidate: TradeCandidate, row: Mapping[str, Any]
     ) -> PolicyEvaluationResult:
-        if candidate.side != TradeSide.LONG:
-            return self._reject(
-                [RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value],
-                metadata={"error": "wrong_side"},
-            )
+        cfg = self.config
+        long_score = float(
+            candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
+        )
+        base = min(1.0, max(0.0, long_score / 100.0)) if long_score > 0 else 0.80
+        score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
+        grade = quality_grade_from_score(score)
+        return PolicyEvaluationResult(
+            is_valid=True,
+            score=score,
+            quality_grade=grade,
+            reasons=["ACCEPT"],
+            suggested_stop_distance_pct=cfg.base_stop_distance_pct,
+            target_rr=cfg.target_rr,
+            metadata={
+                "setup": LongSetup.A80_PLUS.value,
+                "entry_tag": LongSetup.A80_PLUS.value,
+                "long_score": long_score,
+                "setup_complete": True,
+                "setup_eligible": True,
+                "mask_pass": True,
+            },
+        )
 
+    def _check_anomaly_filters(
+        self,
+        row: Mapping[str, Any],
+        close: float,
+        is_hunterish: bool,
+    ) -> list[str]:
         reasons: list[str] = []
         cfg = self.config
         hg = DEFAULT_LONG_HUNTER_GATES
-        setup = resolve_long_setup(candidate.primary_sensor, candidate.raw_features)
-        is_hunterish = setup in (LongSetup.BREAKOUT_EXPANSION, LongSetup.SWING_BREAKOUT)
-        from strategies.mtf_sniper.signals.composite_sensor import is_legacy_sniper_pass
-
-        is_setup_pass = is_legacy_sniper_pass(
-            candidate.primary_sensor, candidate.raw_features, "long"
-        )
-
         ema_50_1d = row.get("ema_50_1d")
         ema_200_1d = row.get("ema_200_1d")
-        close = float(row.get("close", 0.0) or 0.0)
-
-        if is_setup_pass:
-            # Setup eligibility is independent of quality grade.
-            long_score = float(
-                candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
-            )
-            base = min(1.0, max(0.0, long_score / 100.0)) if long_score > 0 else 0.80
-            score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
-            grade = quality_grade_from_score(score)
-            return PolicyEvaluationResult(
-                is_valid=True,
-                score=score,
-                quality_grade=grade,  # honest grade; do not remap REJECT→A
-                reasons=["ACCEPT"],
-                suggested_stop_distance_pct=cfg.base_stop_distance_pct,
-                target_rr=cfg.target_rr,
-                metadata={
-                    "setup": LongSetup.A80_PLUS.value,
-                    "entry_tag": LongSetup.A80_PLUS.value,
-                    "long_score": long_score,
-                    "setup_complete": True,
-                    "setup_eligible": True,
-                    "mask_pass": True,
-                },
-            )
-
-        if not cfg.allow_anomaly_entries:
-            return self._reject(
-                [RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value],
-                metadata={
-                    "setup": setup.value,
-                    "setup_complete": False,
-                    "deterministic_only": True,
-                },
-            )
 
         if cfg.require_macro_bull and ema_50_1d is not None and ema_200_1d is not None:
             in_bear = close < float(ema_200_1d) or close < float(ema_50_1d)
@@ -137,21 +117,65 @@ class LongPolicy:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
         overext_cap = hg.max_dist_ema200_1d if is_hunterish else cfg.overextended_dist_max
-        if "dist_from_ema_200_1d" in row and row.get("dist_from_ema_200_1d") is not None:
-            if float(row["dist_from_ema_200_1d"]) > overext_cap:
-                reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
+        if (
+            "dist_from_ema_200_1d" in row
+            and row.get("dist_from_ema_200_1d") is not None
+            and float(row["dist_from_ema_200_1d"]) > overext_cap
+        ):
+            reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
         if cfg.filter_pdh_ceiling and "pdh_1d" in row and row.get("pdh_1d") is not None:
             pdh = float(row["pdh_1d"])
             if close < pdh and close >= pdh * 0.997:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
+        return reasons
+
+    def evaluate(
+        self,
+        candidate: TradeCandidate,
+        row: Mapping[str, Any],
+    ) -> PolicyEvaluationResult:
+        if candidate.side != TradeSide.LONG:
+            return self._reject(
+                [RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value],
+                metadata={"error": "wrong_side"},
+            )
+
+        cfg = self.config
+        setup = resolve_long_setup(candidate.primary_sensor, candidate.raw_features)
+        is_hunterish = setup in (LongSetup.BREAKOUT_EXPANSION, LongSetup.SWING_BREAKOUT)
+        from strategies.mtf_sniper.signals.composite_sensor import is_legacy_sniper_pass
+
+        is_setup_pass = is_legacy_sniper_pass(
+            candidate.primary_sensor, candidate.raw_features, "long"
+        )
+
+        if is_setup_pass:
+            return self._evaluate_setup_pass(candidate, row)
+
+        if not cfg.allow_anomaly_entries:
+            return self._reject(
+                [RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value],
+                metadata={
+                    "setup": setup.value,
+                    "setup_complete": False,
+                    "deterministic_only": True,
+                },
+            )
+
+        close = float(row.get("close", 0.0) or 0.0)
+        reasons = self._check_anomaly_filters(row, close, is_hunterish)
+
         long_score = float(
             candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
         )
-        if setup == LongSetup.A80_PLUS and cfg.require_score_a80:
-            if long_score < cfg.score_threshold:
-                reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
+        if (
+            setup == LongSetup.A80_PLUS
+            and cfg.require_score_a80
+            and long_score < cfg.score_threshold
+        ):
+            reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
         if is_hunterish and not cfg.enable_hunter_long:
             reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
 
@@ -185,7 +209,7 @@ class LongPolicy:
         )
 
     @staticmethod
-    def _reject(reasons: list[str], metadata: Optional[dict] = None) -> PolicyEvaluationResult:
+    def _reject(reasons: list[str], metadata: dict | None = None) -> PolicyEvaluationResult:
         return PolicyEvaluationResult(
             is_valid=False,
             score=0.0,

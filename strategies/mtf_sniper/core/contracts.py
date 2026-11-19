@@ -1,9 +1,10 @@
 """Immutable inter-layer data contracts for the MTF Sniper engine."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from strategies.mtf_sniper.core.enums import DecisionAction, SensorType, TradeSide
 
@@ -18,7 +19,7 @@ class TriggerEvent:
     pair: str
     timestamp: datetime
     candle_index: int
-    raw_metrics: Dict[str, Any]
+    raw_metrics: dict[str, Any]
 
 
 # Note: frozen=True is shallow — nested List/Dict fields are still mutable.
@@ -33,11 +34,11 @@ class TradeCandidate:
     pair: str
     side: TradeSide
     primary_sensor: str
-    secondary_sensors: List[str]
+    secondary_sensors: list[str]
     confluence_count: int
     timestamp: datetime
     candle_index: int
-    raw_features: Dict[str, Any]
+    raw_features: dict[str, Any]
     cooldown_bars: int = 12
 
 
@@ -48,10 +49,10 @@ class PolicyEvaluationResult:
     is_valid: bool
     score: float
     quality_grade: str
-    reasons: List[str]
+    reasons: list[str]
     suggested_stop_distance_pct: float
     target_rr: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -61,8 +62,8 @@ class DecisionVerdict:
     action: DecisionAction
     score: float
     confidence: float
-    veto_reasons: List[str]
-    model_version: Optional[str]
+    veto_reasons: list[str]
+    model_version: str | None
     payload_hash: str
     timestamp: datetime
 
@@ -86,17 +87,17 @@ class RiskAuthorization:
     stake_amount: float
     leverage: float
     stoploss_rate: float
-    rejection_reasons: List[str]
+    rejection_reasons: list[str]
     # Optional metrics — None = unavailable (do not invent 0.02 / 0.0 placeholders)
-    risk_budget_used_pct: Optional[float] = None
-    risk_per_trade_pct: Optional[float] = None
+    risk_budget_used_pct: float | None = None
+    risk_per_trade_pct: float | None = None
     stop_distance_pct: float = 0.0
     max_open_positions: int = 0
     open_positions: int = 0
     directional_open: int = 0
     total_exposure_notional: float = 0.0
-    total_exposure_pct: Optional[float] = None
-    wallet_equity: Optional[float] = None
+    total_exposure_pct: float | None = None
+    wallet_equity: float | None = None
     sizing_method: str = "freqtrade_proposed"
     config_fingerprint: str = ""
     stage_rejected: str = ""  # entry|portfolio|sizing|leverage|stoploss|""
@@ -110,7 +111,7 @@ class TelemetryDecisionRecord:
     timestamp: str
     pair: str
     side: str
-    sensors_triggered: List[str]
+    sensors_triggered: list[str]
     confluence_count: int
     market_regime: str
     policy_score: float
@@ -118,16 +119,16 @@ class TelemetryDecisionRecord:
     policy_verdict: str
     ai_verdict: str
     ai_confidence: float
-    ai_model_version: Optional[str]
+    ai_model_version: str | None
     risk_approved: bool
     final_action: str
-    final_reasons: List[str]
+    final_reasons: list[str]
     # Phase 7 correlation / provenance (optional for backward compat)
     setup_type: str = ""
     signal_source: str = ""
     policy_version: str = ""
     config_fingerprint: str = ""
-    feature_snapshot: Dict[str, Any] = field(default_factory=dict)
+    feature_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

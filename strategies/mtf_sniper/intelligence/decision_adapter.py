@@ -1,8 +1,9 @@
 """Decision Gate adapter — wraps in-package JevDecisionEngine."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pandas import DataFrame
 
@@ -11,6 +12,7 @@ from strategies.mtf_sniper.intelligence.jev_decision import (
     JevDecisionEngine,
     JevStatus,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,7 @@ class JevDecisionAdapter:
     explicitly into the engine — this adapter does **not** mutate ``os.environ``.
     """
 
-    def __init__(self, *, force_native: bool = False, mode: Optional[str] = None) -> None:
+    def __init__(self, *, force_native: bool = False, mode: str | None = None) -> None:
         self._extractor = CandleTrajectoryExtractor
         self._force_native = force_native
         if self._force_native:
@@ -43,7 +45,7 @@ class JevDecisionAdapter:
 
     @property
     def mode(self) -> str:
-        return str(getattr(self._engine, "mode", "native"))
+        return getattr(self._engine, "mode", "native")
 
     def build_payload(
         self,
@@ -52,10 +54,10 @@ class JevDecisionAdapter:
         side: str,
         *,
         lookback: int = 32,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self._extractor.build_payload(dataframe, pair, side, lookback=lookback)
 
-    def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._force_native and self.mode == "external":
             logger.error(
                 "[JEV] Deterministic runtime blocked external Decision mode; "

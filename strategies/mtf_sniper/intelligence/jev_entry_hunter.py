@@ -5,20 +5,22 @@ Kept for later re-enable behind ``enable_jev_hunter`` / EntryPipeline hunter gat
 Stage-1 MomentumRadar + Stage-2 JevHunterEngine + SQLite cache.
 """
 
-import os
-import json
-import sqlite3
 import hashlib
+import json
 import logging
-import urllib.request
-import urllib.error
 import math
-from pathlib import Path
-from typing import Dict, Any, Tuple, Optional, List, Union
+import os
+import sqlite3
+import urllib.error
+import urllib.request
 from enum import Enum
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ from strategies.mtf_sniper import (
     HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT,
     HUNTER_MODEL_VERSION_NATIVE,
 )
+
 
 # Typesafe only exposes aliases like jev-latest (resolves e.g. jev-1.14.0).
 # Dedicated names such as jev-hunter-v1.0 return HTTP 400 Unknown model.
@@ -45,16 +48,14 @@ _MUTABLE_MODEL_ALIASES = frozenset(
 )
 
 
-def is_mutable_model_id(model_id: Optional[str]) -> bool:
+def is_mutable_model_id(model_id: str | None) -> bool:
     """True when model id is a floating alias (e.g. jev-latest), not an immutable version."""
     if not model_id:
         return True
     mid = model_id.strip().lower()
     if mid in _MUTABLE_MODEL_ALIASES:
         return True
-    if mid.endswith("-latest") or mid.endswith(":latest"):
-        return True
-    return False
+    return mid.endswith(("-latest", ":latest"))
 
 
 class JevHunterAction(str, Enum):
@@ -79,7 +80,7 @@ class JevHunterStatus(str, Enum):
     INVALID_RESPONSE = "INVALID_RESPONSE"
 
 
-def is_setup_valid_for_side(setup_type: Union[str, JevSetupType], side: str) -> bool:
+def is_setup_valid_for_side(setup_type: str | JevSetupType, side: str) -> bool:
     """
     Validate setup/side compatibility for trend-following Hunter entries:
     - SHORT: waterfall_collapse
@@ -128,10 +129,10 @@ def build_canonical_payload(
     pair: str,
     timestamp: str,
     event_trigger: str,
-    macro_info: Optional[Dict[str, Any]] = None,
+    macro_info: dict[str, Any] | None = None,
     model_version: str = "",
-    engine_version: str = HUNTER_ENGINE_VERSION
-) -> Dict[str, Any]:
+    engine_version: str = HUNTER_ENGINE_VERSION,
+) -> dict[str, Any]:
     """
     Create canonical payload containing all data affecting Hunter verdict:
     1. OHLCV candle sequence
@@ -164,17 +165,17 @@ def build_canonical_payload(
         "candles": candles_data,
         "macro": _clean_val(macro_dict),
         "model_version": model_version,
-        "engine_version": engine_version
+        "engine_version": engine_version,
     }
     return canonical
 
 
-def compute_payload_hash(payload: Dict[str, Any]) -> str:
+def compute_payload_hash(payload: dict[str, Any]) -> str:
     """
     Compute deterministic SHA-256 hash of canonical payload.
     Ensures 100% determinism independent of key ordering or float representation.
     """
-    canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()[:16]
 
 
@@ -185,7 +186,9 @@ class MomentumRadar:
     """
 
     @classmethod
-    def find_candidates(cls, df: DataFrame, cooldown_bars: int = 12, directional_cooldown: bool = False) -> List[Tuple[int, str]]:
+    def find_candidates(
+        cls, df: DataFrame, cooldown_bars: int = 12, directional_cooldown: bool = False
+    ) -> list[tuple[int, str]]:
         """
         Scan dataframe for significant momentum impulses:
         - 12 bars cooldown (3 hours) between candidate triggers.
@@ -200,7 +203,9 @@ class MomentumRadar:
         vol_sma = df["volume"].rolling(20, min_periods=1).mean().replace(0, np.nan)
         vol_ratio = (df["volume"] / vol_sma).fillna(0.0)
 
-        atr_safe = df["atr"].replace(0, np.nan) if "atr" in df else pd.Series(np.nan, index=df.index)
+        atr_safe = (
+            df["atr"].replace(0, np.nan) if "atr" in df else pd.Series(np.nan, index=df.index)
+        )
         range_raw = df["high"] - df["low"]
         range_ratio = (range_raw / atr_safe).fillna(0.0)
 
@@ -293,8 +298,12 @@ class JevHunterCache:
                 cursor.execute("PRAGMA table_info(jev_hunter_verdicts)")
                 columns = cursor.fetchall()
                 pk_cols = [c[1] for c in columns if len(c) > 5 and c[5] > 0]
-                if ("payload_hash" not in pk_cols or "model_version" not in pk_cols) and len(pk_cols) > 0:
-                    logger.info("[JevHunterCache] Migrating primary key to (pair, timestamp, engine_version, model_version, payload_hash)...")
+                if ("payload_hash" not in pk_cols or "model_version" not in pk_cols) and len(
+                    pk_cols
+                ) > 0:
+                    logger.info(
+                        "[JevHunterCache] Migrating primary key to (pair, timestamp, engine_version, model_version, payload_hash)..."
+                    )
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS jev_hunter_verdicts_v3 (
                             pair TEXT,
@@ -334,9 +343,9 @@ class JevHunterCache:
         pair: str,
         timestamp: str,
         engine_version: str = HUNTER_ENGINE_VERSION,
-        model_version: Optional[str] = None,
-        payload_hash: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        model_version: str | None = None,
+        payload_hash: str | None = None,
+    ) -> dict[str, Any] | None:
         try:
             with sqlite3.connect(self.db_path, timeout=30.0) as conn:
                 conn.execute("PRAGMA busy_timeout = 30000;")
@@ -359,7 +368,10 @@ class JevHunterCache:
                 if row:
                     action, setup_type, conf, stat, raw_resp_str, p_hash, m_ver = row
                     # Do not return cached error/invalid entries
-                    if stat not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
+                    if stat not in (
+                        JevHunterStatus.CONFIRMED.value,
+                        JevHunterStatus.REJECTED.value,
+                    ):
                         return None
 
                     return {
@@ -369,7 +381,7 @@ class JevHunterCache:
                         "status": stat,
                         "payload_hash": p_hash,
                         "model_version": m_ver,
-                        "raw_response": json.loads(raw_resp_str) if raw_resp_str else {}
+                        "raw_response": json.loads(raw_resp_str) if raw_resp_str else {},
                     }
 
                 # Lookup fallback in frozen historical table
@@ -378,12 +390,16 @@ class JevHunterCache:
                     try:
                         cursor.execute(
                             "SELECT action, setup_type, confidence, raw_response FROM jev_verdicts WHERE pair=? AND timestamp=?",
-                            (pair, timestamp)
+                            (pair, timestamp),
                         )
                         legacy_row = cursor.fetchone()
                         if legacy_row:
                             l_action, l_setup, l_conf, l_raw = legacy_row
-                            l_stat = JevHunterStatus.CONFIRMED.value if l_action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
+                            l_stat = (
+                                JevHunterStatus.CONFIRMED.value
+                                if l_action in ("enter_short", "enter_long")
+                                else JevHunterStatus.REJECTED.value
+                            )
                             return {
                                 "action": l_action,
                                 "setup_type": l_setup,
@@ -391,7 +407,7 @@ class JevHunterCache:
                                 "status": l_stat,
                                 "payload_hash": "legacy_frozen",
                                 "model_version": "jev-frozen",
-                                "raw_response": json.loads(l_raw) if l_raw else {}
+                                "raw_response": json.loads(l_raw) if l_raw else {},
                             }
                     except (json.JSONDecodeError, ValueError) as err:
                         logger.debug(f"[JevHunterCache] Legacy parse error: {err}")
@@ -407,10 +423,10 @@ class JevHunterCache:
         setup_type: str,
         confidence: float,
         status: str,
-        raw_response: Dict[str, Any],
+        raw_response: dict[str, Any],
         payload_hash: str = "no_hash",
         model_version: str = HUNTER_MODEL_VERSION_NATIVE,
-        engine_version: str = HUNTER_ENGINE_VERSION
+        engine_version: str = HUNTER_ENGINE_VERSION,
     ):
         # Never cache transient failures or invalid responses
         if status not in (JevHunterStatus.CONFIRMED.value, JevHunterStatus.REJECTED.value):
@@ -436,8 +452,8 @@ class JevHunterCache:
                         setup_type,
                         confidence,
                         status,
-                        json.dumps(raw_response or {}, default=str)
-                    )
+                        json.dumps(raw_response or {}, default=str),
+                    ),
                 )
                 conn.commit()
         except Exception as e:
@@ -452,12 +468,12 @@ class JevHunterEngine:
 
     def __init__(
         self,
-        api_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        api_url: str | None = None,
+        api_key: str | None = None,
         cache_db: str = "user_data/jev_hunter_cache.sqlite",
-        mode: Optional[str] = None,
-        model_version: Optional[str] = None,
-        missing_model_policy: Optional[str] = None
+        mode: str | None = None,
+        model_version: str | None = None,
+        missing_model_policy: str | None = None,
     ):
         self._load_env()
         # Modes: native | external | backtest
@@ -465,26 +481,27 @@ class JevHunterEngine:
         if self.mode not in ("native", "external", "backtest"):
             self.mode = "native"
 
-        self.api_url = api_url or os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
+        self.api_url = api_url or os.environ.get(
+            "JEV_API_URL", "https://api.typesafe.ai/v1/systemone"
+        )
         self.api_key = api_key or os.environ.get("JEV_API_KEY")
         self.cache = JevHunterCache(cache_db)
 
         # External model version configuration and missing version policy
         self.external_model_version = (
-            model_version or
-            os.environ.get("JEV_HUNTER_MODEL_VERSION") or
-            HUNTER_MODEL_VERSION_EXTERNAL
+            model_version
+            or os.environ.get("JEV_HUNTER_MODEL_VERSION")
+            or HUNTER_MODEL_VERSION_EXTERNAL
         )
         # Default no_cache: never persist verdicts under a mutable alias when backend omits version.
         self.missing_model_policy = (
-            missing_model_policy or
-            os.environ.get("JEV_HUNTER_MISSING_MODEL_POLICY", "no_cache")
+            missing_model_policy or os.environ.get("JEV_HUNTER_MISSING_MODEL_POLICY", "no_cache")
         ).lower()
         if self.missing_model_policy not in ("no_cache", "use_configured"):
             self.missing_model_policy = "no_cache"
 
         # In-process map: configured alias -> last resolved immutable backend model.
-        self._alias_resolution: Dict[str, str] = {}
+        self._alias_resolution: dict[str, str] = {}
 
         logger.info(
             f"[JevHunterEngine] Initialized in mode: '{self.mode.upper()}' "
@@ -505,7 +522,11 @@ class JevHunterEngine:
         return configured_model
 
     def _remember_alias_resolution(self, configured_model: str, actual_model: str) -> None:
-        if is_mutable_model_id(configured_model) and actual_model and not is_mutable_model_id(actual_model):
+        if (
+            is_mutable_model_id(configured_model)
+            and actual_model
+            and not is_mutable_model_id(actual_model)
+        ):
             self._alias_resolution[configured_model] = actual_model
 
     def _load_env(self):
@@ -513,7 +534,7 @@ class JevHunterEngine:
             for env_path in [Path(".env"), Path(__file__).resolve().parents[2] / ".env"]:
                 if env_path.exists():
                     try:
-                        with open(env_path, "r", encoding="utf-8") as f:
+                        with open(env_path, encoding="utf-8") as f:
                             for line in f:
                                 line = line.strip()
                                 if line and not line.startswith("#") and "=" in line:
@@ -530,8 +551,8 @@ class JevHunterEngine:
         pair: str,
         timestamp: str,
         event_trigger: str,
-        macro_info: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        macro_info: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Evaluate candidate candle sequence (16-32 candles):
         enter_short, enter_long, or no_trade with setup_type and status.
@@ -545,7 +566,7 @@ class JevHunterEngine:
                 "status": JevHunterStatus.INVALID_RESPONSE.value,
                 "source": self.mode,
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "error": "Insufficient candle sequence (<16 bars)"
+                "error": "Insufficient candle sequence (<16 bars)",
             }
 
         macro_dict = macro_info or {}
@@ -566,22 +587,26 @@ class JevHunterEngine:
         # Content hash must stay stable across alias → actual resolution.
         # Model identity lives in the cache PK column, not inside the hash seed for external mode.
         hash_model_token = (
-            HUNTER_MODEL_VERSION_NATIVE
-            if self.mode in ("native", "backtest")
-            else ""
+            HUNTER_MODEL_VERSION_NATIVE if self.mode in ("native", "backtest") else ""
         )
         canonical_payload = build_canonical_payload(
-            df_32, pair, timestamp, event_trigger, macro_dict,
-            model_version=hash_model_token, engine_version=HUNTER_ENGINE_VERSION
+            df_32,
+            pair,
+            timestamp,
+            event_trigger,
+            macro_dict,
+            model_version=hash_model_token,
+            engine_version=HUNTER_ENGINE_VERSION,
         )
         payload_hash = compute_payload_hash(canonical_payload)
 
         # 1. Cache lookup by (engine, model identity, content hash)
         cached = self.cache.get(
-            pair, timestamp,
+            pair,
+            timestamp,
             engine_version=HUNTER_ENGINE_VERSION,
             model_version=lookup_model,
-            payload_hash=payload_hash
+            payload_hash=payload_hash,
         )
         if cached:
             return cached
@@ -590,13 +615,19 @@ class JevHunterEngine:
         if self.mode == "backtest":
             # Never call live API in backtest mode.
             # If cache miss, fallback to Native Heuristic for determinism.
-            return self._evaluate_native(df_32, pair, timestamp, event_trigger, macro_dict, payload_hash)
+            return self._evaluate_native(
+                df_32, pair, timestamp, event_trigger, macro_dict, payload_hash
+            )
 
         elif self.mode == "native":
-            return self._evaluate_native(df_32, pair, timestamp, event_trigger, macro_dict, payload_hash)
+            return self._evaluate_native(
+                df_32, pair, timestamp, event_trigger, macro_dict, payload_hash
+            )
 
         elif self.mode == "external":
-            return self._evaluate_external(df_32, pair, timestamp, event_trigger, macro_dict, payload_hash)
+            return self._evaluate_external(
+                df_32, pair, timestamp, event_trigger, macro_dict, payload_hash
+            )
 
         # Safe fallback
         return {
@@ -606,7 +637,7 @@ class JevHunterEngine:
             "status": JevHunterStatus.UNAVAILABLE.value,
             "source": self.mode,
             "engine_version": HUNTER_ENGINE_VERSION,
-            "error": "Unhandled mode"
+            "error": "Unhandled mode",
         }
 
     def _evaluate_native(
@@ -615,9 +646,9 @@ class JevHunterEngine:
         pair: str,
         timestamp: str,
         event_trigger: str,
-        macro_info: Dict[str, Any],
-        payload_hash: str
-    ) -> Dict[str, Any]:
+        macro_info: dict[str, Any],
+        payload_hash: str,
+    ) -> dict[str, Any]:
         """
         High-speed offline Native Quant evaluation (<1ms, 100% deterministic).
         """
@@ -637,15 +668,25 @@ class JevHunterEngine:
         c_range = float(last_c["high"] - last_c["low"])
         c_body = float(abs(last_c["close"] - last_c["open"]))
         body_ratio = c_body / c_range if c_range > 0 else 0.5
-        lower_wick_ratio = (min(last_c["open"], last_c["close"]) - last_c["low"]) / c_range if c_range > 0 else 0.0
-        upper_wick_ratio = (last_c["high"] - max(last_c["open"], last_c["close"])) / c_range if c_range > 0 else 0.0
+        lower_wick_ratio = (
+            (min(last_c["open"], last_c["close"]) - last_c["low"]) / c_range if c_range > 0 else 0.0
+        )
+        upper_wick_ratio = (
+            (last_c["high"] - max(last_c["open"], last_c["close"])) / c_range
+            if c_range > 0
+            else 0.0
+        )
 
         trend_4h = str(macro_info.get("trend_4h", "NEUTRAL")).upper()
 
         # Heuristic 1: Waterfall Collapse (SHORT)
         if is_short_event:
             # Waterfall condition: Solid red candle, close near low, volume expansion
-            is_strong_bear = (last_c["close"] < last_c["open"]) and (body_ratio >= 0.50) and (lower_wick_ratio <= 0.285)
+            is_strong_bear = (
+                (last_c["close"] < last_c["open"])
+                and (body_ratio >= 0.50)
+                and (lower_wick_ratio <= 0.285)
+            )
             is_breakdown = ("BREAKOUT" in event_trigger) or ("SURGE" in event_trigger)
             macro_bear = (trend_4h == "BEAR") or (macro_info.get("ema50_1h_dist_pct", 0.0) < 0)
 
@@ -662,20 +703,29 @@ class JevHunterEngine:
                     "raw_response": {
                         "trigger": event_trigger,
                         "vol_ratio": round(vol_ratio, 2),
-                        "body_ratio": round(body_ratio, 2)
-                    }
+                        "body_ratio": round(body_ratio, 2),
+                    },
                 }
                 self.cache.put(
-                    pair, timestamp,
-                    verdict["action"], verdict["setup_type"], verdict["confidence"],
-                    verdict["status"], verdict["raw_response"],
-                    payload_hash=payload_hash, model_version=HUNTER_MODEL_VERSION_NATIVE
+                    pair,
+                    timestamp,
+                    verdict["action"],
+                    verdict["setup_type"],
+                    verdict["confidence"],
+                    verdict["status"],
+                    verdict["raw_response"],
+                    payload_hash=payload_hash,
+                    model_version=HUNTER_MODEL_VERSION_NATIVE,
                 )
                 return verdict
 
         # Heuristic 2: Long Breakout Expansion (trend continuation only)
         elif is_long_event:
-            is_strong_bull = (last_c["close"] > last_c["open"]) and (body_ratio >= 0.50) and (upper_wick_ratio <= 0.285)
+            is_strong_bull = (
+                (last_c["close"] > last_c["open"])
+                and (body_ratio >= 0.50)
+                and (upper_wick_ratio <= 0.285)
+            )
             is_breakout = ("BREAKOUT" in event_trigger) or ("SURGE" in event_trigger)
             macro_bull = (trend_4h == "BULL") or (macro_info.get("ema50_1h_dist_pct", 0.0) > 0)
 
@@ -692,14 +742,19 @@ class JevHunterEngine:
                     "raw_response": {
                         "trigger": event_trigger,
                         "vol_ratio": round(vol_ratio, 2),
-                        "body_ratio": round(body_ratio, 2)
-                    }
+                        "body_ratio": round(body_ratio, 2),
+                    },
                 }
                 self.cache.put(
-                    pair, timestamp,
-                    verdict["action"], verdict["setup_type"], verdict["confidence"],
-                    verdict["status"], verdict["raw_response"],
-                    payload_hash=payload_hash, model_version=HUNTER_MODEL_VERSION_NATIVE
+                    pair,
+                    timestamp,
+                    verdict["action"],
+                    verdict["setup_type"],
+                    verdict["confidence"],
+                    verdict["status"],
+                    verdict["raw_response"],
+                    payload_hash=payload_hash,
+                    model_version=HUNTER_MODEL_VERSION_NATIVE,
                 )
                 return verdict
 
@@ -712,13 +767,21 @@ class JevHunterEngine:
             "source": "native",
             "model_version": HUNTER_MODEL_VERSION_NATIVE,
             "engine_version": HUNTER_ENGINE_VERSION,
-            "raw_response": {"trigger": event_trigger, "reason": "Insufficient momentum confluence"}
+            "raw_response": {
+                "trigger": event_trigger,
+                "reason": "Insufficient momentum confluence",
+            },
         }
         self.cache.put(
-            pair, timestamp,
-            verdict["action"], verdict["setup_type"], verdict["confidence"],
-            verdict["status"], verdict["raw_response"],
-            payload_hash=payload_hash, model_version=HUNTER_MODEL_VERSION_NATIVE
+            pair,
+            timestamp,
+            verdict["action"],
+            verdict["setup_type"],
+            verdict["confidence"],
+            verdict["status"],
+            verdict["raw_response"],
+            payload_hash=payload_hash,
+            model_version=HUNTER_MODEL_VERSION_NATIVE,
         )
         return verdict
 
@@ -728,14 +791,16 @@ class JevHunterEngine:
         pair: str,
         timestamp: str,
         event_trigger: str,
-        macro_info: Dict[str, Any],
-        payload_hash: str
-    ) -> Dict[str, Any]:
+        macro_info: dict[str, Any],
+        payload_hash: str,
+    ) -> dict[str, Any]:
         """
         Call Jev Cloud API and parse HTTP JSON response.
         """
         if not self.api_key:
-            logger.warning("[JevHunterEngine] API key missing for external mode. Returning UNAVAILABLE.")
+            logger.warning(
+                "[JevHunterEngine] API key missing for external mode. Returning UNAVAILABLE."
+            )
             return {
                 "action": JevHunterAction.NO_TRADE.value,
                 "setup_type": JevSetupType.UNKNOWN.value,
@@ -743,7 +808,7 @@ class JevHunterEngine:
                 "status": JevHunterStatus.UNAVAILABLE.value,
                 "source": "external",
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "error": "Missing JEV_API_KEY"
+                "error": "Missing JEV_API_KEY",
             }
 
         # Build narrative sequence safely
@@ -756,8 +821,16 @@ class JevHunterEngine:
             range_val = float(c["high"] - c["low"])
             body = float(abs(c["close"] - c["open"]))
             body_ratio = body / range_val if range_val > 0 else 0.5
-            uw = (float(c["high"]) - max(float(c["open"]), float(c["close"]))) / range_val if range_val > 0 else 0.0
-            lw = (min(float(c["open"]), float(c["close"])) - float(c["low"])) / range_val if range_val > 0 else 0.0
+            uw = (
+                (float(c["high"]) - max(float(c["open"]), float(c["close"]))) / range_val
+                if range_val > 0
+                else 0.0
+            )
+            lw = (
+                (min(float(c["open"]), float(c["close"])) - float(c["low"])) / range_val
+                if range_val > 0
+                else 0.0
+            )
 
             if "rel_vol" in c and not pd.isna(c["rel_vol"]):
                 vol_ratio = float(c["rel_vol"])
@@ -776,16 +849,16 @@ class JevHunterEngine:
 
         macro_str = f"""
 Macro Structural Anchors:
-- 4H Trend: {macro_info.get('trend_4h', 'NEUTRAL')}
-- 1H EMA50 Distance: {macro_info.get('ema50_1h_dist_pct', 0.0):.2f}%
-- ATR Volatility Percentile: {macro_info.get('atr_percentile', 50.0):.1f}%
-- 24H High/Low Range: {macro_info.get('range_24h_pct', 0.0):.2f}%
+- 4H Trend: {macro_info.get("trend_4h", "NEUTRAL")}
+- 1H EMA50 Distance: {macro_info.get("ema50_1h_dist_pct", 0.0):.2f}%
+- ATR Volatility Percentile: {macro_info.get("atr_percentile", 50.0):.1f}%
+- 24H High/Low Range: {macro_info.get("range_24h_pct", 0.0):.2f}%
 """
 
         state_text = f"""Market Event Scout:
 Asset: {pair} (Futures 10x)
 Timestamp: {timestamp}
-Current Price: {last_candle['close']:.1f}
+Current Price: {last_candle["close"]:.1f}
 Lookback Window: {len(df_32)} candles ({hours:.1f} hours of price action)
 Radar Event: {event_trigger}
 {macro_str}
@@ -805,8 +878,8 @@ Radar Event: {event_trigger}
                     "criteria": {
                         "enter_short": "Clean breakdown or waterfall continuation with expanding sell volume in a bearish regime",
                         "enter_long": "Clean upside breakout or impulsive bullish continuation with expanding buy volume in a bullish regime",
-                        "no_trade": "Erratic chop, opposing rejection wicks, weak follow-through, or ambiguous range-bound action"
-                    }
+                        "no_trade": "Erratic chop, opposing rejection wicks, weak follow-through, or ambiguous range-bound action",
+                    },
                 },
                 "setup_type": {
                     "type": "choice",
@@ -816,10 +889,10 @@ Radar Event: {event_trigger}
                         "breakout_expansion": "Impulsive upside break of structure with expanding bullish volume and limited upper rejection",
                         "absorption_trap": "Price pushed into a new extreme but met with heavy absorbing liquidity / rejection",
                         "trend_pullback": "Controlled counter-trend pause inside an existing larger trend",
-                        "consolidation_noise": "Sideways churn without distinct edge"
-                    }
-                }
-            }
+                        "consolidation_noise": "Sideways churn without distinct edge",
+                    },
+                },
+            },
         }
 
         try:
@@ -827,7 +900,7 @@ Radar Event: {event_trigger}
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": f"Freqtrade-Jev-Hunter/{HUNTER_ENGINE_VERSION}"
+                "User-Agent": f"Freqtrade-Jev-Hunter/{HUNTER_ENGINE_VERSION}",
             }
             req = urllib.request.Request(self.api_url, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=8.0) as resp:
@@ -843,7 +916,7 @@ Radar Event: {event_trigger}
                     "status": JevHunterStatus.INVALID_RESPONSE.value,
                     "source": "external",
                     "engine_version": HUNTER_ENGINE_VERSION,
-                    "error": "Missing 'answers' root field in API response"
+                    "error": "Missing 'answers' root field in API response",
                 }
 
             ans = res.get("answers", {})
@@ -860,7 +933,7 @@ Radar Event: {event_trigger}
                     "status": JevHunterStatus.INVALID_RESPONSE.value,
                     "source": "external",
                     "engine_version": HUNTER_ENGINE_VERSION,
-                    "error": "suggested_action or setup_type missing or invalid"
+                    "error": "suggested_action or setup_type missing or invalid",
                 }
 
             action_raw = sug_action.get("choice")
@@ -869,11 +942,13 @@ Radar Event: {event_trigger}
 
             # Validate choices and probabilities
             if (
-                not action_raw or not isinstance(action_raw, str) or
-                action_raw.lower() not in ("enter_short", "enter_long", "no_trade") or
-                not isinstance(probs, dict) or
-                not setup_raw or not isinstance(setup_raw, str) or
-                setup_raw.lower() not in [e.value for e in JevSetupType]
+                not action_raw
+                or not isinstance(action_raw, str)
+                or action_raw.lower() not in ("enter_short", "enter_long", "no_trade")
+                or not isinstance(probs, dict)
+                or not setup_raw
+                or not isinstance(setup_raw, str)
+                or setup_raw.lower() not in [e.value for e in JevSetupType]
             ):
                 logger.warning(f"[JevHunterEngine] Invalid choice or probabilities format in {ans}")
                 return {
@@ -883,12 +958,14 @@ Radar Event: {event_trigger}
                     "status": JevHunterStatus.INVALID_RESPONSE.value,
                     "source": "external",
                     "engine_version": HUNTER_ENGINE_VERSION,
-                    "error": "Invalid choice or probabilities format"
+                    "error": "Invalid choice or probabilities format",
                 }
 
             action_str = action_raw.lower()
             if action_str not in probs:
-                logger.warning(f"[JevHunterEngine] Probability missing for chosen action '{action_str}' in {probs}")
+                logger.warning(
+                    f"[JevHunterEngine] Probability missing for chosen action '{action_str}' in {probs}"
+                )
                 return {
                     "action": JevHunterAction.NO_TRADE.value,
                     "setup_type": JevSetupType.UNKNOWN.value,
@@ -896,7 +973,7 @@ Radar Event: {event_trigger}
                     "status": JevHunterStatus.INVALID_RESPONSE.value,
                     "source": "external",
                     "engine_version": HUNTER_ENGINE_VERSION,
-                    "error": f"Probability missing for action '{action_str}'"
+                    "error": f"Probability missing for action '{action_str}'",
                 }
 
             try:
@@ -905,7 +982,9 @@ Radar Event: {event_trigger}
                 raw_prob = -1.0
 
             if math.isnan(raw_prob) or raw_prob < 0.0 or raw_prob > 1.0:
-                logger.warning(f"[JevHunterEngine] Action probability out of bounds [0.0, 1.0]: {raw_prob}")
+                logger.warning(
+                    f"[JevHunterEngine] Action probability out of bounds [0.0, 1.0]: {raw_prob}"
+                )
                 return {
                     "action": JevHunterAction.NO_TRADE.value,
                     "setup_type": JevSetupType.UNKNOWN.value,
@@ -913,13 +992,17 @@ Radar Event: {event_trigger}
                     "status": JevHunterStatus.INVALID_RESPONSE.value,
                     "source": "external",
                     "engine_version": HUNTER_ENGINE_VERSION,
-                    "error": f"Invalid probability value: {raw_prob}"
+                    "error": f"Invalid probability value: {raw_prob}",
                 }
 
             action = action_str
             setup = setup_raw.lower()
             confidence = round(raw_prob, 2)
-            status = JevHunterStatus.CONFIRMED.value if action in ("enter_short", "enter_long") else JevHunterStatus.REJECTED.value
+            status = (
+                JevHunterStatus.CONFIRMED.value
+                if action in ("enter_short", "enter_long")
+                else JevHunterStatus.REJECTED.value
+            )
 
             # Prefer immutable backend model. Never durable-cache under a mutable alias.
             backend_model = res.get("model_version") or res.get("model")
@@ -941,7 +1024,9 @@ Radar Event: {event_trigger}
                 )
             else:
                 actual_model_version = configured
-                if self.missing_model_policy == "use_configured" and not is_mutable_model_id(configured):
+                if self.missing_model_policy == "use_configured" and not is_mutable_model_id(
+                    configured
+                ):
                     can_cache = True
                 else:
                     can_cache = False
@@ -952,7 +1037,9 @@ Radar Event: {event_trigger}
                         self.missing_model_policy,
                     )
 
-            logger.info(f"[JevHunterEngine] Evaluated candidate with model_version: {actual_model_version}")
+            logger.info(
+                f"[JevHunterEngine] Evaluated candidate with model_version: {actual_model_version}"
+            )
 
             verdict = {
                 "action": action,
@@ -962,17 +1049,22 @@ Radar Event: {event_trigger}
                 "source": "external",
                 "model_version": actual_model_version,
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "raw_response": res
+                "raw_response": res,
             }
 
             # Persist only under immutable model identity + content-stable payload_hash
             if can_cache:
                 self.cache.put(
-                    pair, timestamp,
-                    action, setup, confidence, status, res,
+                    pair,
+                    timestamp,
+                    action,
+                    setup,
+                    confidence,
+                    status,
+                    res,
                     payload_hash=payload_hash,
                     model_version=actual_model_version,
-                    engine_version=HUNTER_ENGINE_VERSION
+                    engine_version=HUNTER_ENGINE_VERSION,
                 )
             return verdict
         except urllib.error.HTTPError as e:
@@ -985,7 +1077,7 @@ Radar Event: {event_trigger}
                 "status": JevHunterStatus.UNAVAILABLE.value,
                 "source": "external",
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "error": f"HTTP {e.code}: {body}"
+                "error": f"HTTP {e.code}: {body}",
             }
         except urllib.error.URLError as e:
             logger.warning(f"[JevHunterEngine] API Network/Timeout error: {e}")
@@ -996,7 +1088,7 @@ Radar Event: {event_trigger}
                 "status": JevHunterStatus.UNAVAILABLE.value,
                 "source": "external",
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "error": str(e)
+                "error": str(e),
             }
         except Exception as e:
             logger.warning(f"[JevHunterEngine] API response parsing error: {e}")
@@ -1007,5 +1099,5 @@ Radar Event: {event_trigger}
                 "status": JevHunterStatus.INVALID_RESPONSE.value,
                 "source": "external",
                 "engine_version": HUNTER_ENGINE_VERSION,
-                "error": str(e)
+                "error": str(e),
             }

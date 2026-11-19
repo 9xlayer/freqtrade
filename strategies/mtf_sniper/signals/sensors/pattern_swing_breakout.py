@@ -1,7 +1,6 @@
 """24-hour swing high/low breakout pattern sensor."""
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -26,8 +25,8 @@ class SwingBreakoutSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         indices = self._resolve_indices(dataframe, candle_index)
         if not indices:
             return []
@@ -41,9 +40,9 @@ class SwingBreakoutSensor(BaseSensor):
         is_break_short = (dataframe["close"] < low_n) & (vol_ratio >= self.vol_ratio_min)
         is_break_long = (dataframe["close"] > high_n) & (vol_ratio >= self.vol_ratio_min)
 
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         for i in indices:
-            side: Optional[TradeSide] = None
+            side: TradeSide | None = None
             if bool(is_break_short.iloc[i]):
                 side = TradeSide.SHORT
             elif bool(is_break_long.iloc[i]):

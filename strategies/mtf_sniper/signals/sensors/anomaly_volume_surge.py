@@ -1,7 +1,6 @@
 """Volume surge anomaly sensor (vol >= 4x SMA20 & range >= 2.2x ATR)."""
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -26,8 +25,8 @@ class VolumeSurgeSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         indices = self._resolve_indices(dataframe, candle_index)
         if not indices:
             return []
@@ -46,7 +45,7 @@ class VolumeSurgeSensor(BaseSensor):
         is_green = dataframe["close"] > dataframe["open"]
         is_surge = (vol_ratio >= self.vol_ratio_min) & (range_ratio >= self.range_atr_min)
 
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         for i in indices:
             if not bool(is_surge.iloc[i]):
                 continue

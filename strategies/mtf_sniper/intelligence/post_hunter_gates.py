@@ -4,9 +4,11 @@ Post-AI Hunter acceptance — legacy active StrategyMTFSniper thresholds.
 Called only after JEV Hunter returns a successful directional verdict.
 Does not call AI; fail-closed on missing structure / unsafe regime.
 """
+
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.common_gates import (
@@ -29,6 +31,7 @@ from strategies.mtf_sniper.directional.short.hunter_gates import (
     evaluate_short_hunter_waterfall,
 )
 
+
 # Setup types the legacy strategy actually wrote to enter_tag.
 _SHORT_SETUP = "waterfall_collapse"
 _LONG_SETUP = "breakout_expansion"
@@ -40,9 +43,9 @@ def accept_hunter_verdict(
     setup: str,
     confidence: float,
     row: Mapping[str, Any],
-    market: Optional[MarketSafetyConfig] = None,
-    short_gates: Optional[ShortHunterGateConfig] = None,
-    long_gates: Optional[LongHunterGateConfig] = None,
+    market: MarketSafetyConfig | None = None,
+    short_gates: ShortHunterGateConfig | None = None,
+    long_gates: LongHunterGateConfig | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Return (accepted, rejection_reasons).
@@ -52,7 +55,6 @@ def accept_hunter_verdict(
     """
     market_cfg = market or DEFAULT_MARKET_SAFETY
     setup_l = (setup or "").lower().strip()
-    reasons: list[str] = []
 
     vol_safe = is_volatility_safe_row(row, market_cfg)
     sideway_safe = is_sideway_safe_row(row, market_cfg)

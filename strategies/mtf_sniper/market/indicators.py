@@ -4,7 +4,10 @@ MTF indicator population — extracted from strategies/active/StrategyMTFSniper.
 These functions mutate and return dataframes for each timeframe. Informative
 decorators remain on the Strategy class; they delegate here for parity.
 """
+
 from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -19,7 +22,7 @@ def populate_indicators_1d(dataframe: DataFrame) -> DataFrame:
     dataframe["ema_200"] = ta.EMA(dataframe, timeperiod=200)
     dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
     dataframe["rsi_prev"] = dataframe["rsi"].shift(1)
-    macd_1d = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+    macd_1d: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
     dataframe["macdhist"] = macd_1d["macdhist"]
     dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
     dataframe["swing_low_20d"] = dataframe["low"].rolling(20).min()
@@ -65,7 +68,7 @@ def populate_indicators_1d(dataframe: DataFrame) -> DataFrame:
     ]
     dataframe["is_overextended_top"] = dataframe["dist_from_ema_200"] > 0.35
 
-    bb_1d = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+    bb_1d: Any = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
     dataframe["bb_width"] = (bb_1d["upperband"] - bb_1d["lowerband"]) / bb_1d["middleband"]
     dataframe["pdh"] = dataframe["high"].shift(1)
     dataframe["pdl"] = dataframe["low"].shift(1)
@@ -73,7 +76,7 @@ def populate_indicators_1d(dataframe: DataFrame) -> DataFrame:
 
 
 def populate_indicators_4h(dataframe: DataFrame) -> DataFrame:
-    macd_4h = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+    macd_4h: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
     dataframe["macdhist"] = macd_4h["macdhist"]
     dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
     dataframe["is_bull_wave"] = (dataframe["macdhist"] > 0) & (
@@ -83,7 +86,7 @@ def populate_indicators_4h(dataframe: DataFrame) -> DataFrame:
         dataframe["macdhist"] < dataframe["macdhist_prev"]
     )
     dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
-    bb_4h = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+    bb_4h: Any = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
     dataframe["bb_width"] = (bb_4h["upperband"] - bb_4h["lowerband"]) / bb_4h["middleband"]
     dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
     dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
@@ -94,7 +97,7 @@ def populate_indicators_4h(dataframe: DataFrame) -> DataFrame:
 def populate_indicators_1h(dataframe: DataFrame) -> DataFrame:
     dataframe["ema_21"] = ta.EMA(dataframe, timeperiod=21)
     dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
-    macd_1h = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+    macd_1h: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
     dataframe["macdhist"] = macd_1h["macdhist"]
     dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
     dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
@@ -115,7 +118,7 @@ def populate_indicators_15m(
     dataframe["atr"] = ta.ATR(dataframe, timeperiod=14)
     dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
 
-    macd = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+    macd: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
     dataframe["macdhist"] = macd["macdhist"]
 
     dataframe["body"] = (dataframe["close"] - dataframe["open"]).abs()
@@ -133,7 +136,9 @@ def populate_indicators_15m(
     dataframe["lower_wick"] = dataframe[["open", "close"]].min(axis=1) - dataframe["low"]
     dataframe["upper_wick_ratio"] = dataframe["upper_wick"] / dataframe["total_range"]
     dataframe["lower_wick_ratio"] = dataframe["lower_wick"] / dataframe["total_range"]
-    dataframe["close_pos_ratio"] = (dataframe["close"] - dataframe["low"]) / dataframe["total_range"]
+    dataframe["close_pos_ratio"] = (dataframe["close"] - dataframe["low"]) / dataframe[
+        "total_range"
+    ]
 
     l_trend = (
         (dataframe["ema_10"] > dataframe["ema_21"]).astype(int) * 7
@@ -157,16 +162,12 @@ def populate_indicators_15m(
         + (dataframe["macdhist"] < 0).astype(int) * 5
         + (dataframe["macdhist"] < dataframe["macdhist"].shift(1)).astype(int) * 5
     )
-    l_str = (
-        (dataframe["plus_di"] > dataframe["minus_di"]).astype(int) * 10
-        + ((dataframe["plus_di"] > dataframe["minus_di"]) & (dataframe["adx"] >= 20)).astype(int)
-        * 10
-    )
-    s_str = (
-        (dataframe["minus_di"] > dataframe["plus_di"]).astype(int) * 10
-        + ((dataframe["minus_di"] > dataframe["plus_di"]) & (dataframe["adx"] >= 20)).astype(int)
-        * 10
-    )
+    l_str = (dataframe["plus_di"] > dataframe["minus_di"]).astype(int) * 10 + (
+        (dataframe["plus_di"] > dataframe["minus_di"]) & (dataframe["adx"] >= 20)
+    ).astype(int) * 10
+    s_str = (dataframe["minus_di"] > dataframe["plus_di"]).astype(int) * 10 + (
+        (dataframe["minus_di"] > dataframe["plus_di"]) & (dataframe["adx"] >= 20)
+    ).astype(int) * 10
     is_green = dataframe["close"] > dataframe["open"]
     is_red = dataframe["close"] < dataframe["open"]
     l_vol = (
@@ -179,14 +180,12 @@ def populate_indicators_15m(
         + (is_red & (dataframe["rel_vol"] >= 1.0) & (dataframe["rel_vol"] < 1.5)).astype(int) * 12
         + (is_red & (dataframe["rel_vol"] < 1.0)).astype(int) * 6
     )
-    l_htf = (
-        (dataframe.get("macdhist_4h", pd.Series(0, index=dataframe.index)) > 0).astype(int) * 10
-        + (dataframe["close"] > dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10
-    )
-    s_htf = (
-        (dataframe.get("is_bear_wave_4h", pd.Series(0, index=dataframe.index)) == 1).astype(int) * 10
-        + (dataframe["close"] < dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10
-    )
+    l_htf = (dataframe.get("macdhist_4h", pd.Series(0, index=dataframe.index)) > 0).astype(
+        int
+    ) * 10 + (dataframe["close"] > dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10
+    s_htf = (dataframe.get("is_bear_wave_4h", pd.Series(0, index=dataframe.index)) == 1).astype(
+        int
+    ) * 10 + (dataframe["close"] < dataframe.get("ema_50_1d", dataframe["close"])).astype(int) * 10
     dataframe["long_score"] = l_trend + l_mom + l_str + l_vol + l_htf
     dataframe["short_score"] = s_trend + s_mom + s_str + s_vol + s_htf
 

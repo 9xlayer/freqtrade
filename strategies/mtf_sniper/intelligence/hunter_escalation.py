@@ -5,11 +5,13 @@ JEV Hunter escalation gateway.
                          ↘ fail → drop
   → post-AI gates (legacy conf / vol / chop / macro) → promote or reject
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Protocol
+from typing import Any, Protocol
 
 from pandas import DataFrame
 
@@ -30,6 +32,7 @@ from strategies.mtf_sniper.directional.short.hunter_gates import (
 from strategies.mtf_sniper.intelligence.post_hunter_gates import accept_hunter_verdict
 from strategies.mtf_sniper.scoring import CandidateScorer, ScoreConfig, ScoreVerdict
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,9 +43,8 @@ class HunterEvaluator(Protocol):
         pair: str,
         ts_str: str,
         event_type: str,
-        macro_info: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        ...
+        macro_info: dict[str, Any],
+    ) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -54,12 +56,8 @@ class HunterEscalationConfig:
     score: ScoreConfig = field(default_factory=ScoreConfig)
     # Post-AI acceptance (legacy active parity)
     market: MarketSafetyConfig = field(default_factory=lambda: DEFAULT_MARKET_SAFETY)
-    short_gates: ShortHunterGateConfig = field(
-        default_factory=lambda: DEFAULT_SHORT_HUNTER_GATES
-    )
-    long_gates: LongHunterGateConfig = field(
-        default_factory=lambda: DEFAULT_LONG_HUNTER_GATES
-    )
+    short_gates: ShortHunterGateConfig = field(default_factory=lambda: DEFAULT_SHORT_HUNTER_GATES)
+    long_gates: LongHunterGateConfig = field(default_factory=lambda: DEFAULT_LONG_HUNTER_GATES)
 
 
 @dataclass
@@ -67,9 +65,9 @@ class EscalationAttempt:
     outcome: str
     # promoted | low_potential | hunter_rejected | post_gate_rejected |
     # hard_or_ineligible | disabled | error | score_fail
-    promoted: Optional[PolicyEvaluationResult] = None
-    score_verdict: Optional[ScoreVerdict] = None
-    gate_reasons: Optional[list[str]] = None
+    promoted: PolicyEvaluationResult | None = None
+    score_verdict: ScoreVerdict | None = None
+    gate_reasons: list[str] | None = None
 
 
 def sensor_to_event_trigger(candidate: TradeCandidate) -> str:
@@ -84,7 +82,7 @@ def sensor_to_event_trigger(candidate: TradeCandidate) -> str:
     return "BREAKOUT_24H_SHORT" if side == TradeSide.SHORT else "BREAKOUT_24H_LONG"
 
 
-def build_macro_info(row: Mapping[str, Any]) -> Dict[str, Any]:
+def build_macro_info(row: Mapping[str, Any]) -> dict[str, Any]:
     is_bull = float(row.get("is_bull_wave_4h", 0) or 0) == 1
     is_bear = float(row.get("is_bear_wave_4h", 0) or 0) == 1
     if is_bull:
@@ -116,8 +114,8 @@ class HunterEscalationGateway:
     def __init__(
         self,
         evaluator: HunterEvaluator,
-        config: Optional[HunterEscalationConfig] = None,
-        scorer: Optional[CandidateScorer] = None,
+        config: HunterEscalationConfig | None = None,
+        scorer: CandidateScorer | None = None,
     ) -> None:
         self.evaluator = evaluator
         self.config = config or HunterEscalationConfig()
@@ -193,14 +191,12 @@ class HunterEscalationGateway:
         dataframe: DataFrame,
         row: Mapping[str, Any],
         *,
-        score_verdict: Optional[ScoreVerdict],
+        score_verdict: ScoreVerdict | None,
         policy_result: PolicyEvaluationResult,
         radar_path: bool,
     ) -> EscalationAttempt:
         if candidate.side == TradeSide.LONG and not self.config.allow_long_promotion:
-            return EscalationAttempt(
-                outcome="hard_or_ineligible", score_verdict=score_verdict
-            )
+            return EscalationAttempt(outcome="hard_or_ineligible", score_verdict=score_verdict)
 
         idx = candidate.candle_index
         if idx < 0 or idx >= len(dataframe):
@@ -263,7 +259,7 @@ class HunterEscalationGateway:
             )
 
         tag = f"jev_hunter_{setup}"
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "setup": setup,
             "entry_tag": tag,
             "hunter_action": action,
@@ -285,9 +281,7 @@ class HunterEscalationGateway:
             score=min(1.0, max(0.0, confidence)),
             quality_grade="HUNTER",
             reasons=["HUNTER_ESCALATION_PROMOTE"],
-            suggested_stop_distance_pct=float(
-                policy_result.suggested_stop_distance_pct or 0.018
-            ),
+            suggested_stop_distance_pct=float(policy_result.suggested_stop_distance_pct or 0.018),
             target_rr=float(policy_result.target_rr or 2.0),
             metadata=meta,
         )
@@ -304,7 +298,7 @@ def default_hunter_gateway(
     enabled: bool,
     allow_long_promotion: bool,
     pass_threshold: float = 0.55,
-) -> Optional[HunterEscalationGateway]:
+) -> HunterEscalationGateway | None:
     if not enabled:
         return None
     from strategies.mtf_sniper.intelligence.hunter_adapter import JevHunterAdapter
