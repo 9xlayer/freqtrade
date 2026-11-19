@@ -72,8 +72,13 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Verification: related suites green after follow-up (59 on identity cluster)
 - Fast Path / Event Path / Policy / sizing untouched
 
+## Entry pipeline positional fix
+- Root cause: `candle_index` is iloc, but `run` / `apply_entry_pipeline` / `_summarize_live_entries` wrote via index labels → duplicate labels multi-marked
+- Fix: `.iloc` / numpy mask writes; cooldown already positional (unchanged logic)
+- Regression: `test_mtf_entry_pipeline_duplicate_index.py`
+
 ## Next
-- Deterministic BT on real data (identity stabilization closed)
+- Deterministic BT on real data (identity + entry positional closed)
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
 - Ops gap remains: live/Docker restart with open trade
 - Only then consider Hunter / Momentum Radar

@@ -22,7 +22,8 @@
 - **Follow-up:** strict `_canonical_side` type check; mid-duplicate label resolve test (`_2`)
 - Hunter OFF; Sniper entry/exit/thresholds/risk multipliers unchanged
 - Ep46 BT ON on `2eb6607`: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71
-- Next: deterministic BT on real data — identity stabilization closed
+- Entry pipeline duplicate-index write fix: iloc/numpy only for enter_*/tag/summary
+- Next: deterministic BT on real data — identity + entry positional closed
 - Hunter / Momentum Radar still out of scope
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
