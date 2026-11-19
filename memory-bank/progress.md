@@ -15,10 +15,11 @@
 - Stabilization batch (post-bd6d2ef / b48aac8): Trade custom-data candidate_id, no non-canonical fallback, Long+Short parity, invalid mode fail-fast, DecisionEngine no env mutate, pair SL in RiskAuth, callback integration tests
 - Final P1 correlation batch: registry time-window (no future), absolute candle_index, persist verify bool, validate-on-read
 - Correlation hardening: DF fallback max-age; `parse_candidate_id` + trade pair/side match; LocalTrade custom-data lifecycle + partial-exit tests
-- Docs↔code alignment: `DATA_CONTRACTS` / `ARCHITECTURE` dual-path / `MIGRATION_PLAN` archive / P4 version banner; `test_mtf_data_contracts.py`
-- Hunter: live pipeline still hard-off; startup warns if profile says Hunter=True
-- Ep46 BT ON on `2eb6607`: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71 (hardening/docs do not change signals)
-- Remaining ops gap: live dry-run restart with open trade
+- Docs↔code alignment: RiskAuth confirm-path honesty; dual-path architecture; migration archive
+- Candidate ID: negative index rejected; registry `remember` validates fields; DB custom-data persist test
+- Hunter: live pipeline hard-off; startup warns if profile says Hunter=True
+- Ep46 BT ON on `2eb6607`: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71
+- Remaining ops gap: live dry-run restart with open trade (unit/DB covered; full bot restart still ops)
 - Hunter / Momentum Radar still out of scope
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)

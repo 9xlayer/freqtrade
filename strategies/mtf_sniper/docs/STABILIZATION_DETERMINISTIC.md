@@ -72,6 +72,8 @@ confirm_trade_entry
 24. **DataFrame fallback max-age** — reconstruct path uses the same `DEFAULT_LOOKUP_MAX_AGE` as registry (no arbitrarily old signal).
 25. **Persisted ID context check** — `parse_candidate_id` / `candidate_id_matches_trade` validate side + pair; read/persist reject mismatches.
 26. **`_dataframe_position`** — `get_loc` first (last duplicate), absolute row only; covered for Range/Datetime/sparse/duplicate indexes.
+27. **Canonical ID hardening** — reject negative `candle_index`; `remember()` validates / replaces mismatched provided IDs.
+28. **RiskAuth docs honesty** — confirm path does not pass `proposed_stake`; `stake_amount`/`leverage` are not live order echoes.
 
 ## Semantics: Policy vs Decision
 

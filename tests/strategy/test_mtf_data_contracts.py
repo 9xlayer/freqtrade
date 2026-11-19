@@ -117,6 +117,14 @@ class TestCandidateIdContract(unittest.TestCase):
         legacy = f"BTC/USDT:USDT_short_{int(ts.timestamp())}"
         self.assertFalse(is_canonical_candidate_id(legacy))
 
+    def test_rejects_negative_candle_index(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        bad = f"BTC/USDT:USDT_long_{int(ts.timestamp())}_-1"
+        self.assertFalse(is_canonical_candidate_id(bad))
+        self.assertIsNone(parse_candidate_id(bad))
+        with self.assertRaises(ValueError):
+            make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, ts, -1)
+
     def test_missing_sentinel_and_custom_data_key(self):
         self.assertEqual(CANDIDATE_ID_CUSTOM_DATA_KEY, "mtf_candidate_id")
         self.assertFalse(is_canonical_candidate_id(CANDIDATE_ID_MISSING))

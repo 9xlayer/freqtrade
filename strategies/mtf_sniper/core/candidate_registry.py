@@ -10,12 +10,19 @@ Lookup rules (when ``current_time`` is provided):
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
-from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
+from strategies.mtf_sniper.core.candidate_id import (
+    candidate_id_matches_fields,
+    make_candidate_id,
+    normalize_utc,
+)
 from strategies.mtf_sniper.core.contracts import TradeCandidate
+
+logger = logging.getLogger(__name__)
 
 # Default skew for confirm/reconstruct: allow small clock/candle lag, reject stale.
 DEFAULT_LOOKUP_MAX_AGE = timedelta(hours=6)
@@ -55,11 +62,37 @@ class CandidateRegistry:
             entry_tag=tag,
         )
         ts = normalize_utc(candidate.timestamp)
-        cid = candidate.candidate_id or make_candidate_id(
-            candidate.pair, candidate.side, ts, candidate.candle_index
-        )
+        idx = int(candidate.candle_index)
+        if idx < 0:
+            logger.warning(
+                f"[CandidateRegistry] Refusing remember with negative candle_index="
+                f"{idx} for {candidate.pair} {key.side}"
+            )
+            return
+        try:
+            expected = make_candidate_id(candidate.pair, candidate.side, ts, idx)
+        except ValueError as exc:
+            logger.warning(f"[CandidateRegistry] Refusing remember: {exc}")
+            return
+
+        provided = (candidate.candidate_id or "").strip()
+        if provided and not candidate_id_matches_fields(
+            provided,
+            pair=str(candidate.pair),
+            side=candidate.side,
+            timestamp=ts,
+            candle_index=idx,
+        ):
+            logger.warning(
+                f"[CandidateRegistry] Ignoring mismatched candidate_id={provided!r}; "
+                f"storing canonical {expected!r}"
+            )
+            cid = expected
+        else:
+            cid = provided or expected
+
         bucket = self._store.setdefault(key, [])
-        bucket.append((int(candidate.candle_index), ts, cid))
+        bucket.append((idx, ts, cid))
         if len(bucket) > self._maxlen:
             del bucket[0 : len(bucket) - self._maxlen]
 

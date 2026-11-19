@@ -21,6 +21,10 @@ class TriggerEvent:
     raw_metrics: Dict[str, Any]
 
 
+# Note: frozen=True is shallow — nested List/Dict fields are still mutable.
+# Callers must treat nested collections as read-only after construction.
+
+
 @dataclass(frozen=True)
 class TradeCandidate:
     """Merged / deduplicated candidate produced by CandidateBuilder."""
