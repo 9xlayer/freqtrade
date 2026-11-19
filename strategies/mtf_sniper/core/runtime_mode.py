@@ -19,12 +19,14 @@ back to a more privileged mode.
 
 * Hunter still default-off this phase unless explicitly re-enabled later.
 """
+
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Optional
+from typing import Any
 
 
 class RuntimeMode(str, Enum):
@@ -72,9 +74,9 @@ class InvalidRuntimeModeError(ValueError):
 
 
 def resolve_runtime_mode(
-    strat_cfg: Optional[Mapping[str, Any]] = None,
+    strat_cfg: Mapping[str, Any] | None = None,
     *,
-    environ: Optional[Mapping[str, str]] = None,
+    environ: Mapping[str, str] | None = None,
     default: RuntimeMode = RuntimeMode.DETERMINISTIC,
 ) -> RuntimeMode:
     """Resolve mode from strategy_params then env ``MTF_RUNTIME_MODE``.
@@ -93,19 +95,17 @@ def resolve_runtime_mode(
     mode = _ALIASES.get(key)
     if mode is None:
         known = ", ".join(sorted(set(_ALIASES.keys())))
-        raise InvalidRuntimeModeError(
-            f"Unknown mtf_runtime_mode={raw!r}. Known aliases: {known}"
-        )
+        raise InvalidRuntimeModeError(f"Unknown mtf_runtime_mode={raw!r}. Known aliases: {known}")
     return mode
 
 
 def build_runtime_profile(
-    strat_cfg: Optional[Mapping[str, Any]] = None,
+    strat_cfg: Mapping[str, Any] | None = None,
     *,
-    environ: Optional[Mapping[str, str]] = None,
-    enable_jev_decision_cfg: Optional[bool] = None,
-    enable_jev_hunter_cfg: Optional[bool] = None,
-    enable_hunter_long_cfg: Optional[bool] = None,
+    environ: Mapping[str, str] | None = None,
+    enable_jev_decision_cfg: bool | None = None,
+    enable_jev_hunter_cfg: bool | None = None,
+    enable_hunter_long_cfg: bool | None = None,
 ) -> RuntimeProfile:
     """
     Build the effective runtime profile.
@@ -123,7 +123,7 @@ def build_runtime_profile(
         if val is None:
             return default
         if isinstance(val, bool):
-            return bool(val)
+            return val
         if isinstance(val, (int, float)):
             return bool(val)
         return str(val).strip().lower() in ("true", "1", "yes", "on")
@@ -182,8 +182,8 @@ def build_runtime_profile(
 
     return RuntimeProfile(
         mode=mode,
-        enable_jev_hunter=bool(want_hunter),
-        enable_hunter_long=bool(want_hunter and want_hunter_long),
+        enable_jev_hunter=want_hunter,
+        enable_hunter_long=want_hunter and want_hunter_long,
         enable_jev_decision=want_decision,
         decision_jev_mode="external",
         allow_external_ai=True,

@@ -1,4 +1,5 @@
 """Short setup identifiers and tag helpers."""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -8,7 +9,7 @@ import pandas as pd
 from pandas import DataFrame
 
 
-class ShortSetup(str, Enum):
+class ShortSetup(Enum):
     A80_PLUS = "short_A80plus"
     B65_PLUS = "short_B65plus"
     C_SUB65 = "short_C_sub65"
@@ -69,7 +70,6 @@ def quality_grade_from_score(score: float) -> str:
     return "REJECT"
 
 
-
 # Stable part ids — SetupComposer recipe sniper_short = ALL of these
 SHORT_SNIPER_PART_NAMES = (
     "short_structure",
@@ -95,7 +95,9 @@ def build_short_sniper_parts(
     Full mask == AND of every part. Parts are independently composable.
     """
     s_max_dist = pair_cfg.get("short_max_dist_ema21", strategy.short_max_dist_ema21.value)
-    s_body_ratio = pair_cfg.get("short_candle_body_ratio_min", strategy.short_candle_body_ratio_min.value)
+    s_body_ratio = pair_cfg.get(
+        "short_candle_body_ratio_min", strategy.short_candle_body_ratio_min.value
+    )
 
     is_red = dataframe["close"] < dataframe["open"]
     is_decisive_red = (
@@ -106,7 +108,9 @@ def build_short_sniper_parts(
     is_breakdown_major = (dataframe["close"] < dataframe["swing_low"]) & (
         dataframe["close"].shift(1) >= dataframe["swing_low"]
     )
-    is_below_emas = (dataframe["close"] < dataframe["ema_10"]) & (dataframe["close"] < dataframe["ema_21"])
+    is_below_emas = (dataframe["close"] < dataframe["ema_10"]) & (
+        dataframe["close"] < dataframe["ema_21"]
+    )
 
     cond_candle_shape_short = (
         (dataframe["lower_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
@@ -120,13 +124,14 @@ def build_short_sniper_parts(
     )
 
     cond_1h_short_pos = (
-        (dataframe["close_1h"] >= (dataframe["ema_50_1h"] * strategy.short_loc_tolerance_1h.value))
-        & (dataframe["close_1h"] <= (dataframe["ema_50_1h"] * 1.025))
-    )
+        dataframe["close_1h"] >= (dataframe["ema_50_1h"] * strategy.short_loc_tolerance_1h.value)
+    ) & (dataframe["close_1h"] <= (dataframe["ema_50_1h"] * 1.025))
     cond_1h_short_macd = ((dataframe["macdhist_1h"] - dataframe["macdhist_prev_1h"]) < 0) | (
         dataframe["macdhist_1h"] < 0
     )
-    cond_1h_short_exhaustion = dataframe["rsi_max_24_1h"] >= strategy.short_min_1h_rsi_exhaustion.value
+    cond_1h_short_exhaustion = (
+        dataframe["rsi_max_24_1h"] >= strategy.short_min_1h_rsi_exhaustion.value
+    )
     cond_1h_short = cond_1h_short_pos & cond_1h_short_macd & cond_1h_short_exhaustion
 
     cond_4h_short = (
@@ -134,7 +139,11 @@ def build_short_sniper_parts(
         if strategy.block_4h_counter_wave.value
         else pd.Series(True, index=dataframe.index)
     )
-    if pair.startswith("ETH") and "minus_di_4h" in dataframe.columns and "plus_di_4h" in dataframe.columns:
+    if (
+        pair.startswith("ETH")
+        and "minus_di_4h" in dataframe.columns
+        and "plus_di_4h" in dataframe.columns
+    ):
         cond_4h_di_short = dataframe["minus_di_4h"] > dataframe["plus_di_4h"]
     else:
         cond_4h_di_short = pd.Series(True, index=dataframe.index)
@@ -146,7 +155,8 @@ def build_short_sniper_parts(
     )
 
     is_in_macro_bull = (
-        (dataframe["close"] > dataframe["ema_50_1d"]) & (dataframe["close"] > dataframe["ema_200_1d"])
+        (dataframe["close"] > dataframe["ema_50_1d"])
+        & (dataframe["close"] > dataframe["ema_200_1d"])
         if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns)
         else pd.Series(False, index=dataframe.index)
     )
@@ -161,7 +171,8 @@ def build_short_sniper_parts(
         else pd.Series(False, index=dataframe.index)
     )
     cond_floor_safe = (
-        ((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"]) >= 0.035
+        ((dataframe["close"] - dataframe["swing_low_20d_1d"]) / dataframe["swing_low_20d_1d"])
+        >= 0.035
         if "swing_low_20d_1d" in dataframe.columns
         else pd.Series(False, index=dataframe.index)
     )
@@ -172,9 +183,8 @@ def build_short_sniper_parts(
     )
 
     cond_not_chasing_short = (
-        ((dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (s_max_dist / 100.0))
-        & (dataframe["rsi"] >= strategy.short_min_rsi_entry.value)
-    )
+        (dataframe["ema_21"] - dataframe["close"]) / dataframe["close"] <= (s_max_dist / 100.0)
+    ) & (dataframe["rsi"] >= strategy.short_min_rsi_entry.value)
 
     return {
         "short_structure": (

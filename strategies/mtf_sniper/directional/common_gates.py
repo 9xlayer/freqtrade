@@ -1,16 +1,27 @@
 """Shared market gates (series masks + row helpers for Hunter post-AI accept)."""
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, List, Mapping
+from typing import Any
 
 import pandas as pd
 from pandas import DataFrame
 
+
 REQUIRED_INFORMATIVE_COLS = [
-    "close_1h", "ema_50_1h", "macdhist_1h", "macdhist_prev_1h",
-    "rsi_max_24_1h", "rsi_min_24_1h", "atr_pct",
-    "macdhist_4h", "ema_50_1d", "macdhist_1d", "pdh_1d",
+    "close_1h",
+    "ema_50_1h",
+    "macdhist_1h",
+    "macdhist_prev_1h",
+    "rsi_max_24_1h",
+    "rsi_min_24_1h",
+    "atr_pct",
+    "macdhist_4h",
+    "ema_50_1d",
+    "macdhist_1d",
+    "pdh_1d",
 ]
 
 
@@ -29,7 +40,7 @@ class MarketSafetyConfig:
 DEFAULT_MARKET_SAFETY = MarketSafetyConfig()
 
 
-def missing_informative_columns(dataframe: DataFrame) -> List[str]:
+def missing_informative_columns(dataframe: DataFrame) -> list[str]:
     return [c for c in REQUIRED_INFORMATIVE_COLS if c not in dataframe.columns]
 
 
@@ -78,20 +89,24 @@ def is_sideway_safe_row(
     config: MarketSafetyConfig | None = None,
 ) -> bool:
     cfg = config or DEFAULT_MARKET_SAFETY
-    if "bb_width_4h" in row and row.get("bb_width_4h") is not None:
-        if float(row["bb_width_4h"]) < cfg.bb_width_4h_chop:
-            return False
-    if "adx_4h" in row and row.get("adx_4h") is not None:
-        if float(row["adx_4h"]) < cfg.min_adx_4h:
-            return False
     if (
+        "bb_width_4h" in row
+        and row.get("bb_width_4h") is not None
+        and float(row["bb_width_4h"]) < cfg.bb_width_4h_chop
+    ):
+        return False
+    if (
+        "adx_4h" in row
+        and row.get("adx_4h") is not None
+        and float(row["adx_4h"]) < cfg.min_adx_4h
+    ):
+        return False
+    return not (
         row.get("bb_width_1d") is not None
         and row.get("range_24h") is not None
         and float(row["bb_width_1d"]) < cfg.bb_width_1d_chop
         and float(row["range_24h"]) < cfg.range_24h_chop_max
-    ):
-        return False
-    return True
+    )
 
 
 def is_short_hunter_macro_ok(row: Mapping[str, Any]) -> bool:
@@ -114,7 +129,7 @@ def is_short_hunter_macro_ok(row: Mapping[str, Any]) -> bool:
     )
     if float(row.get("is_macro_bull_run_1d", 0) or 0) == 1:
         return False
-    return bool(is_bear and not is_bull)
+    return is_bear and not is_bull
 
 
 def is_long_hunter_macro_ok(row: Mapping[str, Any]) -> bool:
@@ -126,9 +141,7 @@ def is_long_hunter_macro_ok(row: Mapping[str, Any]) -> bool:
         return False
     if close <= float(ema_50) or close <= float(ema_200):
         return False
-    if float(row.get("is_macro_bear_market_1d", 0) or 0) == 1:
-        return False
-    return True
+    return float(row.get("is_macro_bear_market_1d", 0) or 0) != 1
 
 
 def is_pdh_safe_long_row(row: Mapping[str, Any]) -> bool:

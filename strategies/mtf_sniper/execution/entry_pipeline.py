@@ -7,21 +7,27 @@ LIVE entry generation for MTF Sniper — deterministic flow (AI/Hunter off).
 Hunter escalation disabled until deterministic sniper is re-validated.
 JEV Decision Gate remains on confirm_trade_entry (separate from Hunter).
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import reduce
 from operator import and_
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
-from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate, TriggerEvent
+from strategies.mtf_sniper.core.contracts import (
+    PolicyEvaluationResult,
+    TradeCandidate,
+    TriggerEvent,
+)
 from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.common_gates import missing_informative_columns
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
@@ -30,7 +36,12 @@ from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
 from strategies.mtf_sniper.directional.policy_escalation import is_soft_policy_reject
 from strategies.mtf_sniper.directional.setup_composer import SetupComposer
 from strategies.mtf_sniper.directional.setup_recipes import SETUP_SNIPER_LONG, SETUP_SNIPER_SHORT
-from strategies.mtf_sniper.directional.short.policy import ShortPolicyConfig
+from strategies.mtf_sniper.directional.short.policy import (
+    DEFAULT_ETH_WATERFALL_FILTER,
+    DEFAULT_WATERFALL_FILTER,
+    ShortPolicyConfig,
+    build_waterfall_config_from_params,
+)
 from strategies.mtf_sniper.directional.short.setups import SHORT_SNIPER_PART_NAMES
 from strategies.mtf_sniper.intelligence.hunter_escalation import HunterEscalationGateway
 from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
@@ -40,20 +51,22 @@ from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
     cached_sniper_parts,
 )
 
+
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class EntryPipelineResult:
     enter_long: pd.Series
     enter_short: pd.Series
     enter_tag: pd.Series
-    candidates: List[TradeCandidate] = field(default_factory=list)
-    accepted: List[Tuple[TradeCandidate, PolicyEvaluationResult]] = field(default_factory=list)
-    rejected: List[dict] = field(default_factory=list)
-    hunter_promoted: List[Tuple[TradeCandidate, PolicyEvaluationResult]] = field(
+    candidates: list[TradeCandidate] = field(default_factory=list)
+    accepted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = field(default_factory=list)
+    rejected: list[dict] = field(default_factory=list)
+    hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = field(
         default_factory=list
     )
-    trigger_events: List[TriggerEvent] = field(default_factory=list)
+    trigger_events: list[TriggerEvent] = field(default_factory=list)
 
 
 class EntryPipeline:
@@ -62,14 +75,14 @@ class EntryPipeline:
     def __init__(
         self,
         *,
-        sensor_suite: Optional[SensorSuite] = None,
-        candidate_builder: Optional[CandidateBuilder] = None,
-        engine: Optional[DirectionalTradingEngine] = None,
-        setup_composer: Optional[SetupComposer] = None,
-        hunter_escalation: Optional[HunterEscalationGateway] = None,
+        sensor_suite: SensorSuite | None = None,
+        candidate_builder: CandidateBuilder | None = None,
+        engine: DirectionalTradingEngine | None = None,
+        setup_composer: SetupComposer | None = None,
+        hunter_escalation: HunterEscalationGateway | None = None,
         builder_cooldown_bars: int = 0,
-        long_config: Optional[LongPolicyConfig] = None,
-        short_config: Optional[ShortPolicyConfig] = None,
+        long_config: LongPolicyConfig | None = None,
+        short_config: ShortPolicyConfig | None = None,
     ) -> None:
         # Builder cooldown off — strategy apply_cooldown owns spacing; avoids
         # incomplete part bars burning cooldown before a full setup arrives.
@@ -81,9 +94,7 @@ class EntryPipeline:
             self.setup_composer = setup_composer
         else:
             # Keep anomalies only when Hunter gateway is injected (escalation path).
-            self.setup_composer = SetupComposer(
-                drop_anomalies=(hunter_escalation is None)
-            )
+            self.setup_composer = SetupComposer(drop_anomalies=(hunter_escalation is None))
         self.engine = engine or DirectionalTradingEngine(
             long_config=long_config,
             short_config=short_config,
@@ -92,9 +103,20 @@ class EntryPipeline:
         self.hunter_escalation = hunter_escalation
 
     @classmethod
-    def live(cls, strategy: Any, hunter_escalation: Optional[HunterEscalationGateway] = None) -> "EntryPipeline":
+    def live(
+        cls, strategy: Any, hunter_escalation: HunterEscalationGateway | None = None
+    ) -> EntryPipeline:
         _ = hunter_escalation
         enable_waterfall = bool(getattr(strategy, "enable_waterfall", False))
+        pair_overrides = dict(getattr(strategy, "custom_pair_params", {}) or {})
+        wf_pair_configs = {
+            "ETH/USDT:USDT": DEFAULT_ETH_WATERFALL_FILTER,
+            "ETH/USDT": DEFAULT_ETH_WATERFALL_FILTER,
+        }
+        for pair_name, params in pair_overrides.items():
+            base_cfg = wf_pair_configs.get(pair_name, DEFAULT_WATERFALL_FILTER)
+            wf_pair_configs[pair_name] = build_waterfall_config_from_params(base_cfg, params)
+
         return cls(
             sensor_suite=SensorSuite.live(strategy),
             hunter_escalation=None,
@@ -103,28 +125,72 @@ class EntryPipeline:
                 allow_anomaly_entries=False,
             ),
             short_config=ShortPolicyConfig(
-                block_macro_bull_shorts=bool(
-                    getattr(strategy, "block_macro_bull_shorts", False)
-                ),
+                block_macro_bull_shorts=bool(getattr(strategy, "block_macro_bull_shorts", False)),
                 allow_anomaly_entries=enable_waterfall,
+                waterfall_pair_configs=wf_pair_configs,
             ),
         )
+
+    def _resolve_candidate(
+        self,
+        candidate: TradeCandidate,
+        result: PolicyEvaluationResult,
+        rows_by_index: dict[int, dict[str, Any]],
+        dataframe: pd.DataFrame,
+        rejected: list[dict],
+        hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]],
+    ) -> PolicyEvaluationResult | None:
+        if not result.is_valid and self.hunter_escalation is not None:
+            row = rows_by_index.get(candidate.candle_index) or {}
+            attempt = self.hunter_escalation.evaluate(candidate, result, dataframe, row)
+            if attempt.promoted is not None:
+                hunter_promoted.append((candidate, attempt.promoted))
+                return attempt.promoted
+            verdict = attempt.score_verdict
+            rejected.append(
+                {
+                    "pair": candidate.pair,
+                    "candle_index": candidate.candle_index,
+                    "side": candidate.side.value,
+                    "reasons": list(result.reasons),
+                    "setup": result.metadata.get("setup"),
+                    "escalation": attempt.outcome,
+                    "score": None if verdict is None else verdict.score,
+                    "score_passed": None if verdict is None else verdict.passed,
+                    "score_reason": None if verdict is None else verdict.reason,
+                    "gate_reasons": attempt.gate_reasons,
+                }
+            )
+            return None
+        if not result.is_valid:
+            rejected.append(
+                {
+                    "pair": candidate.pair,
+                    "candle_index": candidate.candle_index,
+                    "side": candidate.side.value,
+                    "reasons": list(result.reasons),
+                    "setup": result.metadata.get("setup"),
+                    "escalation": (
+                        "soft_not_promoted" if is_soft_policy_reject(result) else "hard"
+                    ),
+                }
+            )
+            return None
+        return result
 
     def run(self, dataframe: pd.DataFrame, pair: str) -> EntryPipelineResult:
         """Scan sensors, compose setups, evaluate policies."""
         self.candidate_builder.reset()
-        rejected: List[dict] = []
+        rejected: list[dict] = []
 
-        # Fast path: AND part masks vectorized (legacy parity) — avoids O(hits)
-        # TriggerEvent explosion when each part fires independently on BT history.
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         candidates = self._candidates_from_sniper_masks(dataframe, pair)
         if candidates is None:
             events = self.sensor_suite.scan(dataframe, pair)
             raw_candidates = self.candidate_builder.process(events, rejected=rejected)
             candidates = self.setup_composer.compose(raw_candidates, dropped=rejected)
 
-        rows_by_index: Dict[int, Dict[str, Any]] = {}
+        rows_by_index: dict[int, dict[str, Any]] = {}
         for c in candidates:
             if c.candle_index not in rows_by_index:
                 rows_by_index[c.candle_index] = dataframe.iloc[c.candle_index].to_dict()
@@ -134,69 +200,17 @@ class EntryPipeline:
         enter_long = pd.Series(False, index=dataframe.index)
         enter_short = pd.Series(False, index=dataframe.index)
         enter_tag = pd.Series("", index=dataframe.index)
-        accepted: List[Tuple[TradeCandidate, PolicyEvaluationResult]] = []
-        hunter_promoted: List[Tuple[TradeCandidate, PolicyEvaluationResult]] = []
+        accepted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = []
+        hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = []
 
         for candidate, result in evaluated:
-            final = result
-            if not result.is_valid and self.hunter_escalation is not None:
-                row = rows_by_index.get(candidate.candle_index) or {}
-                attempt = self.hunter_escalation.evaluate(
-                    candidate, result, dataframe, row
-                )
-                if attempt.promoted is not None:
-                    hunter_promoted.append((candidate, attempt.promoted))
-                    final = attempt.promoted
-                else:
-                    verdict = attempt.score_verdict
-                    rejected.append(
-                        {
-                            "pair": candidate.pair,
-                            "candle_index": candidate.candle_index,
-                            "side": candidate.side.value,
-                            "reasons": list(result.reasons),
-                            "setup": result.metadata.get("setup"),
-                            "escalation": attempt.outcome,
-                            "score": None if verdict is None else verdict.score,
-                            "score_passed": None if verdict is None else verdict.passed,
-                            "score_reason": None if verdict is None else verdict.reason,
-                            "gate_reasons": attempt.gate_reasons,
-                        }
-                    )
-                    continue
-            elif not result.is_valid:
-                rejected.append(
-                    {
-                        "pair": candidate.pair,
-                        "candle_index": candidate.candle_index,
-                        "side": candidate.side.value,
-                        "reasons": list(result.reasons),
-                        "setup": result.metadata.get("setup"),
-                        "escalation": (
-                            "soft_not_promoted"
-                            if is_soft_policy_reject(result)
-                            else "hard"
-                        ),
-                    }
-                )
-                continue
-
-            if not final.is_valid:
-                rejected.append(
-                    {
-                        "pair": candidate.pair,
-                        "candle_index": candidate.candle_index,
-                        "side": candidate.side.value,
-                        "reasons": list(final.reasons),
-                        "setup": final.metadata.get("setup"),
-                        "escalation": "none",
-                    }
-                )
+            final = self._resolve_candidate(
+                candidate, result, rows_by_index, dataframe, rejected, hunter_promoted
+            )
+            if final is None or not final.is_valid:
                 continue
 
             accepted.append((candidate, final))
-            # candle_index is an absolute iloc position — never write via index label
-            # (duplicate labels would mark multiple rows).
             pos = candidate.candle_index
             tag = str(final.metadata.get("entry_tag") or final.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
@@ -243,7 +257,7 @@ class EntryPipeline:
         self,
         dataframe: pd.DataFrame,
         pair: str,
-    ) -> Optional[List[TradeCandidate]]:
+    ) -> list[TradeCandidate] | None:
         """
         Build setup-complete candidates from vectorized AND of part masks.
 
@@ -284,7 +298,7 @@ class EntryPipeline:
             short_and = pd.Series(short_arr, index=dataframe.index)
             long_and = pd.Series(long_arr, index=dataframe.index)
 
-        candidates: List[TradeCandidate] = []
+        candidates: list[TradeCandidate] = []
         candidates.extend(
             self._candidates_for_mask(
                 dataframe,
@@ -319,7 +333,11 @@ class EntryPipeline:
                     continue
                 i = pos
                 row = dataframe.iloc[i]
-                ts = normalize_utc(row["date"]) if has_date else normalize_utc(datetime(1970, 1, 1))
+                ts = (
+                    normalize_utc(row["date"])
+                    if has_date
+                    else normalize_utc(datetime(1970, 1, 1, tzinfo=UTC))
+                )
                 feats = {
                     "setup_name": "waterfall_collapse",
                     "signal_source": "momentum_radar",
@@ -354,21 +372,21 @@ class EntryPipeline:
         setup_name: str,
         part_names: Sequence[str],
         score_key: str,
-    ) -> List[TradeCandidate]:
+    ) -> list[TradeCandidate]:
         hits = np.flatnonzero(mask.to_numpy(dtype=bool, na_value=False))
         if len(hits) == 0:
             return []
 
         has_date = "date" in dataframe.columns
-        out: List[TradeCandidate] = []
+        out: list[TradeCandidate] = []
         for idx in hits:
             i = int(idx)
             row = dataframe.iloc[i]
             if has_date:
                 ts = normalize_utc(row["date"])
             else:
-                ts = normalize_utc(datetime(1970, 1, 1))
-            feats: Dict[str, Any] = {
+                ts = normalize_utc(datetime(1970, 1, 1, tzinfo=UTC))
+            feats: dict[str, Any] = {
                 "setup_complete": True,
                 "setup_name": setup_name,
                 "legacy_sniper": side.value,
@@ -428,7 +446,9 @@ def apply_entry_pipeline(
     tags = result.enter_tag.fillna("").astype(str)
 
     long_cd = int(getattr(strategy.long_cooldown_candles, "value", strategy.long_cooldown_candles))
-    short_cd = int(getattr(strategy.short_cooldown_candles, "value", strategy.short_cooldown_candles))
+    short_cd = int(
+        getattr(strategy.short_cooldown_candles, "value", strategy.short_cooldown_candles)
+    )
     final_long = strategy.apply_cooldown(cand_long, long_cd)
     final_short = strategy.apply_cooldown(cand_short, short_cd)
 
@@ -490,15 +510,11 @@ def _remember_accepted_candidates(strategy: Any, result: EntryPipelineResult) ->
         reg.remember(candidate, tag)
 
 
-def _summarize_live_entries(dataframe: DataFrame) -> List[dict]:
+def _summarize_live_entries(dataframe: DataFrame) -> list[dict]:
     """One summary row per positional enter_* signal (safe under duplicate index)."""
-    rows: List[dict] = []
-    long_pos = np.flatnonzero(
-        dataframe["enter_long"].fillna(0).to_numpy(dtype=bool)
-    )
-    short_pos = np.flatnonzero(
-        dataframe["enter_short"].fillna(0).to_numpy(dtype=bool)
-    )
+    rows: list[dict] = []
+    long_pos = np.flatnonzero(dataframe["enter_long"].fillna(0).to_numpy(dtype=bool))
+    short_pos = np.flatnonzero(dataframe["enter_short"].fillna(0).to_numpy(dtype=bool))
     has_date = "date" in dataframe.columns
     for pos in long_pos:
         p = int(pos)

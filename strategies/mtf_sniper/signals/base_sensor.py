@@ -1,9 +1,10 @@
 """Abstract base class for all market sensors."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -32,8 +33,8 @@ class BaseSensor(ABC):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         """
         Scan dataframe and return zero or more TriggerEvents.
 
@@ -44,8 +45,8 @@ class BaseSensor(ABC):
     def _resolve_indices(
         self,
         dataframe: pd.DataFrame,
-        candle_index: Optional[int],
-    ) -> List[int]:
+        candle_index: int | None,
+    ) -> list[int]:
         n = len(dataframe)
         if n < self.min_history:
             return []
@@ -65,7 +66,7 @@ class BaseSensor(ABC):
         index_val = dataframe.index[idx]
         if isinstance(index_val, (pd.Timestamp, datetime)):
             return pd.Timestamp(index_val).to_pydatetime()
-        return datetime.utcfromtimestamp(0)
+        return datetime.fromtimestamp(0, tz=UTC)
 
     def _make_event(
         self,
@@ -74,7 +75,7 @@ class BaseSensor(ABC):
         pair: str,
         timestamp: datetime,
         candle_index: int,
-        raw_metrics: Dict[str, Any],
+        raw_metrics: dict[str, Any],
     ) -> TriggerEvent:
         return TriggerEvent(
             sensor_name=self.name,

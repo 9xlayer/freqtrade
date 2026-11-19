@@ -3,7 +3,9 @@
 Bump here only; strategy / Decision / Hunter import these constants.
 Docs (`ARCHITECTURE.md`) should match ``STRATEGY_VERSION``.
 """
+
 from __future__ import annotations
+
 
 # ---------------------------------------------------------------------------
 # Package / live strategy (layered pipeline)

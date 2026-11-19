@@ -1,7 +1,6 @@
 """A80+ multi-indicator confluence pattern sensor."""
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import pandas as pd
 
@@ -31,8 +30,8 @@ class A80PlusSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         indices = self._resolve_indices(dataframe, candle_index)
         if not indices:
             return []
@@ -45,13 +44,17 @@ class A80PlusSensor(BaseSensor):
         total_range = (dataframe["high"] - dataframe["low"]).clip(lower=1e-12)
         body = (dataframe["close"] - dataframe["open"]).abs()
         body_ratio = body / total_range
-        atr = dataframe["atr"] if "atr" in dataframe.columns else pd.Series(1.0, index=dataframe.index)
+        atr = (
+            dataframe["atr"]
+            if "atr" in dataframe.columns
+            else pd.Series(1.0, index=dataframe.index)
+        )
 
         is_green = dataframe["close"] > dataframe["open"]
         is_red = dataframe["close"] < dataframe["open"]
         decisive = (body_ratio >= self.body_ratio_min) & (body >= atr * self.body_atr_min)
 
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         for i in indices:
             if not bool(decisive.iloc[i]):
                 continue

@@ -285,10 +285,19 @@ extend-ignore = [
   "DTZ007",  # Use timezone-aware datetime objects
   "TRY401",  # Redundant exception object in logging.exception call
   "TRY004",  # Wrong exception type when raising for type error
+  "UP042",  # Class inheriting from both str and Enum
 ]
 
 
 [tool.ruff.lint.per-file-ignores]
+"strategies/mtf_sniper/intelligence/jev_*.py" = [
+  "E501",   # Line length in legacy AI prompts
+  "C901",   # Complexity in legacy external dispatch
+  "S",      # Security warnings in local sqlite/url calls
+  "PTH",    # Pathlib suggestions in legacy file IO
+  "E402",   # Module import not at top of file
+  "F841",   # Unused local variable in legacy hunter
+]
 "freqtrade/freqai/**/*.py" = [
   "S311",  # Standard pseudo-random generators are not suitable for cryptographic purposes
 ]

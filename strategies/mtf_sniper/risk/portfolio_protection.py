@@ -1,9 +1,12 @@
 """Streak circuit breaker, directional lock, and distress guard."""
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +16,7 @@ CIRCUIT_BREAKER_PAUSE_SEC = 3 * 86400
 DISTRESS_ROE = -0.08
 
 
-def filter_strategy_trades(trades: Sequence[Any], strategy_name: str) -> List[Any]:
+def filter_strategy_trades(trades: Sequence[Any], strategy_name: str) -> list[Any]:
     return [t for t in trades if getattr(t, "strategy", None) == strategy_name]
 
 
@@ -83,7 +86,7 @@ def distress_guard_blocks(
     *,
     pair: str,
     current_time: datetime,
-    get_price: Callable[[str, datetime], Optional[float]],
+    get_price: Callable[[str, datetime], float | None],
     distress_roe: float = DISTRESS_ROE,
 ) -> bool:
     """

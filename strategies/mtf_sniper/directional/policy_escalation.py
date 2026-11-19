@@ -4,12 +4,14 @@ Classify policy rejects into hard (drop) vs soft (eligible for JEV Hunter).
 Hard = structural / regime / data integrity — never escalate.
 Soft = microstructure / chase / score near-miss — Hunter may promote.
 """
+
 from __future__ import annotations
 
-from typing import Iterable, Set
+from collections.abc import Iterable
 
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult
 from strategies.mtf_sniper.core.enums import RejectionReasonCode
+
 
 # Fail-closed: never ask AI to override these.
 HARD_REJECT_REASONS: frozenset[str] = frozenset(
@@ -35,8 +37,8 @@ SOFT_REJECT_REASONS: frozenset[str] = frozenset(
 )
 
 
-def _normalize_reasons(reasons: Iterable[str]) -> Set[str]:
-    return {str(r) for r in reasons if r and str(r) != "ACCEPT"}
+def _normalize_reasons(reasons: Iterable[str]) -> set[str]:
+    return {r for r in reasons if r and r != "ACCEPT"}
 
 
 def is_soft_policy_reject(result: PolicyEvaluationResult) -> bool:

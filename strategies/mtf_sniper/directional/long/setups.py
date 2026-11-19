@@ -1,8 +1,9 @@
 """Long setup identifiers and tag helpers."""
+
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Tuple
+from typing import Any
 
 import pandas as pd
 from pandas import DataFrame
@@ -55,7 +56,6 @@ def quality_grade_from_score(score: float) -> str:
     return "REJECT"
 
 
-
 # Stable part ids — SetupComposer recipe sniper_long = ALL of these
 LONG_SNIPER_PART_NAMES = (
     "long_structure",
@@ -73,14 +73,16 @@ def build_long_sniper_parts(
     data_ready: pd.Series,
     cond_volatility_safe: pd.Series,
     cond_sideway_safe: pd.Series,
-) -> Tuple[dict[str, pd.Series], pd.Series]:
+) -> tuple[dict[str, pd.Series], pd.Series]:
     """
     Legacy long AND-mask split into named parts (old StrategyMTFSniper parity).
 
     Full mask == AND of every part. Returns (parts, pdh_safe_mask).
     """
     l_max_dist = pair_cfg.get("long_max_dist_ema21", strategy.long_max_dist_ema21.value)
-    l_body_ratio = pair_cfg.get("long_candle_body_ratio_min", strategy.long_candle_body_ratio_min.value)
+    l_body_ratio = pair_cfg.get(
+        "long_candle_body_ratio_min", strategy.long_candle_body_ratio_min.value
+    )
 
     is_green = dataframe["close"] > dataframe["open"]
     is_decisive_green = (
@@ -90,8 +92,12 @@ def build_long_sniper_parts(
     )
     l_lookback = strategy.long_lookback_resistance.value
     swing_high = dataframe["high"].shift(1).rolling(l_lookback).max()
-    is_breakout_major = (dataframe["close"] > swing_high) & (dataframe["close"].shift(1) <= swing_high)
-    is_above_emas = (dataframe["close"] > dataframe["ema_10"]) & (dataframe["close"] > dataframe["ema_21"])
+    is_breakout_major = (dataframe["close"] > swing_high) & (
+        dataframe["close"].shift(1) <= swing_high
+    )
+    is_above_emas = (dataframe["close"] > dataframe["ema_10"]) & (
+        dataframe["close"] > dataframe["ema_21"]
+    )
 
     cond_candle_shape_long = (
         (dataframe["upper_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
@@ -104,8 +110,12 @@ def build_long_sniper_parts(
         else pd.Series(True, index=dataframe.index)
     )
 
-    cond_1h_long_pos = dataframe["close_1h"] >= (dataframe["ema_50_1h"] * strategy.long_loc_tolerance_1h.value)
-    cond_1h_long_exhaustion = dataframe["rsi_min_24_1h"] <= strategy.long_max_1h_rsi_exhaustion.value
+    cond_1h_long_pos = dataframe["close_1h"] >= (
+        dataframe["ema_50_1h"] * strategy.long_loc_tolerance_1h.value
+    )
+    cond_1h_long_exhaustion = (
+        dataframe["rsi_min_24_1h"] <= strategy.long_max_1h_rsi_exhaustion.value
+    )
     cond_1h_long = cond_1h_long_pos & cond_1h_long_exhaustion
 
     cond_4h_long = (
@@ -115,14 +125,17 @@ def build_long_sniper_parts(
     )
 
     cond_1d_long = (
-        (dataframe["close"] > dataframe["ema_50_1d"])
-        & ((dataframe["macdhist_1d"] > 0) if strategy.long_block_1d_macd.value else True)
-    ) if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns) else pd.Series(
-        False, index=dataframe.index
+        (
+            (dataframe["close"] > dataframe["ema_50_1d"])
+            & ((dataframe["macdhist_1d"] > 0) if strategy.long_block_1d_macd.value else True)
+        )
+        if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns)
+        else pd.Series(False, index=dataframe.index)
     )
 
     is_in_macro_bear = (
-        (dataframe["close"] < dataframe["ema_200_1d"]) | (dataframe["close"] < dataframe["ema_50_1d"])
+        (dataframe["close"] < dataframe["ema_200_1d"])
+        | (dataframe["close"] < dataframe["ema_50_1d"])
         if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns)
         else pd.Series(False, index=dataframe.index)
     )
@@ -139,9 +152,8 @@ def build_long_sniper_parts(
     )
 
     cond_not_chasing_long = (
-        ((dataframe["close"] - dataframe["ema_21"]) / dataframe["ema_21"] <= (l_max_dist / 100.0))
-        & (dataframe["rsi"] <= strategy.long_max_rsi_entry.value)
-    )
+        (dataframe["close"] - dataframe["ema_21"]) / dataframe["ema_21"] <= (l_max_dist / 100.0)
+    ) & (dataframe["rsi"] <= strategy.long_max_rsi_entry.value)
 
     if "pdh_1d" in dataframe.columns and strategy.filter_pdh_ceiling.value:
         cond_pdh_safe_long = ~(
@@ -189,7 +201,7 @@ def build_raw_sniper_long_mask(
     data_ready: pd.Series,
     cond_volatility_safe: pd.Series,
     cond_sideway_safe: pd.Series,
-) -> Tuple[pd.Series, pd.Series]:
+) -> tuple[pd.Series, pd.Series]:
     """Full legacy long mask == AND of ``build_long_sniper_parts``."""
     parts, cond_pdh_safe_long = build_long_sniper_parts(
         strategy,

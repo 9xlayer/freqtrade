@@ -1,11 +1,12 @@
 """Append-only trade outcome ledger (MFE/MAE/attribution)."""
+
 from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 from strategies.mtf_sniper.core.contracts import TelemetryTradeRecord
 
@@ -13,11 +14,11 @@ from strategies.mtf_sniper.core.contracts import TelemetryTradeRecord
 class TradeLedger:
     """Persists TelemetryTradeRecord rows as JSONL."""
 
-    def __init__(self, path: Optional[str | Path] = None, *, enabled: bool = True) -> None:
+    def __init__(self, path: str | Path | None = None, *, enabled: bool = True) -> None:
         self.enabled = enabled
         self.path = Path(path) if path else None
         self._lock = threading.Lock()
-        self._buffer: List[TelemetryTradeRecord] = []
+        self._buffer: list[TelemetryTradeRecord] = []
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -45,7 +46,7 @@ class TradeLedger:
         self.record(row)
         return row
 
-    def all(self) -> List[TelemetryTradeRecord]:
+    def all(self) -> list[TelemetryTradeRecord]:
         with self._lock:
             return list(self._buffer)
 
@@ -56,7 +57,7 @@ class TradeLedger:
     def load_from_disk(self) -> Iterable[TelemetryTradeRecord]:
         if self.path is None or not self.path.exists():
             return []
-        rows: List[TelemetryTradeRecord] = []
+        rows: list[TelemetryTradeRecord] = []
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()

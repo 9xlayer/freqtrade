@@ -8,12 +8,13 @@ Lookup rules (when ``current_time`` is provided):
 - Never fall back to the newest entry if none match.
 - Optionally enforce a max age window so an old same-tag signal is not reused.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from strategies.mtf_sniper.core.candidate_id import (
     _canonical_pair,
@@ -23,7 +24,7 @@ from strategies.mtf_sniper.core.candidate_id import (
     make_candidate_id,
     normalize_utc,
 )
-from strategies.mtf_sniper.core.contracts import TradeCandidate
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,9 @@ class CandidateRegistry:
         self._maxlen_trades = max(1, maxlen_trades)
         self._lookup_max_age = lookup_max_age
         # key → list of (candle_index, utc_ts, candidate_id) newest last
-        self._store: Dict[_EntryKey, list[Tuple[int, datetime, str]]] = {}
+        self._store: dict[_EntryKey, list[tuple[int, datetime, str]]] = {}
         # trade_id → candidate_id (bound on entry fill, cleared on exit record)
-        self._by_trade: Dict[int, str] = {}
+        self._by_trade: dict[int, str] = {}
         self._trade_order: list[int] = []
 
     def remember(self, candidate: Any, entry_tag: str) -> None:
@@ -73,9 +74,7 @@ class CandidateRegistry:
             pair = _canonical_pair(getattr(candidate, "pair", None))
             side = _canonical_side(getattr(candidate, "side", None))
             ts = normalize_utc(getattr(candidate, "timestamp", None))
-            idx = _require_nonneg_int(
-                getattr(candidate, "candle_index", None), "candle_index"
-            )
+            idx = _require_nonneg_int(getattr(candidate, "candle_index", None), "candle_index")
             expected = make_candidate_id(pair, side, ts, idx)
 
             raw_id = getattr(candidate, "candidate_id", None)
@@ -108,16 +107,14 @@ class CandidateRegistry:
             key = _EntryKey(
                 pair=pair,
                 side=side,
-                entry_tag=str(entry_tag or ""),
+                entry_tag=entry_tag or "",
             )
             bucket = self._store.setdefault(key, [])
             bucket.append((idx, ts, cid))
             if len(bucket) > self._maxlen:
                 del bucket[0 : len(bucket) - self._maxlen]
         except Exception as exc:
-            logger.warning(
-                f"[CandidateRegistry] Refusing remember (invalid identity): {exc}"
-            )
+            logger.warning(f"[CandidateRegistry] Refusing remember (invalid identity): {exc}")
             return
 
     def lookup(
@@ -125,11 +122,11 @@ class CandidateRegistry:
         *,
         pair: str,
         side: str,
-        entry_tag: Optional[str],
-        current_time: Optional[datetime] = None,
-        max_age: Optional[timedelta] = None,
+        entry_tag: str | None,
+        current_time: datetime | None = None,
+        max_age: timedelta | None = None,
         allow_unbounded: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Return the newest candidate with ``timestamp <= current_time`` inside
         the age window (default ``DEFAULT_LOOKUP_MAX_AGE`` = 6h).
@@ -145,7 +142,7 @@ class CandidateRegistry:
         key = _EntryKey(
             pair=pair,
             side=side.lower(),
-            entry_tag=str(entry_tag or ""),
+            entry_tag=entry_tag or "",
         )
         bucket = self._store.get(key)
         if not bucket:
@@ -181,7 +178,7 @@ class CandidateRegistry:
             old = self._trade_order.pop(0)
             self._by_trade.pop(old, None)
 
-    def lookup_trade(self, trade_id: int) -> Optional[str]:
+    def lookup_trade(self, trade_id: int) -> str | None:
         return self._by_trade.get(trade_id)
 
     def unbind_trade(self, trade_id: int) -> None:

@@ -10,33 +10,45 @@ Provides AI Decision Layer bridge for Freqtrade & AI Agent Lens:
    - Backtest Mode: Ensures full determinism without network API calls in backtesting.
 """
 
-import os
-import json
-import sqlite3
 import hashlib
+import json
 import logging
-import urllib.request
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
-from enum import Enum
 import math
+import os
+import sqlite3
+import urllib.request
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
 from pandas import DataFrame
+
 
 logger = logging.getLogger(__name__)
 
 # Version hub: strategies.mtf_sniper.__init__ (single bump site).
 from strategies.mtf_sniper import (
     DECISION_ENGINE_VERSION as ENGINE_VERSION,
+)
+from strategies.mtf_sniper import (
     DECISION_MODEL_VERSION_EXTERNAL_DEFAULT,
+)
+from strategies.mtf_sniper import (
     DECISION_MODEL_VERSION_NATIVE as MODEL_VERSION_NATIVE,
+)
+from strategies.mtf_sniper import (
     DECISION_PROMPT_VERSION_EXTERNAL as PROMPT_VERSION_EXTERNAL,
+)
+from strategies.mtf_sniper import (
     DECISION_PROMPT_VERSION_NATIVE as PROMPT_VERSION_NATIVE,
 )
+
 
 MODEL_VERSION_EXTERNAL = os.environ.get(
     "JEV_DECISION_MODEL_VERSION", DECISION_MODEL_VERSION_EXTERNAL_DEFAULT
 )
+
 
 def _external_confirm_instructions(side: str) -> str:
     """Side-aware System-1 confirm prompt (optimal richctx)."""
@@ -71,7 +83,7 @@ def _external_confirm_instructions(side: str) -> str:
     )
 
 
-def _external_regime_criteria() -> Dict[str, str]:
+def _external_regime_criteria() -> dict[str, str]:
     """Regime labels used by external Decision (hard-veto still applies to choppy)."""
     return {
         "trend_expansion": (
@@ -93,8 +105,8 @@ def _format_external_state(
     pair: str,
     side: str,
     current_price: float,
-    seq: List[Dict[str, Any]],
-    macro: Dict[str, Any],
+    seq: list[dict[str, Any]],
+    macro: dict[str, Any],
     candle_limit: int = 12,
 ) -> str:
     """Build Typesafe ``state`` text with metric legend + richer trajectory/macro."""
@@ -125,7 +137,7 @@ def _format_external_state(
     )
 
     window = seq[-candle_limit:] if seq else []
-    lines: List[str] = []
+    lines: list[str] = []
     n = len(window)
     for i, c in enumerate(window):
         label = "trigger" if i == n - 1 else f"T-{n - 1 - i}"
@@ -151,18 +163,18 @@ Recent Candle Trajectory (last {len(window)} of {len(seq)} bars):
 {candles_str}
 
 Macro & Filter Context:
-- 4H Trend: {macro.get('trend_4h', 'NEUTRAL')} (context only; do not veto solely for HTF disagreement)
-- 4H ADX: {float(macro.get('adx_4h', 20.0)):.1f}
+- 4H Trend: {macro.get("trend_4h", "NEUTRAL")} (context only; do not veto solely for HTF disagreement)
+- 4H ADX: {float(macro.get("adx_4h", 20.0)):.1f}
 - 1H EMA50 Distance: {float(ema_dist):.2f}%
-- 1H MACD hist: {float(macro.get('macdhist_1h', 0.0)):.4f}
-- 1H RSI: {float(macro.get('rsi_1h', 50.0)):.1f}
-- 1D floor(20d) distance: {float(macro.get('floor_20d_dist_pct', 0.0)):.2f}%
-- ATR Volatility Percentile: {float(macro.get('atr_percentile', 50.0)):.1f}%
-- AI Lens Confluence Score ({'short' if side_u == 'SHORT' else 'long'}): {float(lens):.1f}
+- 1H MACD hist: {float(macro.get("macdhist_1h", 0.0)):.4f}
+- 1H RSI: {float(macro.get("rsi_1h", 50.0)):.1f}
+- 1D floor(20d) distance: {float(macro.get("floor_20d_dist_pct", 0.0)):.2f}%
+- ATR Volatility Percentile: {float(macro.get("atr_percentile", 50.0)):.1f}%
+- AI Lens Confluence Score ({"short" if side_u == "SHORT" else "long"}): {float(lens):.1f}
 """
 
 
-def _parse_unit_interval(value: Any, default: Optional[float] = None) -> Optional[float]:
+def _parse_unit_interval(value: Any, default: float | None = None) -> float | None:
     """Parse a finite float in [0, 1]. Returns default/None on invalid input."""
     try:
         parsed = float(value)
@@ -187,7 +199,7 @@ def _external_choppy_penalty() -> float:
     return 0.10 if val is None else val
 
 
-def _external_confirm_threshold() -> Optional[float]:
+def _external_confirm_threshold() -> float | None:
     """
     Confirm threshold for Decision Gate.
     Must be finite and inside [0, 1]; invalid env values yield None (fail closed).
@@ -212,13 +224,13 @@ def build_decision_cache_key(
 ) -> str:
     """Deterministic cache identity across payload + model/prompt/threshold/policy/mode."""
     identity = {
-        "payload_hash": str(payload_hash or ""),
-        "model_version": str(model_version or ""),
-        "engine_version": str(engine_version or ""),
-        "prompt_version": str(prompt_version or ""),
+        "payload_hash": payload_hash or "",
+        "model_version": model_version or "",
+        "engine_version": engine_version or "",
+        "prompt_version": prompt_version or "",
         "confirm_threshold": confirm_threshold,
-        "fail_policy": str(fail_policy or ""),
-        "mode": str(mode or ""),
+        "fail_policy": fail_policy or "",
+        "mode": mode or "",
     }
     blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
@@ -250,17 +262,17 @@ class JevMarketRegime(str, Enum):
 
 
 def make_verdict(
-    decision: Union[str, JevDecision],
-    side: Union[str, JevSide] = JevSide.NONE,
+    decision: str | JevDecision,
+    side: str | JevSide = JevSide.NONE,
     confidence: float = 0.0,
-    market_regime: Union[str, JevMarketRegime] = JevMarketRegime.UNKNOWN,
-    reasons: Optional[List[str]] = None,
+    market_regime: str | JevMarketRegime = JevMarketRegime.UNKNOWN,
+    reasons: list[str] | None = None,
     source: str = "native",
     model_version: str = MODEL_VERSION_NATIVE,
     engine_version: str = ENGINE_VERSION,
-    status: Union[str, JevStatus] = JevStatus.SUCCESS,
-    raw_response: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    status: str | JevStatus = JevStatus.SUCCESS,
+    raw_response: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Ensures 100% verdict compliance with Universal Decision Contract Schema:
     {
@@ -288,7 +300,11 @@ def make_verdict(
 
     dec_str = str(getattr(decision, "value", decision)).upper()
     # Confirm only if status is SUCCESS and action is CONFIRM
-    final_decision = JevDecision.CONFIRM.value if (dec_str == "CONFIRM" and stat_str == "SUCCESS") else JevDecision.VETO.value
+    final_decision = (
+        JevDecision.CONFIRM.value
+        if (dec_str == "CONFIRM" and stat_str == "SUCCESS")
+        else JevDecision.VETO.value
+    )
 
     side_str = str(getattr(side, "value", side)).upper()
     final_side = side_str if side_str in ("LONG", "SHORT") else JevSide.NONE.value
@@ -319,7 +335,7 @@ class CandleTrajectoryExtractor:
     REQUIRED_COLS = ["open", "high", "low", "close", "volume"]
 
     @classmethod
-    def extract_sequence(cls, df: DataFrame, lookback: int = 32) -> List[Dict[str, float]]:
+    def extract_sequence(cls, df: DataFrame, lookback: int = 32) -> list[dict[str, float]]:
         """
         Extracts recent N candles into momentum feature sequence.
         Candle index runs from -(lookback-1) to 0 (trigger candle).
@@ -342,7 +358,9 @@ class CandleTrajectoryExtractor:
 
         # Normalize volume via rolling 20 SMA or recent mean
         vol_col = recent["volume"].fillna(0.0)
-        vol_mean = float(vol_col.rolling(20, min_periods=1).mean().iloc[-1]) if len(vol_col) > 0 else 1.0
+        vol_mean = (
+            float(vol_col.rolling(20, min_periods=1).mean().iloc[-1]) if len(vol_col) > 0 else 1.0
+        )
         if vol_mean <= 0.0 or math.isnan(vol_mean):
             vol_mean = 1.0
 
@@ -354,24 +372,24 @@ class CandleTrajectoryExtractor:
                 c = float(row["close"])
                 o = float(row["open"])
                 h = float(row["high"])
-                l = float(row["low"])
+                low_val = float(row["low"])
                 v = float(row["volume"])
             except (ValueError, TypeError):
                 continue
 
-            if math.isnan(c) or math.isnan(o) or math.isnan(h) or math.isnan(l):
+            if math.isnan(c) or math.isnan(o) or math.isnan(h) or math.isnan(low_val):
                 continue
 
             # Anti-division by zero cho total_range
-            total_range = max(h - l, 1e-6)
+            total_range = max(h - low_val, 1e-6)
             body = abs(c - o)
 
             pct_change = round(((c - o) / o) * 100, 3) if o > 0 else 0.0
-            range_pct = round(((h - l) / c) * 100, 3) if c > 0 else 0.0
+            range_pct = round(((h - low_val) / c) * 100, 3) if c > 0 else 0.0
             body_ratio = round(body / total_range, 3)
             upper_wick = round((h - max(o, c)) / total_range, 3)
-            lower_wick = round((min(o, c) - l) / total_range, 3)
-            close_pos = round((c - l) / total_range, 3)
+            lower_wick = round((min(o, c) - low_val) / total_range, 3)
+            close_pos = round((c - low_val) / total_range, 3)
             vol_ratio = round(v / vol_mean, 2) if vol_mean > 0 else 1.0
 
             rsi_val = row.get("rsi", 50.0)
@@ -385,23 +403,25 @@ class CandleTrajectoryExtractor:
             # Index runs from -(n_candles - 1) to 0
             candle_idx = i - n_candles + 1
 
-            sequence.append({
-                "idx": candle_idx,
-                "index": candle_idx,
-                "pct_change": pct_change,
-                "range_pct": range_pct,
-                "body_ratio": body_ratio,
-                "upper_wick": upper_wick,
-                "lower_wick": lower_wick,
-                "close_pos": close_pos,
-                "vol_ratio": vol_ratio,
-                "volume_ratio": vol_ratio,
-                "rsi": rsi,
-            })
+            sequence.append(
+                {
+                    "idx": candle_idx,
+                    "index": candle_idx,
+                    "pct_change": pct_change,
+                    "range_pct": range_pct,
+                    "body_ratio": body_ratio,
+                    "upper_wick": upper_wick,
+                    "lower_wick": lower_wick,
+                    "close_pos": close_pos,
+                    "vol_ratio": vol_ratio,
+                    "volume_ratio": vol_ratio,
+                    "rsi": rsi,
+                }
+            )
         return sequence
 
     @classmethod
-    def extract_macro_context(cls, df: DataFrame) -> Dict[str, Any]:
+    def extract_macro_context(cls, df: DataFrame) -> dict[str, Any]:
         """
         Extracts MTF context from the latest row.
         Unifies key format for External API and Native Quant.
@@ -418,21 +438,31 @@ class CandleTrajectoryExtractor:
         # 1H context
         ema_50_1h = float(last.get("ema_50_1h", c)) if not pd.isna(last.get("ema_50_1h")) else c
         ema_50_1h_dist = round(((c - ema_50_1h) / ema_50_1h) * 100, 2) if ema_50_1h > 0 else 0.0
-        macd_1h = float(last.get("macdhist_1h", 0.0)) if not pd.isna(last.get("macdhist_1h")) else 0.0
+        macd_1h = (
+            float(last.get("macdhist_1h", 0.0)) if not pd.isna(last.get("macdhist_1h")) else 0.0
+        )
         rsi_1h = float(last.get("rsi_1h", 50.0)) if not pd.isna(last.get("rsi_1h")) else 50.0
 
         # 4H context
-        is_bull_4h = (last.get("is_bull_wave_4h", 0) == 1)
-        is_bear_4h = (last.get("is_bear_wave_4h", 0) == 1)
+        is_bull_4h = last.get("is_bull_wave_4h", 0) == 1
+        is_bear_4h = last.get("is_bear_wave_4h", 0) == 1
         adx_4h = float(last.get("adx_4h", 20.0)) if not pd.isna(last.get("adx_4h")) else 20.0
 
         # 1D context
-        floor_20d = float(last.get("swing_low_20d_1d", c)) if not pd.isna(last.get("swing_low_20d_1d")) else c
+        floor_20d = (
+            float(last.get("swing_low_20d_1d", c))
+            if not pd.isna(last.get("swing_low_20d_1d"))
+            else c
+        )
         floor_dist = round(((c - floor_20d) / floor_20d) * 100, 2) if floor_20d > 0 else 0.0
 
         # AI Agent Lens scores
-        long_score = float(last.get("long_score", 50.0)) if not pd.isna(last.get("long_score")) else 50.0
-        short_score = float(last.get("short_score", 50.0)) if not pd.isna(last.get("short_score")) else 50.0
+        long_score = (
+            float(last.get("long_score", 50.0)) if not pd.isna(last.get("long_score")) else 50.0
+        )
+        short_score = (
+            float(last.get("short_score", 50.0)) if not pd.isna(last.get("short_score")) else 50.0
+        )
         atr_pct = float(last.get("atr_pct", 50.0)) if not pd.isna(last.get("atr_pct")) else 50.0
 
         return {
@@ -449,7 +479,9 @@ class CandleTrajectoryExtractor:
         }
 
     @classmethod
-    def build_payload(cls, df: DataFrame, pair: str, side: str, lookback: int = 32) -> Dict[str, Any]:
+    def build_payload(
+        cls, df: DataFrame, pair: str, side: str, lookback: int = 32
+    ) -> dict[str, Any]:
         """
         Packages payload for Jev Decision Engine.
         Ensures complete payload structure:
@@ -512,11 +544,11 @@ class JevDecisionEngine:
 
     def __init__(
         self,
-        api_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        api_url: str | None = None,
+        api_key: str | None = None,
         cache_db: str = "user_data/jev_hunter_cache.sqlite",
-        mode: Optional[str] = None,
-        fail_policy: Optional[str] = None,
+        mode: str | None = None,
+        fail_policy: str | None = None,
     ):
         self.cache_db = cache_db
         # Parse .env into a local dict — never mutate process os.environ.
@@ -524,13 +556,16 @@ class JevDecisionEngine:
         self._init_cache()
 
         def _cfg(key: str, default: str = "") -> str:
-            if key in os.environ and str(os.environ.get(key, "")).strip() != "":
-                return str(os.environ.get(key))
+            val = os.environ.get(key, "").strip()
+            if key in os.environ and val != "":
+                return os.environ.get(key, default)
             return str(dotenv_cfg.get(key, default))
 
         # Mode: explicit ctor arg wins; else env / dotenv; default native.
         configured_mode = (mode or _cfg("JEV_MODE", "native")).lower()
-        self.mode = configured_mode if configured_mode in ("native", "external", "backtest") else "native"
+        self.mode = (
+            configured_mode if configured_mode in ("native", "external", "backtest") else "native"
+        )
 
         self.fail_policy = (fail_policy or _cfg("JEV_FAIL_POLICY", "reject")).lower()
         self.api_url = api_url or _cfg("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
@@ -561,7 +596,7 @@ class JevDecisionEngine:
             if not env_path.exists():
                 continue
             try:
-                with open(env_path, "r", encoding="utf-8") as f:
+                with open(env_path, encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
@@ -606,7 +641,8 @@ class JevDecisionEngine:
                 """)
                 # Migrate any legacy table that lacks cache_key identity columns.
                 cols = {
-                    r[1] for r in conn.execute("PRAGMA table_info(jev_gatekeeper_verdicts)").fetchall()
+                    r[1]
+                    for r in conn.execute("PRAGMA table_info(jev_gatekeeper_verdicts)").fetchall()
                 }
                 if "cache_key" not in cols:
                     logger.info(
@@ -650,7 +686,7 @@ class JevDecisionEngine:
 
     def _cache_model_version(self) -> str:
         if self.mode == "external":
-            return str(self.external_model_version)
+            return self.external_model_version
         return MODEL_VERSION_NATIVE
 
     def _cache_threshold_token(self) -> str:
@@ -663,7 +699,7 @@ class JevDecisionEngine:
         cp = _external_choppy_penalty()
         return f"{threshold:.4f}_w{w_ai:.2f}_cp{cp:.2f}_runway"
 
-    def _lookup_raw_external(self, p_hash: str) -> Optional[Dict[str, Any]]:
+    def _lookup_raw_external(self, p_hash: str) -> dict[str, Any] | None:
         """Look up previously cached raw external AI response for this payload and prompt version."""
         if not self.cache_db or not p_hash or self.cache_db == ":memory:":
             return None
@@ -702,7 +738,7 @@ class JevDecisionEngine:
             mode=getattr(self, "mode", "native"),
         )
 
-    def evaluate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Evaluate payload and emit verdict.
         1. Validate payload.
@@ -716,7 +752,7 @@ class JevDecisionEngine:
                 status=JevStatus.INVALID,
                 market_regime=JevMarketRegime.INSUFFICIENT_DATA,
                 reasons=["Empty or invalid payload structure"],
-                source="validator"
+                source="validator",
             )
 
         pair = payload.get("pair", "UNKNOWN")
@@ -734,7 +770,7 @@ class JevDecisionEngine:
                 market_regime=JevMarketRegime.INSUFFICIENT_DATA,
                 status=JevStatus.INVALID,
                 reasons=[f"Insufficient trajectory sequence ({len(seq)} candles, min 5 required)"],
-                source="validator"
+                source="validator",
             )
 
         # 1. Lookup SQLite cache with full identity token
@@ -762,7 +798,8 @@ class JevDecisionEngine:
                         identity_ok = (
                             status_cached == JevStatus.SUCCESS.value
                             and cached_engine_ver == getattr(self, "engine_version", ENGINE_VERSION)
-                            and cached_prompt == getattr(self, "prompt_version", PROMPT_VERSION_NATIVE)
+                            and cached_prompt
+                            == getattr(self, "prompt_version", PROMPT_VERSION_NATIVE)
                             and cached_threshold == expected_threshold
                             and cached_fail_policy == getattr(self, "fail_policy", "reject")
                             and cached_mode == getattr(self, "mode", "native")
@@ -808,7 +845,9 @@ class JevDecisionEngine:
             )
 
             if not self.api_key and raw_cached is None:
-                logger.warning("External mode active but JEV_API_KEY not configured. Enforcing fail policy.")
+                logger.warning(
+                    "External mode active but JEV_API_KEY not configured. Enforcing fail policy."
+                )
                 if self.fail_policy == "fallback_native":
                     verdict = native_verdict
                     verdict["source"] = "native_fallback"
@@ -819,7 +858,7 @@ class JevDecisionEngine:
                         status=JevStatus.UNAVAILABLE,
                         market_regime=JevMarketRegime.UNKNOWN,
                         reasons=["External API Key missing, rejected by fail policy"],
-                        source="policy_gate"
+                        source="policy_gate",
                     )
             else:
                 verdict = self._call_external_jev(
@@ -830,7 +869,9 @@ class JevDecisionEngine:
                 )
                 if verdict.get("status") != JevStatus.SUCCESS.value:
                     if self.fail_policy == "fallback_native":
-                        logger.info("External API unavailable, falling back to Native Quant Evaluator.")
+                        logger.info(
+                            "External API unavailable, falling back to Native Quant Evaluator."
+                        )
                         verdict = native_verdict
                         verdict["source"] = "native_fallback"
                     elif self.fail_policy in ("allow", "safe"):
@@ -887,11 +928,11 @@ class JevDecisionEngine:
 
     def _call_external_jev(
         self,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         native_conf: float = 0.50,
-        native_reasons: Optional[List[str]] = None,
-        cached_raw: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        native_reasons: list[str] | None = None,
+        cached_raw: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Send payload to Jev Cloud endpoint and compute hybrid score.
         AI noul acts as a continuous score weight instead of binary gate.
@@ -939,7 +980,7 @@ class JevDecisionEngine:
                 data = json.dumps(req_body).encode("utf-8")
                 headers = {
                     "Content-Type": "application/json",
-                    "User-Agent": f"Freqtrade-Jev/{ENGINE_VERSION}"
+                    "User-Agent": f"Freqtrade-Jev/{ENGINE_VERSION}",
                 }
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
@@ -957,7 +998,7 @@ class JevDecisionEngine:
                     reasons=[f"External Jev API call failed: {str(e)}"],
                     source="external",
                     status=JevStatus.UNAVAILABLE,
-                    raw_response={"error": str(e)}
+                    raw_response={"error": str(e)},
                 )
 
         answers = result.get("answers")
@@ -1045,7 +1086,9 @@ class JevDecisionEngine:
         hybrid_score = round(native_conf + ai_delta - regime_penalty, 2)
         hybrid_score = max(0.0, min(1.0, hybrid_score))
 
-        hard_choppy = getattr(self, "hard_choppy", False) or (os.environ.get("JEV_DECISION_HARD_CHOPPY", "0") == "1")
+        hard_choppy = getattr(self, "hard_choppy", False) or (
+            os.environ.get("JEV_DECISION_HARD_CHOPPY", "0") == "1"
+        )
         if hard_choppy and regime in ("CHOPPY_RANGING", "CHOPPY", "RANGING"):
             decision = JevDecision.VETO.value
         elif hybrid_score >= threshold:
@@ -1057,7 +1100,8 @@ class JevDecisionEngine:
             f"Native score: {native_conf:.2f}",
             f"Jev Cloud probability: {noul_conf:.2f}",
             f"AI adjustment: delta={ai_delta:+.2f} (w_ai={w_ai:.2f})",
-            f"Market regime: {regime}" + (f" (penalty: -{regime_penalty:.2f})" if regime_penalty > 0 else ""),
+            f"Market regime: {regime}"
+            + (f" (penalty: -{regime_penalty:.2f})" if regime_penalty > 0 else ""),
             f"Hybrid score: {hybrid_score:.2f} vs threshold {threshold:.2f}",
             f"Model: {actual_model}",
         ]
@@ -1078,7 +1122,7 @@ class JevDecisionEngine:
             raw_response=result,
         )
 
-    def _evaluate_native_sequence(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _evaluate_native_sequence(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Native Quant System-1 Evaluator:
         Analyze 32-candle sequence:
@@ -1099,7 +1143,7 @@ class JevDecisionEngine:
                 market_regime=JevMarketRegime.INSUFFICIENT_DATA,
                 reasons=["Short sequence history (< 5 candles)"],
                 source="native",
-                status=JevStatus.INVALID
+                status=JevStatus.INVALID,
             )
 
         reasons = []
@@ -1107,9 +1151,12 @@ class JevDecisionEngine:
 
         # A. Trigger candle analysis
         last_candle = seq[-1]
-        is_impulse = (last_candle.get("body_ratio", 0) >= 0.55) and (last_candle.get("vol_ratio", 0) >= 1.20)
+        is_impulse = (last_candle.get("body_ratio", 0) >= 0.55) and (
+            last_candle.get("vol_ratio", 0) >= 1.20
+        )
         has_adverse_wick = (
-            (last_candle.get("lower_wick", 0) >= 0.35) if side == "SHORT" 
+            (last_candle.get("lower_wick", 0) >= 0.35)
+            if side == "SHORT"
             else (last_candle.get("upper_wick", 0) >= 0.35)
         )
 
@@ -1124,19 +1171,28 @@ class JevDecisionEngine:
         prior_candles = seq[-5:-1]
         if prior_candles:
             avg_prior_vol = sum(c.get("vol_ratio", 1.0) for c in prior_candles) / len(prior_candles)
-            avg_prior_range = sum(c.get("range_pct", 1.0) for c in prior_candles) / len(prior_candles)
+            avg_prior_range = sum(c.get("range_pct", 1.0) for c in prior_candles) / len(
+                prior_candles
+            )
             if avg_prior_vol < 1.0 and avg_prior_range < 0.6:
                 confidence += 0.10
                 reasons.append("Clean pre-breakout volatility compression confirmed")
 
         # C. Sequential order flow
         favorable_closes = sum(
-            1 for c in seq[-5:] 
-            if (c.get("close_pos", 0.5) <= 0.40 if side == "SHORT" else c.get("close_pos", 0.5) >= 0.60)
+            1
+            for c in seq[-5:]
+            if (
+                c.get("close_pos", 0.5) <= 0.40
+                if side == "SHORT"
+                else c.get("close_pos", 0.5) >= 0.60
+            )
         )
         if favorable_closes >= 3:
             confidence += 0.10
-            reasons.append(f"Directional order flow aligned ({favorable_closes}/5 candles favorable)")
+            reasons.append(
+                f"Directional order flow aligned ({favorable_closes}/5 candles favorable)"
+            )
 
         # D. Macro MTF context
         trend_4h = macro.get("trend_4h", "NEUTRAL")
@@ -1171,7 +1227,9 @@ class JevDecisionEngine:
             # Confluence bonus: Large headroom (>= 15% above 20D floor) + Price < EMA50 1H + Bearish RSI 1H (< 50)
             if floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
                 confidence += 0.10
-                reasons.append(f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)")
+                reasons.append(
+                    f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)"
+                )
             # Reversal trap penalty: Selling into hard floor (< 8%) or counter-wave
             elif floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0):
                 confidence -= 0.10
@@ -1189,8 +1247,13 @@ class JevDecisionEngine:
         # Native Heuristic threshold: >= 0.70 CONFIRM, < 0.70 VETO
         decision = JevDecision.CONFIRM.value if confidence >= 0.70 else JevDecision.VETO.value
         regime = (
-            JevMarketRegime.TREND_EXPANSION.value if is_impulse 
-            else (JevMarketRegime.CHOPPY_RANGING.value if confidence < 0.60 else JevMarketRegime.PULLBACK_SETUP.value)
+            JevMarketRegime.TREND_EXPANSION.value
+            if is_impulse
+            else (
+                JevMarketRegime.CHOPPY_RANGING.value
+                if confidence < 0.60
+                else JevMarketRegime.PULLBACK_SETUP.value
+            )
         )
 
         return make_verdict(
@@ -1201,5 +1264,5 @@ class JevDecisionEngine:
             reasons=reasons,
             source="native",
             model_version=MODEL_VERSION_NATIVE,
-            status=JevStatus.SUCCESS
+            status=JevStatus.SUCCESS,
         )

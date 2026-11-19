@@ -5,11 +5,12 @@ Each part is a BaseSensor. Directional SetupComposer matches ALL parts
 (= old AND-mask) before Policy can ACCEPT an entry.
 
 Performance: ``build_*_sniper_parts`` is cached once per (dataframe, pair, side)
-so a suite of 4 short + 4 long parts does not rebuild masks 8× on BT/live scans.
+so a suite of 4 short + 4 long parts does not rebuild masks 8x on BT/live scans.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,11 +31,12 @@ from strategies.mtf_sniper.directional.short.setups import (
 )
 from strategies.mtf_sniper.signals.base_sensor import BaseSensor
 
+
 # Stored on dataframe.attrs for the lifetime of one populate_entry / suite scan
 _PARTS_CACHE_ATTR = "_mtf_sniper_part_masks_v1"
 
 
-def _dataframe_cache_token(dataframe: pd.DataFrame) -> Tuple[Any, ...]:
+def _dataframe_cache_token(dataframe: pd.DataFrame) -> tuple[Any, ...]:
     n = len(dataframe)
     if n and "date" in dataframe.columns:
         return (n, dataframe["date"].iloc[-1], dataframe["date"].iloc[0])
@@ -46,12 +48,12 @@ def cached_sniper_parts(
     dataframe: pd.DataFrame,
     pair: str,
     side: TradeSide,
-) -> Dict[str, pd.Series]:
+) -> dict[str, pd.Series]:
     """
     Return part masks for ``side``, computing at most once per DF/pair/side/token.
     """
     token = _dataframe_cache_token(dataframe)
-    store: Dict = dataframe.attrs.setdefault(_PARTS_CACHE_ATTR, {})
+    store: dict = dataframe.attrs.setdefault(_PARTS_CACHE_ATTR, {})
     key = (pair, side.value, token)
     hit = store.get(key)
     if hit is not None:
@@ -115,8 +117,8 @@ class LegacySniperPartSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List:
+        candle_index: int | None = None,
+    ) -> list:
         if len(dataframe) < self.min_history:
             return []
 
@@ -144,7 +146,7 @@ class LegacySniperPartSensor(BaseSensor):
         need_score = self._part_name.endswith("_structure")
         for i in indices:
             i = int(i)
-            metrics = {
+            metrics: dict[str, Any] = {
                 "part": self._part_name,
                 "legacy_sniper": legacy_tag,
                 "mask": f"legacy_and_{legacy_tag}",
@@ -163,15 +165,13 @@ class LegacySniperPartSensor(BaseSensor):
         return events
 
 
-def short_sniper_part_sensors(strategy: Any) -> List[LegacySniperPartSensor]:
+def short_sniper_part_sensors(strategy: Any) -> list[LegacySniperPartSensor]:
     return [
-        LegacySniperPartSensor(strategy, name, TradeSide.SHORT)
-        for name in SHORT_SNIPER_PART_NAMES
+        LegacySniperPartSensor(strategy, name, TradeSide.SHORT) for name in SHORT_SNIPER_PART_NAMES
     ]
 
 
-def long_sniper_part_sensors(strategy: Any) -> List[LegacySniperPartSensor]:
+def long_sniper_part_sensors(strategy: Any) -> list[LegacySniperPartSensor]:
     return [
-        LegacySniperPartSensor(strategy, name, TradeSide.LONG)
-        for name in LONG_SNIPER_PART_NAMES
+        LegacySniperPartSensor(strategy, name, TradeSide.LONG) for name in LONG_SNIPER_PART_NAMES
     ]

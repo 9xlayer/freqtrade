@@ -1,7 +1,6 @@
 """Volatility expansion anomaly sensor (range >= 2.2x ATR)."""
-from __future__ import annotations
 
-from typing import List, Optional
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -35,8 +34,8 @@ class VolatilityExpansionSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         indices = self._resolve_indices(dataframe, candle_index)
         if not indices:
             return []
@@ -53,14 +52,12 @@ class VolatilityExpansionSensor(BaseSensor):
 
         is_red = dataframe["close"] < dataframe["open"]
         is_green = dataframe["close"] > dataframe["open"]
-        is_expansion = (range_ratio >= self.range_atr_min) & (
-            vol_ratio >= self.vol_ratio_min
-        )
+        is_expansion = (range_ratio >= self.range_atr_min) & (vol_ratio >= self.vol_ratio_min)
 
         if self.exclude_if_volume_surge:
             is_expansion = is_expansion & (vol_ratio < self.vol_ratio_surge)
 
-        events: List[TriggerEvent] = []
+        events: list[TriggerEvent] = []
         for i in indices:
             if not bool(is_expansion.iloc[i]):
                 continue

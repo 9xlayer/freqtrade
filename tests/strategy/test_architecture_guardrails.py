@@ -73,6 +73,39 @@ class TestArchitectureGuardrails(unittest.TestCase):
             linter.run()
             self.assertTrue(any("LINT014" in v for v in linter.violations))
 
+    def test_linter_detects_core_layer_leakage(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core_dir = Path(tmpdir) / "core"
+            core_dir.mkdir(parents=True)
+            sample = core_dir / "sample.py"
+            sample.write_text("from strategies.mtf_sniper.risk import RiskEngine\n", encoding="utf-8")
+            linter = ArchitectureGuardrailLinter(tmpdir)
+            linter.run()
+            self.assertTrue(any("LINT007" in v for v in linter.violations))
+
+    def test_linter_detects_unfrozen_contract_dataclass(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core_dir = Path(tmpdir) / "core"
+            core_dir.mkdir(parents=True)
+            sample = core_dir / "contracts.py"
+            sample.write_text(
+                "from dataclasses import dataclass\n\n@dataclass\nclass UnfrozenContract:\n    name: str\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir)
+            linter.run()
+            self.assertTrue(any("LINT016" in v for v in linter.violations))
+
+    def test_linter_detects_sensor_not_inheriting_base_sensor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sensor_dir = Path(tmpdir) / "signals" / "sensors"
+            sensor_dir.mkdir(parents=True)
+            sample = sensor_dir / "bad_sensor.py"
+            sample.write_text("class RogueSensor:\n    pass\n", encoding="utf-8")
+            linter = ArchitectureGuardrailLinter(tmpdir)
+            linter.run()
+            self.assertTrue(any("LINT018" in v for v in linter.violations))
+
 
 if __name__ == "__main__":
     unittest.main()

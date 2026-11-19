@@ -3,10 +3,12 @@ Exit policy helpers for custom_exit and confirm_trade_exit.
 
 Pure rules over a market row + trade state. Strategy only resolves the row.
 """
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Mapping, Optional
+from typing import Any
 
 
 ALWAYS_ALLOW_EXIT_REASONS = frozenset(
@@ -17,7 +19,7 @@ ALWAYS_ALLOW_EXIT_REASONS = frozenset(
 def resolve_market_row(
     dataframe: Any,
     current_time: datetime,
-) -> Optional[Mapping[str, Any]]:
+) -> Mapping[str, Any] | None:
     """Pick the latest analyzed bar at or before current_time."""
     if dataframe is None or getattr(dataframe, "empty", True):
         return None
@@ -39,7 +41,7 @@ def evaluate_custom_exit(
     current_time: datetime,
     current_profit: float,
     row: Mapping[str, Any],
-) -> Optional[str]:
+) -> str | None:
     """
     Return an exit reason string or None.
 
@@ -92,7 +94,7 @@ def confirm_exit_allowed(
     trade: Any,
     exit_reason: str,
     rate: float,
-    row: Optional[Mapping[str, Any]],
+    row: Mapping[str, Any] | None,
 ) -> bool:
     """
     Gate ROI exits for strong trend-runners; never block hard exits.

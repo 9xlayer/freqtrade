@@ -1,7 +1,6 @@
 """Stake and leverage helpers (parity with active StrategyMTFSniper)."""
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 
 DEFAULT_LEVERAGE = 10.0
@@ -25,7 +24,7 @@ def resolve_stake_amount(
     *,
     proposed_stake: float,
     max_stake: float,
-    entry_tag: Optional[str],
+    entry_tag: str | None,
     enable_dynamic_sizing: bool,
 ) -> float:
     """

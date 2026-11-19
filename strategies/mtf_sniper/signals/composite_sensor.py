@@ -4,11 +4,12 @@ Composable sensors — build complex detectors from existing BaseSensor units.
 Open/Closed: add composites in a catalog; do not edit atomic sensor modules.
 Composite still obeys BaseSensor invariants (detect-only, no enter_*/size/JEV).
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -47,8 +48,8 @@ class CompositeSensor(BaseSensor):
         mode: CombineMode = CombineMode.ALL,
         k: int = 2,
         sensor_type: SensorType = SensorType.PATTERN,
-        side: Optional[TradeSide] = None,
-        min_history: Optional[int] = None,
+        side: TradeSide | None = None,
+        min_history: int | None = None,
     ) -> None:
         if not children:
             raise ValueError(f"CompositeSensor '{name}' requires at least one child")
@@ -59,18 +60,18 @@ class CompositeSensor(BaseSensor):
 
         self.name = name
         self.sensor_type = sensor_type
-        self._children: Tuple[BaseSensor, ...] = tuple(children)
+        self._children: tuple[BaseSensor, ...] = tuple(children)
         self._mode = mode if isinstance(mode, CombineMode) else CombineMode(str(mode))
         self._k = k
         self._side_filter = side
-        self.min_history = int(
+        self.min_history = (
             min_history
             if min_history is not None
             else max(getattr(c, "min_history", 100) for c in self._children)
         )
 
     @property
-    def children(self) -> Tuple[BaseSensor, ...]:
+    def children(self) -> tuple[BaseSensor, ...]:
         return self._children
 
     @property
@@ -82,10 +83,10 @@ class CompositeSensor(BaseSensor):
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
         # Child → events on this scan window
-        child_hits: Dict[Tuple[int, TradeSide], Dict[str, TriggerEvent]] = defaultdict(dict)
+        child_hits: dict[tuple[int, TradeSide], dict[str, TriggerEvent]] = defaultdict(dict)
 
         for child in self._children:
             for event in child.scan(dataframe, pair, candle_index=candle_index):
@@ -97,7 +98,7 @@ class CompositeSensor(BaseSensor):
 
         child_names = [c.name for c in self._children]
         n_children = len(child_names)
-        out: List[TriggerEvent] = []
+        out: list[TriggerEvent] = []
 
         for (idx, side), hits in sorted(child_hits.items(), key=lambda kv: kv[0][0]):
             hit_count = len(hits)
@@ -109,15 +110,13 @@ class CompositeSensor(BaseSensor):
                 continue
 
             # Prefer PATTERN child metrics order; merge all
-            merged: Dict = {
+            merged: dict = {
                 "composite": True,
                 "composite_name": self.name,
                 "composite_mode": self._mode.value,
                 "composite_k": self._k if self._mode == CombineMode.K_OF_N else None,
                 "composite_children": list(hits.keys()),
-                "composite_child_types": {
-                    name: hits[name].sensor_type.value for name in hits
-                },
+                "composite_child_types": {name: hits[name].sensor_type.value for name in hits},
             }
             for name in child_names:
                 if name in hits:
@@ -143,7 +142,7 @@ def compose(
     mode: CombineMode | str = CombineMode.ALL,
     k: int = 2,
     sensor_type: SensorType = SensorType.PATTERN,
-    side: Optional[TradeSide] = None,
+    side: TradeSide | None = None,
 ) -> CompositeSensor:
     """Factory: compose(name, sensor_a, sensor_b, mode=ALL)."""
     return CompositeSensor(
@@ -177,9 +176,10 @@ def is_legacy_sniper_pass(primary: str, raw_features: dict, side: str) -> bool:
     expected = f"setup:sniper_{side}"
     if primary == expected:
         return True
-    if raw_features.get("setup_complete") and (
-        raw_features.get("setup_name") == expected
-        or raw_features.get("legacy_sniper") == side
-    ):
-        return True
-    return False
+    return bool(
+        raw_features.get("setup_complete")
+        and (
+            raw_features.get("setup_name") == expected
+            or raw_features.get("legacy_sniper") == side
+        )
+    )

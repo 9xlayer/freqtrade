@@ -7,10 +7,12 @@ Output: ScoreVerdict(passed, score, ...)
   passed=True  → escalate to JEV Hunter
   passed=False → drop immediately (no AI cost)
 """
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any
 
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate
 from strategies.mtf_sniper.core.enums import TradeSide
@@ -18,6 +20,7 @@ from strategies.mtf_sniper.directional.policy_escalation import (
     SOFT_REJECT_REASONS,
     is_soft_policy_reject,
 )
+
 
 _SOFT_REASON_PENALTY = 0.08
 
@@ -54,7 +57,7 @@ class ScoreConfig:
     w_context: float = 0.10
 
     @classmethod
-    def with_threshold(cls, threshold: float, **kwargs: Any) -> "ScoreConfig":
+    def with_threshold(cls, threshold: float, **kwargs: Any) -> ScoreConfig:
         return cls(pass_threshold=threshold, **kwargs)
 
 
@@ -65,14 +68,14 @@ class CandidateScorer:
     Does not call JEV, does not write enter_*, does not touch Risk.
     """
 
-    def __init__(self, config: Optional[ScoreConfig] = None) -> None:
+    def __init__(self, config: ScoreConfig | None = None) -> None:
         self.config = config or ScoreConfig()
 
     def evaluate(
         self,
         candidate: TradeCandidate,
         policy_result: PolicyEvaluationResult,
-        row: Optional[Mapping[str, Any]] = None,
+        row: Mapping[str, Any] | None = None,
     ) -> ScoreVerdict:
         """
         Score a policy-rejected (or soft) candidate.

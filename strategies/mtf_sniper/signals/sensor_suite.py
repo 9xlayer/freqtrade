@@ -1,7 +1,9 @@
 """Flat pluggable registry that runs all market sensors."""
+
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -18,12 +20,12 @@ from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
 )
 
 
-def hunter_sensors() -> List[BaseSensor]:
+def hunter_sensors() -> list[BaseSensor]:
     """Anomaly wakeups only (atomic)."""
     return atomic_anomaly_sensors()
 
 
-def live_sensors(strategy: Any) -> List[BaseSensor]:
+def live_sensors(strategy: Any) -> list[BaseSensor]:
     """
     Live catalog: sniper part facts only (deterministic phase).
 
@@ -36,7 +38,7 @@ def live_sensors(strategy: Any) -> List[BaseSensor]:
     ]
 
 
-def full_sensors() -> List[BaseSensor]:
+def full_sensors() -> list[BaseSensor]:
     """Diagnostics only — anomalies + thin patterns (not live EntryPipeline)."""
     return [
         *atomic_anomaly_sensors(),
@@ -52,34 +54,34 @@ class SensorSuite:
     Sensors are executed in registration order; results are concatenated.
     """
 
-    def __init__(self, sensors: Optional[Sequence[BaseSensor]] = None) -> None:
-        self._sensors: List[BaseSensor] = list(sensors) if sensors is not None else hunter_sensors()
+    def __init__(self, sensors: Sequence[BaseSensor] | None = None) -> None:
+        self._sensors: list[BaseSensor] = list(sensors) if sensors is not None else hunter_sensors()
 
     @classmethod
-    def live(cls, strategy: Any) -> "SensorSuite":
+    def live(cls, strategy: Any) -> SensorSuite:
         return cls(live_sensors(strategy))
 
     @classmethod
-    def hunter(cls) -> "SensorSuite":
+    def hunter(cls) -> SensorSuite:
         return cls(hunter_sensors())
 
     @classmethod
-    def full(cls) -> "SensorSuite":
+    def full(cls) -> SensorSuite:
         return cls(full_sensors())
 
     @classmethod
-    def experimental(cls, strategy: Optional[Any] = None) -> "SensorSuite":
+    def experimental(cls, strategy: Any | None = None) -> SensorSuite:
         if strategy is not None:
             return cls.live(strategy)
         return cls.hunter()
 
     @classmethod
-    def from_sensors(cls, *sensors: BaseSensor) -> "SensorSuite":
+    def from_sensors(cls, *sensors: BaseSensor) -> SensorSuite:
         """Ad-hoc suite (tests / one-off composites)."""
         return cls(list(sensors))
 
     @property
-    def sensors(self) -> List[BaseSensor]:
+    def sensors(self) -> list[BaseSensor]:
         return list(self._sensors)
 
     def register(self, sensor: BaseSensor) -> None:
@@ -90,9 +92,9 @@ class SensorSuite:
         dataframe: pd.DataFrame,
         pair: str,
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
-        events: List[TriggerEvent] = []
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
+        events: list[TriggerEvent] = []
         for sensor in self._sensors:
             events.extend(sensor.scan(dataframe, pair, candle_index=candle_index))
         return events
@@ -101,9 +103,9 @@ class SensorSuite:
         self,
         frames: Iterable[tuple[str, pd.DataFrame]],
         *,
-        candle_index: Optional[int] = None,
-    ) -> List[TriggerEvent]:
-        events: List[TriggerEvent] = []
+        candle_index: int | None = None,
+    ) -> list[TriggerEvent]:
+        events: list[TriggerEvent] = []
         for pair, dataframe in frames:
             events.extend(self.scan(dataframe, pair, candle_index=candle_index))
         return events

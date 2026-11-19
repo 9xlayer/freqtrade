@@ -5,10 +5,11 @@ Sensors emit singles; this layer matches recipes (ALL parts = legacy AND-mask).
 Incomplete part-only candidates are dropped. Anomaly candidates are dropped
 (deterministic phase — anomalies not on live suite).
 """
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import List, Optional, Sequence, Set
 
 from strategies.mtf_sniper.core.contracts import TradeCandidate
 from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
@@ -21,8 +22,9 @@ from strategies.mtf_sniper.directional.setup_recipes import (
 )
 from strategies.mtf_sniper.directional.short.setups import SHORT_SNIPER_PART_NAMES
 
-_ALL_PARTS: Set[str] = set(SHORT_SNIPER_PART_NAMES) | set(LONG_SNIPER_PART_NAMES)
-_ANOMALY_SENSORS: Set[str] = {
+
+_ALL_PARTS: set[str] = set(SHORT_SNIPER_PART_NAMES) | set(LONG_SNIPER_PART_NAMES)
+_ANOMALY_SENSORS: set[str] = {
     "volume_surge",
     "volatility_expansion",
     "waterfall_drop",
@@ -34,7 +36,7 @@ class SetupComposer:
 
     def __init__(
         self,
-        recipes: Optional[Sequence[SetupRecipe]] = None,
+        recipes: Sequence[SetupRecipe] | None = None,
         *,
         drop_anomalies: bool = True,
     ) -> None:
@@ -47,14 +49,14 @@ class SetupComposer:
         self,
         candidates: Sequence[TradeCandidate],
         *,
-        dropped: Optional[List[dict]] = None,
-    ) -> List[TradeCandidate]:
+        dropped: list[dict] | None = None,
+    ) -> list[TradeCandidate]:
         """
         Annotate complete sniper setups; drop incomplete part-only candidates.
 
         Mutates raw_features via replace (frozen TradeCandidate).
         """
-        out: List[TradeCandidate] = []
+        out: list[TradeCandidate] = []
         for candidate in candidates:
             sensors = _sensor_names(candidate)
             side_key = candidate.side.value.lower()
@@ -79,17 +81,15 @@ class SetupComposer:
                         "side": candidate.side.value,
                         "reason": reason,
                         "sensors": sorted(sensors),
-                        "missing": sorted(recipe.required_sensors - sensors)
-                        if recipe
-                        else [],
+                        "missing": sorted(recipe.required_sensors - sensors) if recipe else [],
                     }
                 )
         return out
 
 
-def _sensor_names(candidate: TradeCandidate) -> Set[str]:
+def _sensor_names(candidate: TradeCandidate) -> set[str]:
     feats = candidate.raw_features or {}
-    names: Set[str] = set()
+    names: set[str] = set()
     for key in ("sensors", "composite_children"):
         for n in feats.get(key) or []:
             if isinstance(n, str):
@@ -133,6 +133,4 @@ def is_setup_complete(primary: str, raw_features: dict) -> bool:
     """Policy helper: True when 4a marked a full sniper recipe."""
     if raw_features.get("setup_complete") is True:
         return True
-    if primary in (SETUP_SNIPER_SHORT, SETUP_SNIPER_LONG):
-        return True
-    return False
+    return primary in (SETUP_SNIPER_SHORT, SETUP_SNIPER_LONG)
