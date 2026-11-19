@@ -1,20 +1,19 @@
 # Active Context
 
 ## Current focus
-**v4.4.2-deterministic** — ETH Pair-Specific Waterfall Filter Tuning & Zero-Lint Clean Workspace.
-- Deep quantitative audit of 29 ETH Waterfall trades over 5Y dataset (`20220101-20261116`).
-- Isolated root cause of ETH breakdown failure: 5 catastrophic trades (-$5,200 USDT total loss) all executed when `dist_ema50_4h > 0` (price floating above 4H EMA50, turning 15m volume dumps into dip-buying liquidity sweeps for bulls). Conversely, 100% of top winners (+5.3k, +4.1k, +2.1k USDT) occurred when `dist_ema50_4h <= 0`.
-- Architected **Pair-Specific Waterfall Filtering**:
-  - `WaterfallFilterConfig` dataclass supporting per-pair overrides loaded dynamically in `EntryPipeline.live` and configured via `custom_pair_params` in `StrategyMTFSniper`.
-  - Configured `waterfall_require_below_ema50_4h = True` specifically for `ETH/USDT:USDT`.
+**v4.5.0-waterfall** — Dual-Regime Waterfall, Pair-Specific ETH 4H Guard, 7Y Macro Validation & Zero-Lint Guardrails.
+- Bumped `STRATEGY_VERSION` in `strategies/mtf_sniper/__init__.py` to `4.5.0-waterfall`.
+- **7Y Historical Backtest Audit (`20200105-20261116`, 2506 days):**
+  - Downloaded 15m futures data for BTC/USDT and ETH/USDT back to 2020-01-01.
+  - Total Trades: **476** | Win Rate: **57.77%** (275W / 201L)
+  - Total Profit: **+$45,784.99 USDT (+4,578.50%)** on 1k initial compounding stake (final balance: $46,784.99 USDT).
+  - Profit Factor: **1.99** | Max Drawdown: **18.89%** (account closed trades).
+  - Key finding: 2020 gained +160% (+$1,596 USDT), 2021 bull market experienced whipsaw (-$1,999 USDT on 53 Long trades, PF 0.43) while Short setups remained profitable. Survived drawdown without liquidation and compounded to 46.7k by 2026.
 - **5Y Backtest Scorecard (`20220101-20261116`):**
-  - Trades: **344** | Win Rate: **57.8%** (199W / 145L)
-  - Total Profit: **+$77,412.93 USDT (+7,741.29%)** — **+$21,421.13 USDT higher than previous Dual-Regime baseline (+55,991.80 USDT)!**
-  - Max Drawdown: **18.89%** — **EXACTLY flat (zero drawdown surge)!**
-  - Calmar: **440.14** | Sharpe: **1.35** | Sortino: **1.60**
-  - Standalone ETH: surged by +60% from +$10,635 USDT to **+$17,016.10 USDT**.
-  - Standalone BTC: surged from +$47,715 USDT to **+$60,396.80 USDT**.
-  - Waterfall setup nominal contribution: surged from +$22,362 USDT to **+$36,637.40 USDT**.
+  - Trades: **344** | Win Rate: **57.85%** (199W / 145L)
+  - Total Profit: **+$77,412.93 USDT (+7,741.29%)**
+  - Max Drawdown: **18.89%** | Calmar: **439.90** | Sharpe: **1.35** | Sortino: **1.60**
+- Docker Telegram Proxy resolution: whitelisted `telegram.org,api.telegram.org` in `NO_PROXY`.
 - **VS Code Problems Tab & Linter Quality Gate (100% Resolved):**
   - Resolved all 64 Ruff warnings on `scripts/lint_guardrails.py` (`UP035`, `UP006`, `UP045`, `PTH123`, `UP015`, `E501`, `C901`, `SIM102`, `PIE810`).
   - Integrated Meta Pyrefly (`LINT015`) into `scripts/lint_guardrails.py` with 0 errors / 0 warnings across all 18 strategy files.

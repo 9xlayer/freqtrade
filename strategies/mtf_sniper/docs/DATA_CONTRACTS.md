@@ -1,7 +1,7 @@
 # MTF Sniper — Data Contracts
 
 **Package:** `strategies/mtf_sniper/` · **Source of truth:** `core/contracts.py`, `core/enums.py`, `core/candidate_id.py`  
-**Version:** matches `STRATEGY_VERSION` in `__init__.py` (currently `4.4.1-deterministic`)
+**Version:** matches `STRATEGY_VERSION` in `__init__.py` (currently `4.5.0-waterfall`)
 
 This document mirrors **implemented** schemas. Target / future designs are marked explicitly and are **not** live behavior.
 
