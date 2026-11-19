@@ -37,6 +37,35 @@ def normalize_utc(ts: Union[datetime, pd.Timestamp, Any]) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
+def _canonical_side(side: Union[TradeSide, str]) -> str:
+    """Return canonical side token; reject anything except exact ``long``/``short``."""
+    if isinstance(side, TradeSide):
+        side_v = side.value
+    else:
+        side_v = str(side)
+    if side_v not in _VALID_SIDES:
+        raise ValueError(
+            f"side must be exactly 'long' or 'short' (lowercase), got {side!r}"
+        )
+    return side_v
+
+
+def _canonical_pair(pair: str) -> str:
+    p = str(pair).strip()
+    if not p or "/" not in p:
+        raise ValueError(f"pair must be a market symbol containing '/', got {pair!r}")
+    return p
+
+
+def _is_canonical_int_token(token: str) -> bool:
+    """Digits only, no leading zeros (except the value ``0`` itself)."""
+    if not token.isdigit():
+        return False
+    if len(token) > 1 and token[0] == "0":
+        return False
+    return True
+
+
 def make_candidate_id(
     pair: str,
     side: Union[TradeSide, str],
@@ -48,23 +77,27 @@ def make_candidate_id(
 
         ``{pair}_{side}_{utc_epoch}_{candle_index}``
 
-    ``candle_index`` must be a non-negative integer.
+    Validates pair (must contain ``/``), side (exact ``long``/``short``), and
+    non-negative ``candle_index``. Does not change the format.
     """
+    pair_v = _canonical_pair(pair)
+    side_v = _canonical_side(side)
     idx = int(candle_index)
     if idx < 0:
         raise ValueError(f"candle_index must be >= 0, got {candle_index!r}")
-    side_v = side.value if isinstance(side, TradeSide) else str(side).lower()
     ts = normalize_utc(timestamp)
     epoch = int(ts.timestamp())
-    return f"{pair}_{side_v}_{epoch}_{idx}"
+    return f"{pair_v}_{side_v}_{epoch}_{idx}"
 
 
 def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
     """
-    Parse ``{pair}_{side}_{utc_epoch}_{candle_index}``.
+    Parse the **single** canonical representation:
 
-    ``pair`` may contain underscores; ``side`` must be ``long`` or ``short``.
-    ``candle_index`` must be a non-negative integer (negative indexes are rejected).
+        ``{pair}_{side}_{utc_epoch}_{candle_index}``
+
+    Rejects: missing sentinel, uppercase side, leading-zero epoch/index,
+    negative index, non-market pair, non-digit tokens.
     """
     if not candidate_id or candidate_id == CANDIDATE_ID_MISSING:
         return None
@@ -72,31 +105,35 @@ def parse_candidate_id(candidate_id: str) -> Optional[ParsedCandidateId]:
     if len(parts) != 3:
         return None
     prefix, epoch_s, idx_s = parts
-    # Reject negatives: isdigit() is False for "-1"
-    if not epoch_s.isdigit() or not idx_s.isdigit():
+    if not _is_canonical_int_token(epoch_s) or not _is_canonical_int_token(idx_s):
         return None
-    # Split ``{pair}_{side}`` from the right — side is always the last token.
     pair_side = prefix.rsplit("_", 1)
     if len(pair_side) != 2:
         return None
     pair, side = pair_side
-    side_l = side.lower()
-    if side_l not in _VALID_SIDES:
+    # Exact lowercase only — do not casefold (rejects LONG/Short).
+    if side not in _VALID_SIDES:
         return None
     if not pair or "/" not in pair:
-        # Require a market-style pair (e.g. BTC/USDT or BTC/USDT:USDT).
         return None
     return ParsedCandidateId(
         pair=pair,
-        side=side_l,
+        side=side,
         epoch=int(epoch_s),
         candle_index=int(idx_s),
     )
 
 
 def is_canonical_candidate_id(candidate_id: str) -> bool:
-    """True when ID matches ``{pair}_{side}_{utc_epoch}_{candle_index}`` with valid side."""
-    return parse_candidate_id(candidate_id) is not None
+    """True when ID is the unique canonical representation (round-trip stable)."""
+    parsed = parse_candidate_id(candidate_id)
+    if parsed is None:
+        return False
+    # Round-trip: remake from parsed fields must equal the original string.
+    remade = (
+        f"{parsed.pair}_{parsed.side}_{parsed.epoch}_{parsed.candle_index}"
+    )
+    return remade == str(candidate_id)
 
 
 def candidate_id_matches_fields(
@@ -111,8 +148,12 @@ def candidate_id_matches_fields(
     parsed = parse_candidate_id(candidate_id)
     if parsed is None:
         return False
-    side_l = side.value if isinstance(side, TradeSide) else str(side).lower()
-    if parsed.pair != str(pair) or parsed.side != side_l:
+    try:
+        side_l = _canonical_side(side)
+        pair_v = _canonical_pair(pair)
+    except ValueError:
+        return False
+    if parsed.pair != pair_v or parsed.side != side_l:
         return False
     if int(candle_index) < 0 or parsed.candle_index != int(candle_index):
         return False
@@ -134,10 +175,16 @@ def candidate_id_matches_trade(
     parsed = parse_candidate_id(candidate_id)
     if parsed is None:
         return False
-    if pair is not None and parsed.pair != str(pair):
-        return False
+    if pair is not None:
+        try:
+            if parsed.pair != _canonical_pair(pair):
+                return False
+        except ValueError:
+            return False
     if side is not None:
-        side_l = side.value if isinstance(side, TradeSide) else str(side).lower()
-        if parsed.side != side_l:
+        try:
+            if parsed.side != _canonical_side(side):
+                return False
+        except ValueError:
             return False
     return True

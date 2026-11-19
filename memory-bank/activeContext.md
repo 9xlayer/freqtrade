@@ -59,10 +59,11 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Retargeted broken `user_data/strategies/*` symlinks away from deleted `strategies/active/`
 - Removed non-strategy `jev_*.py` symlinks from that dir (tripped lookahead search)
 
-## Docs / identity hardening (post-da7e90f)
+## Docs / identity hardening (post-4070115)
 - RiskAuth docs: confirm does **not** pass `proposed_stake` → `stake_amount` typically 0.0
-- Canonical ID: reject negative index; `remember()` validates mismatched IDs
-- DB-backed persist test: `test_mtf_candidate_id_db_persist.py`
+- Canonical ID: unique form only (no UPPER side / leading zeros); make→parse→make round-trip
+- Registry `lookup` fail-closed without `current_time` (opt-in `allow_unbounded`)
+- DB persist: expire/reload session + exit ledger; ≠ full live bot restart
 
 ## Next
 - Commit docs+hardening batch when ready

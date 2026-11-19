@@ -117,6 +117,30 @@ class TestCandidateIdContract(unittest.TestCase):
         legacy = f"BTC/USDT:USDT_short_{int(ts.timestamp())}"
         self.assertFalse(is_canonical_candidate_id(legacy))
 
+    def test_make_parse_make_round_trip(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        for side in (TradeSide.LONG, TradeSide.SHORT, "long", "short"):
+            original = make_candidate_id("ETH/USDT:USDT", side, ts, 7)
+            parsed = parse_candidate_id(original)
+            self.assertIsNotNone(parsed)
+            remade = make_candidate_id(
+                parsed.pair, parsed.side, datetime.fromtimestamp(parsed.epoch, tz=timezone.utc), parsed.candle_index
+            )
+            self.assertEqual(original, remade)
+            self.assertTrue(is_canonical_candidate_id(original))
+
+    def test_rejects_uppercase_side_and_leading_zeros(self):
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        epoch = int(ts.timestamp())
+        self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_LONG_{epoch}_1"))
+        self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_Short_{epoch}_1"))
+        self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_short_0{epoch}_1"))
+        self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_short_{epoch}_01"))
+        with self.assertRaises(ValueError):
+            make_candidate_id("BTC/USDT:USDT", "LONG", ts, 1)
+        with self.assertRaises(ValueError):
+            make_candidate_id("BTCUSDT", TradeSide.LONG, ts, 1)
+
     def test_rejects_negative_candle_index(self):
         ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
         bad = f"BTC/USDT:USDT_long_{int(ts.timestamp())}_-1"
