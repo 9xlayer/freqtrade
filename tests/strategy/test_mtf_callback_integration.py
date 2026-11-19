@@ -207,6 +207,25 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertTrue(cid.endswith("_3"), cid)
 
+        # Decisive mid-duplicate: only iloc[2] signals (label 7), not last row.
+        df_mid = pd.DataFrame(
+            {
+                "date": dates,
+                "enter_short": [False, False, True, False],
+                "enter_tag": ["", "", "short_A80plus", ""],
+            },
+            index=[5, 7, 7, 9],
+        )
+        strat.dp.get_analyzed_dataframe.return_value = (df_mid, None)
+        cid_mid = strat._resolve_candidate_id(
+            "BTC/USDT:USDT",
+            "short",
+            "short_A80plus",
+            dates[3],
+        )
+        self.assertIsNotNone(cid_mid)
+        self.assertTrue(cid_mid.endswith("_2"), cid_mid)
+
         # Single signal on second duplicate label only
         df2 = pd.DataFrame(
             {

@@ -46,11 +46,22 @@ def normalize_utc(ts: Union[datetime, pd.Timestamp]) -> datetime:
 
 
 def _canonical_side(side: Union[TradeSide, str]) -> str:
-    """Return canonical side token; reject anything except exact ``long``/``short``."""
+    """
+    Return canonical side token.
+
+    Accepts only ``TradeSide`` or exact str ``long``/``short``. Never coerces
+    other objects via ``str()`` (a custom ``__str__`` returning ``'short'``
+    must still be rejected).
+    """
     if isinstance(side, TradeSide):
         side_v = side.value
+    elif isinstance(side, str):
+        side_v = side
     else:
-        side_v = str(side)
+        raise ValueError(
+            f"side must be TradeSide or str 'long'/'short', "
+            f"got {type(side).__name__}={side!r}"
+        )
     if side_v not in _VALID_SIDES:
         raise ValueError(
             f"side must be exactly 'long' or 'short' (lowercase), got {side!r}"

@@ -68,10 +68,12 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 ## Final stabilization patch (on `pi-deploy`)
 - P1: `CandidateRegistry.remember()` validates pair/side/ts/index before any strip/key write; outer except fail-closed; mismatch → canonical when fields valid
 - P2: `_resolve_candidate_id` DF fallback uses `np.flatnonzero(mask)` absolute positions (safe under duplicate index)
-- Verification: 89 passed (hardening/registry/db_persist/parity/callback/contracts/policy/risk/runtime/lookahead)
+- Follow-up: `_canonical_side` accepts only `TradeSide|str` (no `str()` coerce); decisive mid-duplicate DF test (`endswith("_2")`)
+- Verification: related suites green after follow-up (59 on identity cluster)
 - Fast Path / Event Path / Policy / sizing untouched
 
 ## Next
-- Deterministic BT / ops verification on real data (stop code refactor)
+- Deterministic BT on real data (identity stabilization closed)
 - Coolify redeploy when ready (keep `deterministic` + Decision ON for Ep46)
+- Ops gap remains: live/Docker restart with open trade
 - Only then consider Hunter / Momentum Radar

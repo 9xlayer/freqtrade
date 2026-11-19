@@ -134,6 +134,22 @@ class TestCanonicalCandidateIdValidation(unittest.TestCase):
         self.assertFalse(is_canonical_candidate_id(CANDIDATE_ID_MISSING))
         self.assertFalse(is_canonical_candidate_id(""))
 
+    def test_rejects_side_object_with_str_short(self):
+        """Objects that stringify to 'short'/'long' must not pass type contract."""
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+        class _LooksLikeShort:
+            def __str__(self) -> str:
+                return "short"
+
+        with self.assertRaises(ValueError):
+            make_candidate_id("BTC/USDT:USDT", _LooksLikeShort(), ts, 1)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            make_candidate_id("BTC/USDT:USDT", None, ts, 1)  # type: ignore[arg-type]
+        # Canonical strings still accepted
+        cid = make_candidate_id("BTC/USDT:USDT", "short", ts, 1)
+        self.assertTrue(cid.endswith("_1"))
+
     def test_matches_trade_context(self):
         ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 3)
@@ -146,6 +162,46 @@ class TestCanonicalCandidateIdValidation(unittest.TestCase):
         self.assertFalse(
             candidate_id_matches_trade(cid, pair="BTC/USDT:USDT", side="long")
         )
+
+
+class TestDataFrameFallbackDuplicateIndex(unittest.TestCase):
+    def test_mid_duplicate_label_signal_uses_absolute_iloc(self):
+        """
+        Decisive case vs old hits.index[-1] → label→position path.
+
+        Only iloc[2] has the signal; its index label is 7 (duplicated). Old
+        code taking hits.index[-1] == 7 then resolving label 7 could pick the
+        wrong absolute row. Mask positions must yield candle_index == 2.
+        """
+        strat = _empty_registry_strat()
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        dates = [
+            base,
+            base + timedelta(minutes=15),
+            base + timedelta(minutes=30),
+            base + timedelta(minutes=45),
+        ]
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "enter_short": [False, False, True, False],
+                "enter_tag": ["", "", "short_A80plus", ""],
+            },
+            index=[5, 7, 7, 9],
+        )
+        strat.dp = MagicMock()
+        strat.dp.get_analyzed_dataframe.return_value = (df, None)
+        cid = strat._resolve_candidate_id(
+            "BTC/USDT:USDT",
+            "short",
+            "short_A80plus",
+            dates[3],
+        )
+        self.assertIsNotNone(cid)
+        self.assertTrue(cid.endswith("_2"), cid)
+        # Must not encode first occurrence of label 7 (iloc 1) or last DF row.
+        self.assertFalse(cid.endswith("_1"), cid)
+        self.assertFalse(cid.endswith("_3"), cid)
 
 
 class TestDataframePosition(unittest.TestCase):

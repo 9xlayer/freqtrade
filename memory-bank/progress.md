@@ -18,10 +18,11 @@
 - Docs↔code alignment: RiskAuth confirm-path honesty; dual-path architecture; migration archive
 - Final stabilization: RiskAuth≠sizing docs; strict Integral candle_index; registry fail-closed mistyped IDs
 - DB expire/reload tests pass; full live/Docker restart still ops gap
-- **Final patch P1/P2 done:** remember fail-closed pre-validation; DF fallback via mask absolute positions; 89 related tests PASS
+- **Final patch P1/P2 done** (`7392035e`): remember fail-closed; DF mask absolute positions
+- **Follow-up:** strict `_canonical_side` type check; mid-duplicate label resolve test (`_2`)
 - Hunter OFF; Sniper entry/exit/thresholds/risk multipliers unchanged
 - Ep46 BT ON on `2eb6607`: 299 / **+3866.6%** / **DD 18.89%** / PF 1.71
-- Next phase: deterministic BT on real data — no further identity refactor
+- Next: deterministic BT on real data — identity stabilization closed
 - Hunter / Momentum Radar still out of scope
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
