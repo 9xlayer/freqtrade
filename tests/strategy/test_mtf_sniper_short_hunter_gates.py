@@ -1,4 +1,5 @@
 """Unit tests for Short Hunter waterfall gates."""
+
 from __future__ import annotations
 
 import unittest
@@ -9,14 +10,14 @@ from strategies.mtf_sniper.directional.short.hunter_gates import (
 
 
 def _row(**overrides):
-    base = dict(
-        close=100.0,
-        ema_21=100.5,
-        rsi=40.0,
-        lower_wick_ratio=0.10,
-        close_pos_ratio=0.25,
-        swing_low_20d_1d=90.0,
-    )
+    base = {
+        "close": 100.0,
+        "ema_21": 100.5,
+        "rsi": 40.0,
+        "lower_wick_ratio": 0.10,
+        "close_pos_ratio": 0.25,
+        "swing_low_20d_1d": 90.0,
+    }
     base.update(overrides)
     return base
 

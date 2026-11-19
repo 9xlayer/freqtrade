@@ -10,7 +10,7 @@ from pandas import DataFrame
 
 
 class LongSetup(str, Enum):
-    A80_PLUS = "long_A80plus"
+    A80_PLUS = "long_A80_plus"
     BREAKOUT_EXPANSION = "jev_hunter_breakout_expansion"
     SWING_BREAKOUT = "long_swing_breakout"
     UNKNOWN = "long_unknown"

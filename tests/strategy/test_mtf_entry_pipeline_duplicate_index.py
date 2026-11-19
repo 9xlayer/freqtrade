@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id
@@ -22,7 +21,7 @@ from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
 
 
 def _dup_df() -> pd.DataFrame:
-    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2024, 1, 1, tzinfo=UTC)
     dates = [base + timedelta(minutes=15 * i) for i in range(4)]
     return pd.DataFrame(
         {
@@ -81,23 +80,23 @@ class TestEntryPipelineRunDuplicateIndex(unittest.TestCase):
         return df, result
 
     def test_short_signal_only_at_iloc_2(self):
-        _, result = self._run_with_candidate(TradeSide.SHORT, "short_A80plus")
+        _, result = self._run_with_candidate(TradeSide.SHORT, "short_A80_plus")
         self.assertEqual(result.enter_short.to_numpy().tolist(), [False, False, True, False])
         self.assertEqual(result.enter_long.to_numpy().tolist(), [False, False, False, False])
-        self.assertEqual(result.enter_tag.iloc[2], "short_A80plus")
+        self.assertEqual(result.enter_tag.iloc[2], "short_A80_plus")
         self.assertEqual(result.enter_tag.iloc[1], "")
         self.assertEqual(int(result.enter_short.sum()), 1)
 
     def test_long_signal_only_at_iloc_2(self):
-        _, result = self._run_with_candidate(TradeSide.LONG, "long_A80plus")
+        _, result = self._run_with_candidate(TradeSide.LONG, "long_A80_plus")
         self.assertEqual(result.enter_long.to_numpy().tolist(), [False, False, True, False])
         self.assertEqual(result.enter_short.to_numpy().tolist(), [False, False, False, False])
-        self.assertEqual(result.enter_tag.iloc[2], "long_A80plus")
+        self.assertEqual(result.enter_tag.iloc[2], "long_A80_plus")
         self.assertEqual(result.enter_tag.iloc[1], "")
         self.assertEqual(int(result.enter_long.sum()), 1)
 
     def test_candidate_maps_one_to_one_with_signal(self):
-        df, result = self._run_with_candidate(TradeSide.SHORT, "short_A80plus")
+        df, result = self._run_with_candidate(TradeSide.SHORT, "short_A80_plus")
         self.assertEqual(len(result.accepted), 1)
         cand, pol = result.accepted[0]
         self.assertEqual(cand.candle_index, 2)
@@ -106,7 +105,7 @@ class TestEntryPipelineRunDuplicateIndex(unittest.TestCase):
         # No extra signals
         self.assertEqual(int(result.enter_short.sum()), 1)
         self.assertEqual(int(result.enter_long.sum()), 0)
-        self.assertEqual(pol.metadata.get("entry_tag"), "short_A80plus")
+        self.assertEqual(pol.metadata.get("entry_tag"), "short_A80_plus")
         # Sibling duplicate label row stays clean
         self.assertFalse(bool(result.enter_short.iloc[1]))
         self.assertEqual(result.enter_tag.iloc[1], "")
@@ -119,9 +118,9 @@ class TestApplyEntryPipelineDuplicateIndex(unittest.TestCase):
         # Informative cols check — inject required stubs or mock missing check via run mock
         enter_short = pd.Series([False, False, True, False], index=df.index)
         enter_long = pd.Series([False, False, False, False], index=df.index)
-        enter_tag = pd.Series(["", "", "short_A80plus", ""], index=df.index)
-        cand = _candidate(TradeSide.SHORT, 2, df, "short_A80plus")
-        pol = _accept("short_A80plus")
+        enter_tag = pd.Series(["", "", "short_A80_plus", ""], index=df.index)
+        cand = _candidate(TradeSide.SHORT, 2, df, "short_A80_plus")
+        pol = _accept("short_A80_plus")
         pipe_result = EntryPipelineResult(
             enter_long=enter_long,
             enter_short=enter_short,
@@ -146,12 +145,12 @@ class TestApplyEntryPipelineDuplicateIndex(unittest.TestCase):
 
         self.assertEqual(out["enter_short"].to_numpy().tolist(), [0, 0, 1, 0])
         self.assertEqual(out["enter_long"].to_numpy().tolist(), [0, 0, 0, 0])
-        self.assertEqual(out["enter_tag"].iloc[2], "short_A80plus")
+        self.assertEqual(out["enter_tag"].iloc[2], "short_A80_plus")
         self.assertEqual(out["enter_tag"].iloc[1], "")
         summary = out.attrs["mtf_sniper_live_entries"]
         self.assertEqual(len(summary), 1)
         self.assertEqual(summary[0]["side"], "short")
-        self.assertEqual(summary[0]["tag"], "short_A80plus")
+        self.assertEqual(summary[0]["tag"], "short_A80_plus")
         self.assertEqual(summary[0]["date"], str(df.iloc[2]["date"]))
 
 
@@ -188,11 +187,11 @@ class TestSummarizeLiveEntriesDuplicateIndex(unittest.TestCase):
         df["enter_short"] = 0
         df["enter_tag"] = ""
         df.iloc[2, df.columns.get_loc("enter_short")] = 1
-        df.iloc[2, df.columns.get_loc("enter_tag")] = "short_A80plus"
+        df.iloc[2, df.columns.get_loc("enter_tag")] = "short_A80_plus"
         rows = _summarize_live_entries(df)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["side"], "short")
-        self.assertEqual(rows[0]["tag"], "short_A80plus")
+        self.assertEqual(rows[0]["tag"], "short_A80_plus")
         self.assertEqual(rows[0]["date"], str(df.iloc[2]["date"]))
         # Must not stringify both duplicate-label rows
         self.assertNotIn("\n", rows[0]["tag"])

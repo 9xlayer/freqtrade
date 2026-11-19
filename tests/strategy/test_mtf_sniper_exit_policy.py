@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 
 import pandas as pd
@@ -22,8 +22,8 @@ def _trade(*, is_short: bool, open_date: datetime):
 
 class TestResolveMarketRow(unittest.TestCase):
     def test_exact_and_fallback(self):
-        t0 = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
-        t1 = datetime(2024, 1, 1, 0, 15, tzinfo=timezone.utc)
+        t0 = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        t1 = datetime(2024, 1, 1, 0, 15, tzinfo=UTC)
         df = pd.DataFrame(
             {
                 "date": [t0, t1],
@@ -31,14 +31,14 @@ class TestResolveMarketRow(unittest.TestCase):
             }
         )
         self.assertEqual(resolve_market_row(df, t1)["close"], 101.0)
-        later = datetime(2024, 1, 1, 0, 30, tzinfo=timezone.utc)
+        later = datetime(2024, 1, 1, 0, 30, tzinfo=UTC)
         self.assertEqual(resolve_market_row(df, later)["close"], 101.0)
         self.assertIsNone(resolve_market_row(None, t0))
 
 
 class TestEvaluateCustomExit(unittest.TestCase):
     def test_long_trend_invalidated(self):
-        open_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        open_date = datetime(2024, 1, 1, tzinfo=UTC)
         now = open_date + timedelta(hours=4)
         trade = _trade(is_short=False, open_date=open_date)
         row = {
@@ -56,7 +56,7 @@ class TestEvaluateCustomExit(unittest.TestCase):
         self.assertEqual(reason, "exit_long_trend_invalidated")
 
     def test_short_htf_runner_broken(self):
-        open_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        open_date = datetime(2024, 1, 1, tzinfo=UTC)
         now = open_date + timedelta(hours=1)
         trade = _trade(is_short=True, open_date=open_date)
         row = {
@@ -74,7 +74,7 @@ class TestEvaluateCustomExit(unittest.TestCase):
         self.assertEqual(reason, "exit_short_htf_runner_broken")
 
     def test_timeout_24h(self):
-        open_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        open_date = datetime(2024, 1, 1, tzinfo=UTC)
         now = open_date + timedelta(hours=25)
         trade = _trade(is_short=False, open_date=open_date)
         row = {
@@ -92,7 +92,7 @@ class TestEvaluateCustomExit(unittest.TestCase):
         self.assertEqual(reason, "exit_timeout_24h")
 
     def test_no_exit(self):
-        open_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        open_date = datetime(2024, 1, 1, tzinfo=UTC)
         now = open_date + timedelta(hours=1)
         trade = _trade(is_short=False, open_date=open_date)
         row = {
@@ -114,7 +114,7 @@ class TestEvaluateCustomExit(unittest.TestCase):
 class TestConfirmExitAllowed(unittest.TestCase):
     def test_hard_exits_always_allowed(self):
         trade = _trade(
-            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=UTC)
         )
         for reason in ("stop_loss", "trailing_stop_loss", "emergency_exit", "force_exit"):
             self.assertTrue(
@@ -125,7 +125,7 @@ class TestConfirmExitAllowed(unittest.TestCase):
 
     def test_roi_deferred_when_trend_intact(self):
         trade = _trade(
-            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=UTC)
         )
         trade.calc_profit_ratio = lambda rate: 0.55
         row = {"close_1h": 110.0, "ema_21_1h": 100.0, "macdhist_1h": 0.1}
@@ -137,7 +137,7 @@ class TestConfirmExitAllowed(unittest.TestCase):
 
     def test_roi_allowed_when_trend_broken(self):
         trade = _trade(
-            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            is_short=False, open_date=datetime(2024, 1, 1, tzinfo=UTC)
         )
         trade.calc_profit_ratio = lambda rate: 0.55
         row = {"close_1h": 90.0, "ema_21_1h": 100.0, "macdhist_1h": -0.1}

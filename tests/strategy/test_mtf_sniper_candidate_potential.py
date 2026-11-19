@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ def _cand(
         primary_sensor=primary,
         secondary_sensors=[],
         confluence_count=confluence,
-        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, tzinfo=UTC),
         candle_index=idx,
         raw_features={},
     )

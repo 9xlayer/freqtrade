@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import fields, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from strategies.mtf_sniper.core.candidate_id import (
     CANDIDATE_ID_CUSTOM_DATA_KEY,
@@ -107,7 +107,7 @@ class TestDataContractShapes(unittest.TestCase):
 
 class TestCandidateIdContract(unittest.TestCase):
     def test_canonical_includes_candle_index(self):
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         parsed = parse_candidate_id(cid)
         self.assertIsNotNone(parsed)
@@ -118,19 +118,19 @@ class TestCandidateIdContract(unittest.TestCase):
         self.assertFalse(is_canonical_candidate_id(legacy))
 
     def test_make_parse_make_round_trip(self):
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         for side in (TradeSide.LONG, TradeSide.SHORT, "long", "short"):
             original = make_candidate_id("ETH/USDT:USDT", side, ts, 7)
             parsed = parse_candidate_id(original)
             self.assertIsNotNone(parsed)
             remade = make_candidate_id(
-                parsed.pair, parsed.side, datetime.fromtimestamp(parsed.epoch, tz=timezone.utc), parsed.candle_index
+                parsed.pair, parsed.side, datetime.fromtimestamp(parsed.epoch, tz=UTC), parsed.candle_index
             )
             self.assertEqual(original, remade)
             self.assertTrue(is_canonical_candidate_id(original))
 
     def test_rejects_uppercase_side_and_leading_zeros(self):
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         epoch = int(ts.timestamp())
         self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_LONG_{epoch}_1"))
         self.assertIsNone(parse_candidate_id(f"BTC/USDT:USDT_Short_{epoch}_1"))
@@ -142,7 +142,7 @@ class TestCandidateIdContract(unittest.TestCase):
             make_candidate_id("BTCUSDT", TradeSide.LONG, ts, 1)
 
     def test_rejects_negative_candle_index(self):
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         bad = f"BTC/USDT:USDT_long_{int(ts.timestamp())}_-1"
         self.assertFalse(is_canonical_candidate_id(bad))
         self.assertIsNone(parse_candidate_id(bad))
@@ -150,7 +150,7 @@ class TestCandidateIdContract(unittest.TestCase):
             make_candidate_id("BTC/USDT:USDT", TradeSide.LONG, ts, -1)
 
     def test_rejects_non_integral_candle_index_and_bad_timestamp(self):
-        ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         # No silent float truncate
         for bad_idx in (12.0, 12.9, True, False, "12"):
             with self.assertRaises(ValueError):

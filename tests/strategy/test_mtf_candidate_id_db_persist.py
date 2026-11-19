@@ -6,7 +6,7 @@ Docker restart) — that remains an operational verification gap.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -14,8 +14,6 @@ import pytest
 
 from freqtrade.persistence import Trade
 from freqtrade.persistence.custom_data import CustomDataWrapper
-from tests.conftest import create_mock_trades_usdt
-
 from strategies.mtf_sniper.core.candidate_id import (
     CANDIDATE_ID_CUSTOM_DATA_KEY,
     make_candidate_id,
@@ -23,12 +21,13 @@ from strategies.mtf_sniper.core.candidate_id import (
 from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
 from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
+from tests.conftest import create_mock_trades_usdt
 
 
 def _prepare_short_trade(trade: Trade, ts: datetime) -> None:
     trade.pair = "BTC/USDT:USDT"
     trade.is_short = True
-    trade.enter_tag = "short_A80plus"
+    trade.enter_tag = "short_A80_plus"
     trade.open_date = ts.replace(tzinfo=None)
     trade.amount = 1.0
     trade.open_rate = 100.0
@@ -46,7 +45,7 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     trade = Trade.get_trades_proxy(is_open=True)[0]
     assert trade.id is not None
 
-    ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+    ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
     _prepare_short_trade(trade, ts)
     cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
 
@@ -94,7 +93,7 @@ def test_db_expire_reload_preserves_candidate_id_for_exit_ledger(fee):
 
     trade = Trade.get_trades_proxy(is_open=True)[0]
     trade_id = int(trade.id)
-    ts = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+    ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
     _prepare_short_trade(trade, ts)
     cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 99)
 

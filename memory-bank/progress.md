@@ -41,7 +41,7 @@
 - Decision OFF: 224 trades, +4858.45% (+48,584 USDT), WR 61.6%, DD 32.72%, PF 2.10
 - vs report Run1 (+10,854% / DD 21.95%): not matched — that run used frozen Hunter cache
 - vs report Run2 (+1,966% / DD 30.9%): new Decision ON beats PnL; DD similar band
-- Nov 12 waterfall trade absent (Hunter off); Nov 5 short_B65plus still captured
+- Nov 12 waterfall trade absent (Hunter off); Nov 5 short_B65_plus still captured
 
 ## Hyperopt probe (2026-11-18)
 - Space `buy` (long-only `optimize=True`), `SharpeHyperOptLossDaily`

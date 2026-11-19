@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from unittest.mock import patch
 
 from strategies.mtf_sniper.core.contracts import TradeCandidate
@@ -19,7 +19,7 @@ def _cand(side: TradeSide, score_key: str, score: float) -> TradeCandidate:
         primary_sensor="setup:sniper_short" if side == TradeSide.SHORT else "setup:sniper_long",
         secondary_sensors=[],
         confluence_count=1,
-        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, tzinfo=UTC),
         candle_index=1,
         raw_features={
             "setup_complete": True,

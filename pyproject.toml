@@ -298,6 +298,10 @@ extend-ignore = [
   "E402",   # Module import not at top of file
   "F841",   # Unused local variable in legacy hunter
 ]
+"tests/strategy/test_jev_architecture.py" = [
+  "E501",   # Line length in legacy JEV prompts/SQL
+  "E402",   # Module import not at top of file (sys.path for archive)
+]
 "freqtrade/freqai/**/*.py" = [
   "S311",  # Standard pseudo-random generators are not suitable for cryptographic purposes
 ]
