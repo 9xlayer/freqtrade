@@ -4,10 +4,12 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pandas as pd
 
+from freqtrade.persistence import Order, Trade
 from strategies.mtf_sniper.core.candidate_id import (
     CANDIDATE_ID_CUSTOM_DATA_KEY,
     CANDIDATE_ID_MISSING,
@@ -66,7 +68,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             close_profit_abs=5.0,
             exit_reason="roi",
         )
-        ok = strat._persist_candidate_id(trade, cid)
+        ok = strat._persist_candidate_id(cast(Trade, trade), cid)
         self.assertTrue(ok)
         self.assertEqual(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY), cid)
 
@@ -75,7 +77,7 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         ledger = MagicMock()
         strat._trade_ledger = ledger
         order = SimpleNamespace(ft_order_side="buy", filled=1.0, safe_amount=1.0, average=95.0)
-        strat.order_filled("BTC/USDT:USDT", trade, order, ts)
+        strat.order_filled("BTC/USDT:USDT", cast(Trade, trade), cast(Order, order), ts)
 
         self.assertTrue(ledger.record.called)
         rec = ledger.record.call_args[0][0]
@@ -86,20 +88,20 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
         ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
         trade = _FakeTrade(id=1, _fail_persist=True)
-        self.assertFalse(strat._persist_candidate_id(trade, cid))
+        self.assertFalse(strat._persist_candidate_id(cast(Trade, trade), cid))
         self.assertIsNone(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY))
 
     def test_persist_rejects_non_canonical(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
         trade = _FakeTrade(id=1)
-        self.assertFalse(strat._persist_candidate_id(trade, "not-a-canonical-id"))
-        self.assertFalse(strat._persist_candidate_id(trade, CANDIDATE_ID_MISSING))
+        self.assertFalse(strat._persist_candidate_id(cast(Trade, trade), "not-a-canonical-id"))
+        self.assertFalse(strat._persist_candidate_id(cast(Trade, trade), CANDIDATE_ID_MISSING))
 
     def test_read_persisted_rejects_non_canonical(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
         trade = _FakeTrade(id=1)
         trade.set_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY, "legacy_garbage_id")
-        self.assertIsNone(strat._read_persisted_candidate_id(trade))
+        self.assertIsNone(strat._read_persisted_candidate_id(cast(Trade, trade)))
 
     def test_order_filled_entry_binds_ram_even_if_persist_fails(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
@@ -116,10 +118,10 @@ class TestCandidateIdRestartSafe(unittest.TestCase):
             exit_side="buy",
             _fail_persist=True,
         )
-        strat._read_persisted_candidate_id = lambda t: None
+        strat._read_persisted_candidate_id = lambda trade: None
         strat._resolve_candidate_id = lambda *a, **k: cid
         order = SimpleNamespace(ft_order_side="sell", filled=1.0, safe_amount=1.0)
-        strat.order_filled("BTC/USDT:USDT", trade, order, ts)
+        strat.order_filled("BTC/USDT:USDT", cast(Trade, trade), cast(Order, order), ts)
         self.assertEqual(strat._candidate_registry.lookup_trade(9), cid)
         self.assertIsNone(trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY))
 
@@ -294,7 +296,7 @@ class TestRiskAuthPairStoploss(unittest.TestCase):
         import strategies.mtf_sniper.strategy_mtf_sniper as mod
 
         orig = mod.Trade
-        mod.Trade = SimpleNamespace(get_trades_proxy=lambda **kw: [])
+        mod.Trade = cast(Any, SimpleNamespace(get_trades_proxy=lambda **kw: []))
         try:
             ok = StrategyMTFSniper.confirm_trade_entry(
                 strat,
@@ -316,14 +318,14 @@ class TestRiskAuthPairStoploss(unittest.TestCase):
 class TestConfirmExitHardPaths(unittest.TestCase):
     def test_strategy_confirm_trade_exit_never_blocks_hard(self):
         strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
-        strat.dp = None
+        strat.dp = cast(Any, None)
         trade = SimpleNamespace(is_short=False, calc_profit_ratio=lambda r: 0.6)
         for reason in ALWAYS_ALLOW_EXIT_REASONS:
             self.assertTrue(
                 StrategyMTFSniper.confirm_trade_exit(
                     strat,
                     pair="BTC/USDT:USDT",
-                    trade=trade,
+                    trade=cast(Trade, trade),
                     order_type="market",
                     amount=1.0,
                     rate=100.0,
