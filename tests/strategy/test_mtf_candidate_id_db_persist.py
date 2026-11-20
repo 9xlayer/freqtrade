@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 
-from freqtrade.persistence import Trade
+from freqtrade.persistence import Order, Trade
 from freqtrade.persistence.custom_data import CustomDataWrapper
 from strategies.mtf_sniper.core.candidate_id import (
     CANDIDATE_ID_CUSTOM_DATA_KEY,
@@ -46,7 +47,7 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     assert trade.id is not None
 
     ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
-    _prepare_short_trade(trade, ts)
+    _prepare_short_trade(cast(Trade, trade), ts)
     cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 42)
 
     strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
@@ -56,7 +57,9 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     strat._resolve_candidate_id = lambda *a, **k: cid
 
     entry_order = SimpleNamespace(ft_order_side="sell", filled=1.0, safe_amount=1.0)
-    strat.order_filled("BTC/USDT:USDT", trade, entry_order, ts)
+    strat.order_filled(
+        "BTC/USDT:USDT", cast(Trade, trade), cast(Order, entry_order), ts
+    )
     assert trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY) == cid
 
     strat._candidate_registry = CandidateRegistry()
@@ -74,7 +77,9 @@ def test_db_backed_persist_survives_registry_clear_on_exit(fee):
     exit_order = SimpleNamespace(
         ft_order_side="buy", filled=1.0, safe_amount=1.0, average=95.0
     )
-    strat.order_filled("BTC/USDT:USDT", trade, exit_order, ts)
+    strat.order_filled(
+        "BTC/USDT:USDT", cast(Trade, trade), cast(Order, exit_order), ts
+    )
 
     assert ledger.record.called
     rec = ledger.record.call_args[0][0]
@@ -92,9 +97,10 @@ def test_db_expire_reload_preserves_candidate_id_for_exit_ledger(fee):
     create_mock_trades_usdt(fee, is_short=True, use_db=True)
 
     trade = Trade.get_trades_proxy(is_open=True)[0]
-    trade_id = int(trade.id)
+    assert trade.id is not None
+    trade_id = trade.id
     ts = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
-    _prepare_short_trade(trade, ts)
+    _prepare_short_trade(cast(Trade, trade), ts)
     cid = make_candidate_id("BTC/USDT:USDT", TradeSide.SHORT, ts, 99)
 
     strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
@@ -104,7 +110,9 @@ def test_db_expire_reload_preserves_candidate_id_for_exit_ledger(fee):
     strat._resolve_candidate_id = lambda *a, **k: cid
 
     entry_order = SimpleNamespace(ft_order_side="sell", filled=1.0, safe_amount=1.0)
-    strat.order_filled("BTC/USDT:USDT", trade, entry_order, ts)
+    strat.order_filled(
+        "BTC/USDT:USDT", cast(Trade, trade), cast(Order, entry_order), ts
+    )
     assert trade.get_custom_data(CANDIDATE_ID_CUSTOM_DATA_KEY) == cid
 
     # Flush identity fields + custom data to DB, then drop ORM identity map.
@@ -133,7 +141,9 @@ def test_db_expire_reload_preserves_candidate_id_for_exit_ledger(fee):
     exit_order = SimpleNamespace(
         ft_order_side="buy", filled=1.0, safe_amount=1.0, average=95.0
     )
-    strat.order_filled("BTC/USDT:USDT", reloaded, exit_order, ts)
+    strat.order_filled(
+        "BTC/USDT:USDT", reloaded, cast(Order, exit_order), ts
+    )
 
     assert ledger.record.called
     assert ledger.record.call_args[0][0].candidate_id == cid
