@@ -35,6 +35,12 @@ services:
     # Host 8088 → container 8080 (avoid clash with coolify-proxy on 8080)
     ports:
       - "8088:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/v1/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     # Overlay config wins over stale strategy_path in mounted config.json
     command: >
       trade
