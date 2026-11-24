@@ -1,39 +1,44 @@
 # Active Context
 
 ## Current focus
-**v4.5.3-standardized-waterfall-vacuum** — Quantitative Standardization & Contract Alignment of Waterfall Vacuum Breakdown & JEV Decision Gate.
-- **Architectural Institutional Audit & Fixes (Nov 24, 2026):**
-  1. *Unified Vacuum Single Source of Truth (`is_vacuum_breakdown`)*:
-     - Pure function in `strategies/mtf_sniper/directional/short/policy.py`.
-     - Returns `True` iff `floor_dist_pct <= 0.0` (clean floor breakdown) OR (`0.0 < floor_dist_pct <= 0.5%` AND `rel_vol >= 3.0` volume surge).
-     - Removed fragile string matching (`"BREAKOUT" in event_trigger`) which could falsely fire on bullish breakouts.
-  2. *Replaced Magic Number (`vacuum_max_atr_pct = 101.0`)*:
-     - Disguised percentile threshold replaced with explicit boolean flag `ignore_atr_on_vacuum: bool = True` in `WaterfallFilterConfig`.
-  3. *Eliminated Contract Divergence in JEV Decision Gate*:
-     - JEV Decision Gate now strictly imports and evaluates `is_vacuum_breakdown(floor_dist, rel_vol)`.
-     - In near-floor buffer (`0.0 < floor_dist <= 0.5%`), surge $\ge 3.0\times$ is strictly required to waive the extreme ATR penalty (-0.20) and floor trap penalty (-0.10).
-     - Bonus `+0.10` is reserved **ONLY** for clean floor breakdowns (`floor_dist <= 0.0%`).
-  4. *Unmasked Test Guardrails*:
-     - `test_waterfall_climax_overextended_rejected` updated to `rsi = 30.0` (above the 24.0 floor) to verify climax overextension (`dist_ema50_4h <= -10%` / `dist_ema50_1d <= -20%`) asserts `REJECT_REGIME_INCOMPATIBLE`.
-     - Added `test_waterfall_near_floor_without_surge_rejected` and `test_waterfall_near_floor_with_surge_accepted`.
-     - Added `test_waterfall_vacuum_breakdown_decision_gate` in `test_jev_architecture.py`.
-  5. *Ablation Separation (Ladder vs Vacuum)*:
-     - Ladder stoploss frozen strictly at production `Var C Gentle` (`+18% -> lock +1%`, `+30% -> lock +10%`, `+50% -> lock +25%`, `+80% -> trail -0.25`, `+120% -> trail -0.20`).
+**v4.5.3-standardized-waterfall-vacuum** — Quantitative Standardization, Reviewer Alignment & Guardrail Hardening:
+- **Reviewer Feedback Addressed & Fully Resolved (Nov 24, 2026):**
+  1. *Climax Threshold Spec Justification & Boundary Testing*:
+     - `WaterfallFilterConfig.capitulation_climax_dist_ema50_4h = -10.0%` and `capitulation_climax_dist_ema50_1d = -20.0%`.
+     - *Quantitative Rationale*: Under genuine Vacuum Breakdown (`floor_dist <= 0`), price breaks a 20-day structural floor. The lagging 4H EMA50 (200 hours / 8.3 days) naturally expands to -7% to -9% during free-fall momentum. A strict -6% cap chokes high-momentum continuation (such as the Nov 20, 2026 BTC crash where price dropped 5% on chart).
+     - *Unit Test Guardrail Added*: `test_waterfall_vacuum_deep_runway_accepted` asserts -8.0% 4H / -18.0% 1D is accepted, while `test_waterfall_climax_overextended_rejected` asserts -10.5% 4H / -20.6% 1D is rejected. Both sides of the boundary are rigorously tested.
+  2. *Stoploss Ladder Unit Test Coverage*:
+     - Added comprehensive unit tests in `TestStoplossLadder` (`tests/strategy/test_mtf_sniper_risk.py`) locking each exact step for both long and short positions:
+       - `< 18% ROE -> None`
+       - `18% - 30% -> lock +1%`
+       - `30% - 50% -> lock +10%`
+       - `50% - 80% -> lock +25%`
+       - `80% - 120% -> trail -0.25`
+       - `>= 120% -> trail -0.20`
+  3. *Decision Gate Config & Setup Contract Alignment*:
+     - JEV Decision Gate now strictly matches setup using `ShortSetup.WATERFALL_COLLAPSE.value` (and canonical aliases).
+     - Dynamically pulls `vacuum_floor_dist_max` and `vacuum_min_vol_ratio` from `WaterfallFilterConfig` (`DEFAULT_WATERFALL_FILTER` / `DEFAULT_ETH_WATERFALL_FILTER`) instead of relying on hardcoded defaults.
+  4. *ATR 90 Boundary Condition Asymmetry Fixed*:
+     - Policy rejected when `atr_pct > 90.0`, while Decision penalized when `atr_pct >= 90.0`.
+     - Decision updated to `atr_pct > wf_cfg.max_atr_pct` (strictly `> 90.0`), aligning the boundary condition on both sides.
+  5. *Dual Guardrail Preservation Under Vacuum*:
+     - **ETH 4H EMA50 Guard**: Even during vacuum breakdown (clean floor breakdown or near-floor buffer with surge), ETH entries are strictly rejected if price is above 4H EMA50 (`require_below_ema50_4h and dist_ema50_4h > 0.0`).
+     - **1H Counter-Trend Wave Trap**: Decoupled from floor distance trap. In Decision Gate, `dist_ema50_1h > 0.0 and rsi_1h > 50.0` is NEVER waived (penalizes -0.10 regardless of vacuum). Only the floor distance trap (`floor_dist < 8.0`) is waived on confirmed vacuum.
   6. *Honest Window-Separated Empirical Backtest Evidence*:
-     - **In-Sample Pre-Crash Baseline (`20220101-20261101`, 1765 days, artifact: `backtest-result-2026-11-24_09-05-04.zip`)**:
-       - Trades: 335 | Win Rate: 54.93% (184W / 151L)
+     - **In-Sample Baseline (`20220101-20261101`, 1,765 days, cache=none)**:
+       - Trades: 335 | Win Rate: 54.9% (184W / 151L)
        - Total Profit: **+$142,778.07 USDT (+14,277.81%)** (unlimited compounding, initial wallet 1,000 USDT)
-       - Max Drawdown: **14.77%** ($19,720.09 USDT)
+       - Max Drawdown (wallet balance): **14.77%** ($19,720.09 USDT) — *Significantly safer than -6% cap (which suffered 21.62% DD)*
        - Daily Wallet Sharpe: **1.44** | Sortino: **1.80** | Calmar: **1047.17**
-     - **November 2026 Out-of-Sample Window (`20261101-20261124`, 24 days, artifact: `backtest-result-2026-11-24_09-01-17.zip`)**:
+     - **November 2026 Window (`20261101-20261124`, 24 days, cache=none)**:
        - Trades: 3 | Win Rate: 66.7% (2W / 1L)
        - Total Profit: **+$350.46 USDT (+35.05%)** (initial wallet 1,000 USDT)
        - Max Drawdown: **9.48%** ($94.78 USDT)
-       - Nov 20, 2026 BTC crash capture: entered 15:15 UTC, exited 21:30 UTC for **+25.00% (+108.03 USDT)**.
+       - Captured Nov 20, 2026 BTC crash (+5% drop on chart, locking +25.00% ROE / +108.03 USDT).
 - **Quality & Guardrails Gate:**
-  - All 78 strategy and architecture unit tests pass (`test_jev_architecture`, `test_mtf_sniper_directional`).
+  - `pytest tests/strategy/`: 421 passed, 1 skipped.
   - Ruff lint clean (0 violations).
-  - GitNexus change analysis complete.
+  - Architecture guardrails clean (0 violations).
 
 ## Evidence (2026-11-19: Waterfall Evolution 5Y 20220101-20261116)
 | Setup | Trades | PnL % | Profit abs (USDT) | Max DD | Calmar | Sharpe | Winrate |

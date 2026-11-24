@@ -182,8 +182,8 @@ class TestShortPolicy(unittest.TestCase):
             "low": 49000.0,
             "close": 49200.0,
             "swing_low_20d_1d": 52000.0,  # floor_dist < 0
-            "ema_50_4h": 55000.0,  # -10.5% (climax)
-            "ema_50_1d": 62000.0,  # -20.6% (climax)
+            "ema_50_4h": 55000.0,  # -10.5% (climax overextended beyond -10%)
+            "ema_50_1d": 62000.0,  # -20.6% (climax overextended beyond -20%)
             "ema_200_1d": 65000.0,
             "lower_wick_ratio": 0.15,
             "close_pos_ratio": 0.18,
@@ -194,6 +194,30 @@ class TestShortPolicy(unittest.TestCase):
         result = policy.evaluate(cand, row)
         self.assertFalse(result.is_valid)
         self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, result.reasons)
+
+    def test_waterfall_vacuum_deep_runway_accepted(self):
+        """Deep vacuum momentum (e.g. Nov 20 crash: -8% 4H / -18% 1D) within -10%/-20% is accepted."""
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
+        # Deep vacuum breakdown: -8.0% from 4H EMA50, -18.0% from 1D EMA50 (within -10% / -20% band)
+        row = {
+            "open": 50800.0,
+            "high": 50900.0,
+            "low": 50500.0,
+            "close": 50600.0,
+            "swing_low_20d_1d": 52000.0,  # floor_dist < 0 (vacuum)
+            "ema_50_4h": 55000.0,  # -8.0% from 4H EMA50 (valid under -10% climax)
+            "ema_50_1d": 61707.0,  # -18.0% from 1D EMA50 (valid under -20% climax)
+            "ema_200_1d": 65000.0,
+            "lower_wick_ratio": 0.12,
+            "close_pos_ratio": 0.15,
+            "rsi": 30.0,
+            "ema_21": 51000.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
 
     def test_waterfall_near_floor_without_surge_rejected(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
@@ -310,6 +334,42 @@ class TestShortPolicy(unittest.TestCase):
         result = policy.evaluate(cand, row)
         self.assertTrue(result.is_valid)
         self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+
+    def test_waterfall_eth_in_vacuum_rejected_if_above_ema50_4h(self):
+        """ETH in vacuum breakdown must STILL be rejected if price is above 4H EMA50."""
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = TradeCandidate(
+            candidate_id="ETH_short_0_106",
+            pair="ETH/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="waterfall_drop",
+            secondary_sensors=[],
+            confluence_count=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=106,
+            raw_features={},
+        )
+        # Clean floor breakdown (floor_dist <= 0) and high surge vol (rel_vol 3.5),
+        # but close 2800 > ema_50_4h 2750 (+1.8%)
+        row = {
+            "open": 2850.0,
+            "high": 2860.0,
+            "low": 2790.0,
+            "close": 2800.0,
+            "swing_low_20d_1d": 2800.0,  # floor_dist = 0.0 (vacuum)
+            "rel_vol": 3.5,
+            "ema_50_4h": 2750.0,  # Above 4H EMA50!
+            "ema_50_1d": 3100.0,
+            "ema_200_1d": 3000.0,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 35.0,
+            "ema_21": 2820.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertFalse(result.is_valid)
+        self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, result.reasons)
 
 
 class TestDirectionalEngine(unittest.TestCase):

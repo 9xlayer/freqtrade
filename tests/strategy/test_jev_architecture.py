@@ -1018,6 +1018,59 @@ class TestJevDecisionEngine(unittest.TestCase):
         self.assertFalse(any("Counter-trend trap" in r for r in v_surge["reasons"]))
         self.assertFalse(any("Waterfall clean floor breakdown" in r for r in v_surge["reasons"]))
 
+        # Scenario 4: Vacuum breakdown WITH 1H counter-trend wave trap (dist_ema50_1h > 0 and rsi_1h > 50)
+        # Should: Never waive 1H counter-trend trap even during vacuum breakdown!
+        payload_counter_wave = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="waterfall_drop"
+        )
+        payload_counter_wave["macro_context"] = {
+            "floor_20d_dist_pct": 0.2,
+            "ema_50_1h_dist_pct": 1.2,
+            "rsi_1h": 55.0,
+            "trend_4h": "NEUTRAL",
+            "short_score": 65.0,
+            "atr_percentile": 80.0,
+            "rel_vol": 3.5,
+        }
+        v_counter_wave = native_engine.evaluate(payload_counter_wave)
+        self.assertTrue(
+            any("Counter-trend trap on short" in r for r in v_counter_wave["reasons"])
+        )
+        self.assertEqual(v_counter_wave["decision"], "VETO")
+
+        # Scenario 5: ATR 90.0 exact boundary asymmetry check
+        # Non-vacuum candidate with atr_pct == 90.0 should NOT receive penalty,
+        # but atr_pct == 90.1 MUST receive extreme ATR penalty (-0.20)
+        payload_atr_90 = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="short_A80_plus"
+        )
+        payload_atr_90["macro_context"] = {
+            "floor_20d_dist_pct": 10.0,
+            "ema_50_1h_dist_pct": -1.0,
+            "rsi_1h": 40.0,
+            "trend_4h": "BEAR",
+            "short_score": 65.0,
+            "atr_percentile": 90.0,
+            "rel_vol": 1.0,
+        }
+        v_atr_90 = native_engine.evaluate(payload_atr_90)
+        self.assertFalse(any("Extreme ATR volatility risk" in r for r in v_atr_90["reasons"]))
+
+        payload_atr_90_1 = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="short_A80_plus"
+        )
+        payload_atr_90_1["macro_context"] = {
+            "floor_20d_dist_pct": 10.0,
+            "ema_50_1h_dist_pct": -1.0,
+            "rsi_1h": 40.0,
+            "trend_4h": "BEAR",
+            "short_score": 65.0,
+            "atr_percentile": 90.1,
+            "rel_vol": 1.0,
+        }
+        v_atr_90_1 = native_engine.evaluate(payload_atr_90_1)
+        self.assertTrue(any("Extreme ATR volatility risk" in r for r in v_atr_90_1["reasons"]))
+
 
 class TestHunterExternalModelIdentity(unittest.TestCase):
     """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""

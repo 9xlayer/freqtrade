@@ -266,6 +266,8 @@ class ShortPolicy:
         )
 
         if is_vacuum:
+            if wf_cfg.require_below_ema50_4h and dist_ema50_4h > 0.0:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
             is_capitulation_climax = (
                 dist_ema50_4h < wf_cfg.capitulation_climax_dist_ema50_4h
                 or dist_ema50_1d < wf_cfg.capitulation_climax_dist_ema50_1d

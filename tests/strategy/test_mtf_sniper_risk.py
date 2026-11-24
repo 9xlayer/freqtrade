@@ -6,6 +6,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from freqtrade.strategy import stoploss_from_open
 from strategies.mtf_sniper.core.enums import RejectionReasonCode
 from strategies.mtf_sniper.risk.portfolio_protection import (
     circuit_breaker_blocks,
@@ -14,7 +15,10 @@ from strategies.mtf_sniper.risk.portfolio_protection import (
 )
 from strategies.mtf_sniper.risk.position_sizing import resolve_leverage, resolve_stake_amount
 from strategies.mtf_sniper.risk.risk_engine import RiskEngine
-from strategies.mtf_sniper.risk.stoploss_ladder import resolve_custom_stoploss
+from strategies.mtf_sniper.risk.stoploss_ladder import (
+    _ladder_stoploss_for_profit,
+    resolve_custom_stoploss,
+)
 
 
 def _trade(**kwargs):
@@ -126,6 +130,103 @@ class TestStoplossLadder(unittest.TestCase):
             default_stoploss=-0.28,
         )
         self.assertGreater(sl, 0.0)
+
+    def test_ladder_stoploss_tiers_long_and_short(self):
+        lev = 10.0
+        # Tier 0: < 18% -> None
+        for p in [0.0, 0.10, 0.179]:
+            self.assertIsNone(_ladder_stoploss_for_profit(p, is_short=False, lev=lev))
+            self.assertIsNone(_ladder_stoploss_for_profit(p, is_short=True, lev=lev))
+
+        # Tier 1: 18% to < 30% -> lock +1% (+0.01)
+        for p in [0.18, 0.25, 0.299]:
+            expected_long = stoploss_from_open(0.01, p, is_short=False, leverage=lev)
+            expected_short = stoploss_from_open(0.01, p, is_short=True, leverage=lev)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=False, lev=lev), expected_long)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=True, lev=lev), expected_short)
+
+        # Tier 2: 30% to < 50% -> lock +10% (+0.10)
+        for p in [0.30, 0.40, 0.499]:
+            expected_long = stoploss_from_open(0.10, p, is_short=False, leverage=lev)
+            expected_short = stoploss_from_open(0.10, p, is_short=True, leverage=lev)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=False, lev=lev), expected_long)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=True, lev=lev), expected_short)
+
+        # Tier 3: 50% to < 80% -> lock +25% (+0.25)
+        for p in [0.50, 0.65, 0.799]:
+            expected_long = stoploss_from_open(0.25, p, is_short=False, leverage=lev)
+            expected_short = stoploss_from_open(0.25, p, is_short=True, leverage=lev)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=False, lev=lev), expected_long)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=True, lev=lev), expected_short)
+
+        # Tier 4: 80% to < 120% -> trail -0.25
+        for p in [0.80, 1.00, 1.199]:
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=False, lev=lev), -0.25)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=True, lev=lev), -0.25)
+
+        # Tier 5: >= 120% -> trail -0.20
+        for p in [1.20, 1.50, 3.00]:
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=False, lev=lev), -0.20)
+            self.assertEqual(_ladder_stoploss_for_profit(p, is_short=True, lev=lev), -0.20)
+
+    def test_resolve_custom_stoploss_full_ladder_lifecycle(self):
+        trade_long = _trade(is_short=False, leverage=10.0)
+        trade_short = _trade(is_short=True, leverage=10.0)
+        now = datetime(2024, 1, 1, 2, 0, tzinfo=UTC)
+
+        # 0% profit: base stoploss
+        sl_base_long = resolve_custom_stoploss(
+            trade=trade_long,
+            current_time=now,
+            current_profit=0.0,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertAlmostEqual(sl_base_long, 0.25, places=3)
+
+        # 18% profit: lock +1%
+        sl_18_long = resolve_custom_stoploss(
+            trade=trade_long,
+            current_time=now,
+            current_profit=0.18,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(
+            sl_18_long, stoploss_from_open(0.01, 0.18, is_short=False, leverage=10.0)
+        )
+
+        # 30% profit: lock +10%
+        sl_30_short = resolve_custom_stoploss(
+            trade=trade_short,
+            current_time=now,
+            current_profit=0.30,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(
+            sl_30_short, stoploss_from_open(0.10, 0.30, is_short=True, leverage=10.0)
+        )
+
+        # 80% profit: trail -0.25
+        sl_80_long = resolve_custom_stoploss(
+            trade=trade_long,
+            current_time=now,
+            current_profit=0.80,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(sl_80_long, -0.25)
+
+        # 120% profit: trail -0.20
+        sl_120_short = resolve_custom_stoploss(
+            trade=trade_short,
+            current_time=now,
+            current_profit=1.20,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(sl_120_short, -0.20)
 
 
 class TestRiskEngine(unittest.TestCase):

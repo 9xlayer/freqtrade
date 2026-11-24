@@ -43,7 +43,12 @@ from strategies.mtf_sniper import (
 from strategies.mtf_sniper import (
     DECISION_PROMPT_VERSION_NATIVE as PROMPT_VERSION_NATIVE,
 )
-from strategies.mtf_sniper.directional.short.policy import is_vacuum_breakdown
+from strategies.mtf_sniper.directional.short.policy import (
+    DEFAULT_ETH_WATERFALL_FILTER,
+    DEFAULT_WATERFALL_FILTER,
+    is_vacuum_breakdown,
+)
+from strategies.mtf_sniper.directional.short.setups import ShortSetup
 
 
 MODEL_VERSION_EXTERNAL = os.environ.get(
@@ -1232,18 +1237,30 @@ class JevDecisionEngine:
 
         raw_setup = payload.get("setup") or ""
         setup = raw_setup.lower() if isinstance(raw_setup, str) else ""
-        is_waterfall_setup = "waterfall" in setup
+        is_waterfall_setup = (
+            setup == ShortSetup.WATERFALL_COLLAPSE.value
+            or setup in ("waterfall_drop", "waterfall_collapse")
+            or "waterfall" in setup
+        )
+
+        pair = str(payload.get("pair") or "")
+        wf_cfg = DEFAULT_ETH_WATERFALL_FILTER if "ETH" in pair else DEFAULT_WATERFALL_FILTER
 
         # E. Market structure & headroom
         floor_dist = macro.get("floor_20d_dist_pct", 0.0)
         dist_ema50_1h = macro.get("ema_50_1h_dist_pct", 0.0)
         rsi_1h = macro.get("rsi_1h", 50.0)
         rel_vol = macro.get("rel_vol", 1.0)
-        is_vacuum = is_waterfall_setup and is_vacuum_breakdown(floor_dist, rel_vol)
+        is_vacuum = is_waterfall_setup and is_vacuum_breakdown(
+            floor_dist,
+            rel_vol,
+            vacuum_floor_dist_max=wf_cfg.vacuum_floor_dist_max,
+            min_surge_vol=wf_cfg.vacuum_min_vol_ratio,
+        )
 
         # Heavy penalty if ATR in extreme volatility zone (>90%)
         # Waived for waterfall ONLY during vacuum breakdown
-        if atr_pct >= 90.0:
+        if atr_pct > wf_cfg.max_atr_pct:
             if is_vacuum:
                 reasons.append(
                     f"High ATR volatility aligned with waterfall vacuum breakdown ({atr_pct:.1f}%)"
@@ -1263,9 +1280,16 @@ class JevDecisionEngine:
                 reasons.append(
                     f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)"
                 )
-            # Reversal trap penalty: Selling into hard floor (< 8%) or counter-wave
-            # Waived only if is_vacuum
-            elif not is_vacuum and (floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0)):
+
+            # Reversal / counter-trend guards:
+            # 1. 1H counter-wave trap: Price above 1H EMA50 with bullish RSI (>50).
+            # Never waived (even during vacuum breakdown).
+            if dist_ema50_1h > 0.0 and rsi_1h > 50.0:
+                confidence -= 0.10
+                reasons.append("Counter-trend trap on short (above 1H EMA50 with bullish RSI)")
+            # 2. Exhausted floor risk: Selling into hard floor (< 8%) without vacuum confirmation.
+            # Waived ONLY if is_vacuum.
+            elif not is_vacuum and floor_dist < 8.0:
                 confidence -= 0.10
                 reasons.append("Counter-trend trap or exhausted floor risk on short")
         elif side == "LONG":
