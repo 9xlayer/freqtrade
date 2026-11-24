@@ -941,6 +941,83 @@ class TestJevDecisionEngine(unittest.TestCase):
         self.assertEqual(v_trap["decision"], "VETO")
         self.assertTrue(any("Counter-trend trap" in r for r in v_trap["reasons"]))
 
+    def test_waterfall_vacuum_breakdown_decision_gate(self):
+        """Verify unified waterfall vacuum breakdown logic in JEV Decision Engine."""
+        native_engine = JevDecisionEngine(cache_db=":memory:", mode="native")
+
+        df_short = self.df_32.copy()
+        df_short["open"] = np.linspace(105, 100, 32)
+        df_short["close"] = np.linspace(104.8, 99.8, 32)
+        df_short["high"] = np.linspace(106, 101, 32)
+        df_short["low"] = np.linspace(104.5, 99.5, 32)
+        df_short.loc[df_short.index[-1], "open"] = 101.0
+        df_short.loc[df_short.index[-1], "high"] = 101.2
+        df_short.loc[df_short.index[-1], "low"] = 99.8
+        df_short.loc[df_short.index[-1], "close"] = 100.0
+
+        # Scenario 1: Clean floor breakdown (floor_dist <= 0.0) with high ATR (95%)
+        # Should: waive ATR penalty, award +0.10 floor bonus, avoid trap penalty -> CONFIRM
+        payload_clean = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="waterfall_drop"
+        )
+        payload_clean["macro_context"] = {
+            "floor_20d_dist_pct": -0.5,
+            "ema_50_1h_dist_pct": -1.0,
+            "rsi_1h": 40.0,
+            "trend_4h": "BEAR",
+            "short_score": 65.0,
+            "atr_percentile": 95.0,
+            "rel_vol": 1.2,
+        }
+        v_clean = native_engine.evaluate(payload_clean)
+        self.assertEqual(v_clean["decision"], "CONFIRM")
+        self.assertTrue(any("Waterfall clean floor breakdown" in r for r in v_clean["reasons"]))
+        self.assertTrue(
+            any("High ATR volatility aligned with waterfall vacuum" in r for r in v_clean["reasons"])
+        )
+
+        # Scenario 2: Near-floor buffer (0.3% > 0) WITHOUT volume surge (rel_vol 1.5 < 3.0)
+        # Should: NOT be vacuum -> ATR penalty (-0.20), floor trap penalty (-0.10), NO bonus -> VETO
+        payload_no_surge = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="waterfall_drop"
+        )
+        payload_no_surge["macro_context"] = {
+            "floor_20d_dist_pct": 0.3,
+            "ema_50_1h_dist_pct": -1.0,
+            "rsi_1h": 40.0,
+            "trend_4h": "BEAR",
+            "short_score": 65.0,
+            "atr_percentile": 95.0,
+            "rel_vol": 1.5,
+        }
+        v_no_surge = native_engine.evaluate(payload_no_surge)
+        self.assertEqual(v_no_surge["decision"], "VETO")
+        self.assertTrue(any("Extreme ATR volatility risk" in r for r in v_no_surge["reasons"]))
+        self.assertTrue(
+            any("Counter-trend trap or exhausted floor risk" in r for r in v_no_surge["reasons"])
+        )
+
+        # Scenario 3: Near-floor buffer (0.3% > 0) WITH strong volume surge (rel_vol 3.5 >= 3.0)
+        # Should: IS vacuum -> ATR penalty waived, trap penalty waived, but NO floor bonus (+0.10 only for <= 0.0)
+        payload_surge = CandleTrajectoryExtractor.build_payload(
+            df_short, "BTC/USDT:USDT", "short", setup="waterfall_drop"
+        )
+        payload_surge["macro_context"] = {
+            "floor_20d_dist_pct": 0.3,
+            "ema_50_1h_dist_pct": -1.0,
+            "rsi_1h": 40.0,
+            "trend_4h": "BEAR",
+            "short_score": 65.0,
+            "atr_percentile": 95.0,
+            "rel_vol": 3.5,
+        }
+        v_surge = native_engine.evaluate(payload_surge)
+        self.assertTrue(
+            any("High ATR volatility aligned with waterfall vacuum" in r for r in v_surge["reasons"])
+        )
+        self.assertFalse(any("Counter-trend trap" in r for r in v_surge["reasons"]))
+        self.assertFalse(any("Waterfall clean floor breakdown" in r for r in v_surge["reasons"]))
+
 
 class TestHunterExternalModelIdentity(unittest.TestCase):
     """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""

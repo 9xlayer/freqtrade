@@ -476,7 +476,9 @@ class StrategyMTFSniper(IStrategy):
             )
         return self._decision_adapter
 
-    def _jev_confirm_entry(self, pair: str, side: str, current_time: datetime) -> bool:
+    def _jev_confirm_entry(
+        self, pair: str, side: str, current_time: datetime, entry_tag: str | None = None
+    ) -> bool:
         """JEV Decision Gate for confirm_trade_entry (fail policy preserved)."""
         if not getattr(self, "enable_jev_decision", False):
             return True
@@ -495,7 +497,9 @@ class StrategyMTFSniper(IStrategy):
                     return False
                 return True
 
-            payload = decision.build_payload(df_window, pair, side, lookback=lookback)
+            payload = decision.build_payload(
+                df_window, pair, side, lookback=lookback, setup=entry_tag
+            )
             verdict = decision.evaluate(payload)
             logger.info(
                 f"Jev AI Verdict: {pair} {side.upper()} @ {current_time} -> "
@@ -720,7 +724,9 @@ class StrategyMTFSniper(IStrategy):
             closed_trades=Trade.get_trades_proxy(is_open=False),
             open_trades=Trade.get_trades_proxy(is_open=True),
             get_price=_get_price,
-            jev_confirm=lambda: self._jev_confirm_entry(pair, side, current_time),
+            jev_confirm=lambda: self._jev_confirm_entry(
+                pair, side, current_time, entry_tag=entry_tag
+            ),
             entry_tag=entry_tag,
             sensors_triggered=[entry_tag] if entry_tag else [],
             candidate_id=candidate_id or CANDIDATE_ID_MISSING,
@@ -739,23 +745,8 @@ class StrategyMTFSniper(IStrategy):
         current_profit: float,
         **kwargs,
     ):
-        from strategies.mtf_sniper.execution.exit_policy import (
-            evaluate_custom_exit,
-            resolve_market_row,
-        )
-
-        if not self.dp:
-            return None
-        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        row = resolve_market_row(df, current_time)
-        if row is None:
-            return None
-        return evaluate_custom_exit(
-            trade=trade,
-            current_time=current_time,
-            current_profit=current_profit,
-            row=row,
-        )
+        """Custom exit hook. Exits are strictly governed by custom_stoploss ladder & minimal_roi."""
+        return
 
     def custom_stoploss(
         self,

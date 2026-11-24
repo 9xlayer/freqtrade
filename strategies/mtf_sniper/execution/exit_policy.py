@@ -1,7 +1,8 @@
 """
-Exit policy helpers for custom_exit and confirm_trade_exit.
+Exit policy helpers for confirm_trade_exit and legacy custom_exit.
 
-Pure rules over a market row + trade state. Strategy only resolves the row.
+Active role: confirm_exit_allowed gates ROI exits for strong trend-runners.
+Position exit management is unified in risk/stoploss_ladder.py (use_exit_signal = False).
 """
 
 from __future__ import annotations

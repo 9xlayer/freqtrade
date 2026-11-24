@@ -1,34 +1,39 @@
 # Active Context
 
 ## Current focus
-**v4.5.0-waterfall** — Dual-Regime Waterfall, Pair-Specific ETH 4H Guard, 7Y Macro Validation & Zero-Lint Guardrails.
-- Bumped `STRATEGY_VERSION` in `strategies/mtf_sniper/__init__.py` to `4.5.0-waterfall`.
-- **7Y Historical Backtest Audit (`20200105-20261116`, 2506 days):**
-  - Downloaded 15m futures data for BTC/USDT and ETH/USDT back to 2020-01-01.
-  - Total Trades: **476** | Win Rate: **57.77%** (275W / 201L)
-  - Total Profit: **+$45,784.99 USDT (+4,578.50%)** on 1k initial compounding stake (final balance: $46,784.99 USDT).
-  - Profit Factor: **1.99** | Max Drawdown: **18.89%** (account closed trades).
-  - Key finding: 2020 gained +160% (+$1,596 USDT), 2021 bull market experienced whipsaw (-$1,999 USDT on 53 Long trades, PF 0.43) while Short setups remained profitable. Survived drawdown without liquidation and compounded to 46.7k by 2026.
-- **5Y Backtest Scorecard (`20220101-20261116`):**
-  - Trades: **344** | Win Rate: **57.85%** (199W / 145L)
-  - Total Profit: **+$77,412.93 USDT (+7,741.29%)**
-  - Max Drawdown: **18.89%** | Calmar: **439.90** | Sharpe: **1.35** | Sortino: **1.60**
-- Docker Telegram Proxy resolution: whitelisted `telegram.org,api.telegram.org` in `NO_PROXY`.
-- **VS Code Problems Tab & Linter Quality Gate (100% Resolved):**
-  - Resolved all 64 Ruff warnings on `scripts/lint_guardrails.py` (`UP035`, `UP006`, `UP045`, `PTH123`, `UP015`, `E501`, `C901`, `SIM102`, `PIE810`).
-  - Standardized trigger tag naming across setups and tests to snake_case: `short_A80_plus`, `short_B65_plus`, `long_A80_plus` (preserving legacy aliases for backwards compatibility).
-  - Cleaned all Pyrefly (`missing-attribute`, `bad-argument-type`) and Ruff (`C408`, `UP017`, `I001`, `F401`, `SIM118`) diagnostics across all test suites (`tests/strategy/`), bringing Pyright to 0 errors / 0 warnings and test suite to 100% clean.
-  - Integrated Meta Pyrefly (`LINT015`) into `scripts/lint_guardrails.py` with 0 errors / 0 warnings across all 18 strategy files.
-  - Codified formal architectural boundary rules in `scripts/lint_guardrails.py`:
-    - `LINT007`: Layer 0 (`core/`) absolute isolation from higher layers.
-    - `LINT008`: Layer 1 (`market/`) pure computing isolation from higher layers.
-    - `LINT009`: Anti-circular Facade dependency (no module may import `strategy_mtf_sniper`).
-    - `LINT016`: Immutability of inter-layer data contracts (`@dataclass(frozen=True)`).
-    - `LINT017`: Strategy Facade thinness (cables indicator calculation to market/sensors, no raw `talib` in strategy).
-    - `LINT018`: Sensor OOP inheritance (`*Sensor` must inherit `BaseSensor`).
-  - Locked 3-Layer Defense Gate: Pytest (`tests/strategy/test_architecture_guardrails.py`), Git Pre-Commit Hook (`.git/hooks/pre-commit`), and Agent Rituals (`AGENTS.md`).
-  - 414 strategy unit tests passing (`pytest tests/strategy` in 3.36s).
-  - All architectural guardrails passing (`scripts/lint_guardrails.py`, 0 violations).
+**v4.5.3-standardized-waterfall-vacuum** — Quantitative Standardization & Contract Alignment of Waterfall Vacuum Breakdown & JEV Decision Gate.
+- **Architectural Institutional Audit & Fixes (Nov 24, 2026):**
+  1. *Unified Vacuum Single Source of Truth (`is_vacuum_breakdown`)*:
+     - Pure function in `strategies/mtf_sniper/directional/short/policy.py`.
+     - Returns `True` iff `floor_dist_pct <= 0.0` (clean floor breakdown) OR (`0.0 < floor_dist_pct <= 0.5%` AND `rel_vol >= 3.0` volume surge).
+     - Removed fragile string matching (`"BREAKOUT" in event_trigger`) which could falsely fire on bullish breakouts.
+  2. *Replaced Magic Number (`vacuum_max_atr_pct = 101.0`)*:
+     - Disguised percentile threshold replaced with explicit boolean flag `ignore_atr_on_vacuum: bool = True` in `WaterfallFilterConfig`.
+  3. *Eliminated Contract Divergence in JEV Decision Gate*:
+     - JEV Decision Gate now strictly imports and evaluates `is_vacuum_breakdown(floor_dist, rel_vol)`.
+     - In near-floor buffer (`0.0 < floor_dist <= 0.5%`), surge $\ge 3.0\times$ is strictly required to waive the extreme ATR penalty (-0.20) and floor trap penalty (-0.10).
+     - Bonus `+0.10` is reserved **ONLY** for clean floor breakdowns (`floor_dist <= 0.0%`).
+  4. *Unmasked Test Guardrails*:
+     - `test_waterfall_climax_overextended_rejected` updated to `rsi = 30.0` (above the 24.0 floor) to verify climax overextension (`dist_ema50_4h <= -10%` / `dist_ema50_1d <= -20%`) asserts `REJECT_REGIME_INCOMPATIBLE`.
+     - Added `test_waterfall_near_floor_without_surge_rejected` and `test_waterfall_near_floor_with_surge_accepted`.
+     - Added `test_waterfall_vacuum_breakdown_decision_gate` in `test_jev_architecture.py`.
+  5. *Ablation Separation (Ladder vs Vacuum)*:
+     - Ladder stoploss frozen strictly at production `Var C Gentle` (`+18% -> lock +1%`, `+30% -> lock +10%`, `+50% -> lock +25%`, `+80% -> trail -0.25`, `+120% -> trail -0.20`).
+  6. *Honest Window-Separated Empirical Backtest Evidence*:
+     - **In-Sample Pre-Crash Baseline (`20220101-20261101`, 1765 days, artifact: `backtest-result-2026-11-24_09-05-04.zip`)**:
+       - Trades: 335 | Win Rate: 54.93% (184W / 151L)
+       - Total Profit: **+$142,778.07 USDT (+14,277.81%)** (unlimited compounding, initial wallet 1,000 USDT)
+       - Max Drawdown: **14.77%** ($19,720.09 USDT)
+       - Daily Wallet Sharpe: **1.44** | Sortino: **1.80** | Calmar: **1047.17**
+     - **November 2026 Out-of-Sample Window (`20261101-20261124`, 24 days, artifact: `backtest-result-2026-11-24_09-01-17.zip`)**:
+       - Trades: 3 | Win Rate: 66.7% (2W / 1L)
+       - Total Profit: **+$350.46 USDT (+35.05%)** (initial wallet 1,000 USDT)
+       - Max Drawdown: **9.48%** ($94.78 USDT)
+       - Nov 20, 2026 BTC crash capture: entered 15:15 UTC, exited 21:30 UTC for **+25.00% (+108.03 USDT)**.
+- **Quality & Guardrails Gate:**
+  - All 78 strategy and architecture unit tests pass (`test_jev_architecture`, `test_mtf_sniper_directional`).
+  - Ruff lint clean (0 violations).
+  - GitNexus change analysis complete.
 
 ## Evidence (2026-11-19: Waterfall Evolution 5Y 20220101-20261116)
 | Setup | Trades | PnL % | Profit abs (USDT) | Max DD | Calmar | Sharpe | Winrate |

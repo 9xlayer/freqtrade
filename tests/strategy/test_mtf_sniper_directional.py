@@ -6,7 +6,7 @@ import unittest
 from datetime import UTC, datetime
 
 from strategies.mtf_sniper.core.contracts import TradeCandidate
-from strategies.mtf_sniper.core.enums import TradeSide
+from strategies.mtf_sniper.core.enums import RejectionReasonCode, TradeSide
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
 from strategies.mtf_sniper.directional.long.policy import LongPolicy, LongPolicyConfig
 from strategies.mtf_sniper.directional.short.policy import ShortPolicy, ShortPolicyConfig
@@ -175,7 +175,7 @@ class TestShortPolicy(unittest.TestCase):
     def test_waterfall_climax_overextended_rejected(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
         cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
-        # Extreme oversold 4h (> -6%) and 1d (> -15%)
+        # Extreme oversold 4h (> -10%) and 1d (> -20%) with valid RSI
         row = {
             "open": 50000.0,
             "high": 50100.0,
@@ -183,16 +183,65 @@ class TestShortPolicy(unittest.TestCase):
             "close": 49200.0,
             "swing_low_20d_1d": 52000.0,  # floor_dist < 0
             "ema_50_4h": 55000.0,  # -10.5% (climax)
-            "ema_50_1d": 62000.0,
+            "ema_50_1d": 62000.0,  # -20.6% (climax)
             "ema_200_1d": 65000.0,
             "lower_wick_ratio": 0.15,
             "close_pos_ratio": 0.18,
-            "rsi": 22.0,
+            "rsi": 30.0,
             "ema_21": 49800.0,
             "short_score": 80.0,
         }
         result = policy.evaluate(cand, row)
         self.assertFalse(result.is_valid)
+        self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, result.reasons)
+
+    def test_waterfall_near_floor_without_surge_rejected(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
+        # Near floor (0.3% > 0) but volume surge is inadequate (rel_vol 1.5 < 3.0)
+        row = {
+            "open": 72800.0,
+            "high": 72900.0,
+            "low": 72100.0,
+            "close": 72216.0,
+            "swing_low_20d_1d": 72000.0,  # floor_dist = +0.3%
+            "rel_vol": 1.5,
+            "ema_50_4h": 74500.0,
+            "ema_50_1d": 78000.0,
+            "ema_200_1d": 75000.0,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 30.0,
+            "ema_21": 72600.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertFalse(result.is_valid)
+        self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, result.reasons)
+
+    def test_waterfall_near_floor_with_surge_accepted(self):
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
+        # Near floor (0.3% > 0) with strong volume surge (rel_vol 3.5 >= 3.0)
+        row = {
+            "open": 72800.0,
+            "high": 72900.0,
+            "low": 72100.0,
+            "close": 72216.0,
+            "swing_low_20d_1d": 72000.0,  # floor_dist = +0.3%
+            "rel_vol": 3.5,
+            "ema_50_4h": 74500.0,
+            "ema_50_1d": 78000.0,
+            "ema_200_1d": 75000.0,
+            "lower_wick_ratio": 0.10,
+            "close_pos_ratio": 0.10,
+            "rsi": 30.0,
+            "ema_21": 72600.0,
+            "short_score": 80.0,
+        }
+        result = policy.evaluate(cand, row)
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
 
     def test_waterfall_eth_rejected_above_ema50_4h(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))

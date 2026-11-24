@@ -15,14 +15,12 @@ def _ladder_stoploss_for_profit(
     if current_profit >= 1.20:
         return -0.20
     if current_profit >= 0.80:
-        return -0.30
+        return -0.25
     if current_profit >= 0.50:
         return stoploss_from_open(0.25, current_profit, is_short=is_short, leverage=lev)
-    if current_profit >= 0.35:
+    if current_profit >= 0.30:
         return stoploss_from_open(0.10, current_profit, is_short=is_short, leverage=lev)
-    if current_profit >= 0.20:
-        return stoploss_from_open(0.02, current_profit, is_short=is_short, leverage=lev)
-    if current_profit >= 0.14:
+    if current_profit >= 0.18:
         return stoploss_from_open(0.01, current_profit, is_short=is_short, leverage=lev)
     return None
 

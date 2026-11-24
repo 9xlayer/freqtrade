@@ -54,8 +54,9 @@ class JevDecisionAdapter:
         side: str,
         *,
         lookback: int = 32,
+        setup: str | None = None,
     ) -> dict[str, Any]:
-        return self._extractor.build_payload(dataframe, pair, side, lookback=lookback)
+        return self._extractor.build_payload(dataframe, pair, side, lookback=lookback, setup=setup)
 
     def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._force_native and self.mode == "external":

@@ -21,12 +21,32 @@ from strategies.mtf_sniper.directional.short.setups import (
 )
 
 
+def is_vacuum_breakdown(
+    floor_dist_pct: float,
+    rel_vol: float,
+    *,
+    vacuum_floor_dist_max: float = 0.5,
+    min_surge_vol: float = 3.0,
+) -> bool:
+    """
+    Unified definition of Waterfall Vacuum Breakdown (Single Source of Truth).
+    True if:
+      1. Price has cleanly broken the 20-day floor (floor_dist_pct <= 0.0)
+      2. OR price is within the near-floor buffer (0.0 < floor_dist_pct <= vacuum_floor_dist_max)
+         WITH strong volume surge confirmation (rel_vol >= min_surge_vol).
+    """
+    if floor_dist_pct <= 0.0:
+        return True
+    return floor_dist_pct <= vacuum_floor_dist_max and rel_vol >= min_surge_vol
+
+
 @dataclass(frozen=True)
 class WaterfallFilterConfig:
     min_body_ratio: float = 0.50
     max_atr_pct: float = 90.0
-    capitulation_climax_dist_ema50_4h: float = -6.0
-    capitulation_climax_dist_ema50_1d: float = -15.0
+    ignore_atr_on_vacuum: bool = True
+    capitulation_climax_dist_ema50_4h: float = -10.0
+    capitulation_climax_dist_ema50_1d: float = -20.0
     max_dist_ema50_4h: float = -3.5
     require_below_ema50_4h: bool = False
     max_dist_ema50_1d: float = -12.0
@@ -36,6 +56,16 @@ class WaterfallFilterConfig:
     high_floor_dist_threshold: float = 10.0
     high_floor_min_vol_ratio: float = 4.0
     high_floor_min_bb_width_4h: float = 0.06
+    # Dynamic EMA21 expansion (Declarative Dataclass)
+    ema21_base_dist_pct: float = 1.5
+    ema21_expanded_dist_pct: float = 1.6
+    ema21_expansion_min_body: float = 0.70
+    ema21_expansion_max_wick: float = 0.15
+    # Waterfall RSI Floor
+    min_rsi: float = 24.0
+    # Vacuum breakdown floor distance threshold (0.5% buffer)
+    vacuum_floor_dist_max: float = 0.5
+    vacuum_min_vol_ratio: float = 3.0
 
 
 DEFAULT_WATERFALL_FILTER = WaterfallFilterConfig()
@@ -164,7 +194,7 @@ class ShortPolicy:
         if is_waterfall:
             reasons.extend(self._check_waterfall_regime(candidate.pair, row, close))
 
-        reasons.extend(self._check_standard_filters(row, close, is_waterfall))
+        reasons.extend(self._check_standard_filters(row, close, is_waterfall, pair=candidate.pair))
 
         short_score = float(
             candidate.raw_features.get("short_score", row.get("short_score", 0.0)) or 0.0
@@ -228,9 +258,14 @@ class ShortPolicy:
         macdhist_4h = float(row.get("macdhist_4h", 0.0) or 0.0)
         bb_width_4h = float(row.get("bb_width_4h", 0.05) or 0.05)
         vol_ratio = float(row.get("rel_vol", 1.0) or 1.0)
+        is_vacuum = is_vacuum_breakdown(
+            floor_dist_pct,
+            vol_ratio,
+            vacuum_floor_dist_max=wf_cfg.vacuum_floor_dist_max,
+            min_surge_vol=wf_cfg.vacuum_min_vol_ratio,
+        )
 
-        is_vacuum_breakdown = floor_dist_pct <= 0.0
-        if is_vacuum_breakdown:
+        if is_vacuum:
             is_capitulation_climax = (
                 dist_ema50_4h < wf_cfg.capitulation_climax_dist_ema50_4h
                 or dist_ema50_1d < wf_cfg.capitulation_climax_dist_ema50_1d
@@ -263,17 +298,26 @@ class ShortPolicy:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         atr_pct = float(row.get("atr_pct", 50.0) or 50.0)
-        if atr_pct >= wf_cfg.max_atr_pct:
-            reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+        if is_vacuum:
+            if not wf_cfg.ignore_atr_on_vacuum and atr_pct > wf_cfg.max_atr_pct:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+        else:
+            if atr_pct > wf_cfg.max_atr_pct:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         return reasons
 
     def _check_standard_filters(
-        self, row: Mapping[str, Any], close: float, is_waterfall: bool
+        self,
+        row: Mapping[str, Any],
+        close: float,
+        is_waterfall: bool,
+        pair: str = "",
     ) -> list[str]:
         reasons: list[str] = []
         cfg = self.config
         hg = DEFAULT_SHORT_HUNTER_GATES
+        wf_cfg = self.config.get_waterfall_config(pair) if is_waterfall else None
 
         if cfg.filter_wick_rejection:
             lower_wick = float(row.get("lower_wick_ratio", 0.0) or 0.0)
@@ -286,14 +330,33 @@ class ShortPolicy:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
         rsi = float(row.get("rsi", 50.0) or 50.0)
-        rsi_floor = hg.min_rsi if is_waterfall else cfg.min_rsi_entry
+        rsi_floor = (
+            wf_cfg.min_rsi
+            if (is_waterfall and wf_cfg)
+            else (hg.min_rsi if is_waterfall else cfg.min_rsi_entry)
+        )
         if rsi < rsi_floor:
             reasons.append(RejectionReasonCode.REJECT_RSI_OVEREXTENDED.value)
 
         ema_21 = row.get("ema_21")
         if ema_21 is not None and float(ema_21) > 0:
             dist_pct = (float(ema_21) - close) / close * 100.0
-            max_dist = (hg.max_dist_ema21_below * 100.0) if is_waterfall else cfg.max_dist_ema21_pct
+            if is_waterfall and wf_cfg:
+                c_range = float(row.get("high", 0.0) - row.get("low", 0.0))
+                c_body = float(abs(row.get("close", 0.0) - row.get("open", 0.0)))
+                body_ratio = c_body / c_range if c_range > 0 else 0.5
+                lower_wick = float(row.get("lower_wick_ratio", 0.0) or 0.0)
+                is_solid_dump = (
+                    body_ratio >= wf_cfg.ema21_expansion_min_body
+                    and lower_wick <= wf_cfg.ema21_expansion_max_wick
+                )
+                max_dist = (
+                    wf_cfg.ema21_expanded_dist_pct if is_solid_dump else wf_cfg.ema21_base_dist_pct
+                )
+            else:
+                max_dist = (
+                    (hg.max_dist_ema21_below * 100.0) if is_waterfall else cfg.max_dist_ema21_pct
+                )
             if dist_pct > max_dist:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
@@ -301,11 +364,22 @@ class ShortPolicy:
         floor_min = hg.floor_dist_min if is_waterfall else cfg.floor_dist_min
         if sw_low is not None and float(sw_low) > 0:
             floor_dist = (close - float(sw_low)) / float(sw_low)
-            floor_safe = (
-                (floor_dist >= floor_min or floor_dist < 0.0)
-                if is_waterfall
-                else (floor_dist >= floor_min)
-            )
+            floor_dist_pct = floor_dist * 100.0
+            vol_ratio = float(row.get("rel_vol", 1.0) or 1.0)
+            if is_waterfall and wf_cfg:
+                is_vacuum = is_vacuum_breakdown(
+                    floor_dist_pct,
+                    vol_ratio,
+                    vacuum_floor_dist_max=wf_cfg.vacuum_floor_dist_max,
+                    min_surge_vol=wf_cfg.vacuum_min_vol_ratio,
+                )
+                floor_safe = floor_dist >= floor_min or is_vacuum
+            else:
+                floor_safe = (
+                    (floor_dist >= floor_min or floor_dist < 0.0)
+                    if is_waterfall
+                    else (floor_dist >= floor_min)
+                )
             if not floor_safe:
                 reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
         elif is_waterfall:

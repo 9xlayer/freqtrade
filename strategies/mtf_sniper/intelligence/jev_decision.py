@@ -43,6 +43,7 @@ from strategies.mtf_sniper import (
 from strategies.mtf_sniper import (
     DECISION_PROMPT_VERSION_NATIVE as PROMPT_VERSION_NATIVE,
 )
+from strategies.mtf_sniper.directional.short.policy import is_vacuum_breakdown
 
 
 MODEL_VERSION_EXTERNAL = os.environ.get(
@@ -464,6 +465,9 @@ class CandleTrajectoryExtractor:
             float(last.get("short_score", 50.0)) if not pd.isna(last.get("short_score")) else 50.0
         )
         atr_pct = float(last.get("atr_pct", 50.0)) if not pd.isna(last.get("atr_pct")) else 50.0
+        rel_vol = (
+            float(last.get("rel_vol", 1.0)) if not pd.isna(last.get("rel_vol")) else 1.0
+        )
 
         return {
             "current_price": c,
@@ -476,11 +480,17 @@ class CandleTrajectoryExtractor:
             "long_score": long_score,
             "short_score": short_score,
             "atr_percentile": atr_pct,
+            "rel_vol": rel_vol,
         }
 
     @classmethod
     def build_payload(
-        cls, df: DataFrame, pair: str, side: str, lookback: int = 32
+        cls,
+        df: DataFrame,
+        pair: str,
+        side: str,
+        lookback: int = 32,
+        setup: str | None = None,
     ) -> dict[str, Any]:
         """
         Packages payload for Jev Decision Engine.
@@ -490,6 +500,7 @@ class CandleTrajectoryExtractor:
         - normalized timestamp
         - side ("LONG" / "SHORT")
         - pair
+        - setup
         - trajectory_sequence
         - macro_context
         - payload_hash (cho version-aware cache)
@@ -501,6 +512,7 @@ class CandleTrajectoryExtractor:
                 "side": side.upper(),
                 "timeframe": "15m",
                 "current_price": 0.0,
+                "setup": setup or "",
                 "macro_context": {},
                 "trajectory_sequence": [],
                 "payload_hash": "",
@@ -517,7 +529,11 @@ class CandleTrajectoryExtractor:
         macro_repr = json.dumps(macro_ctx, sort_keys=True, default=str)
         traj_hash = hashlib.sha256(traj_repr.encode("utf-8")).hexdigest()[:12]
         macro_hash = hashlib.sha256(macro_repr.encode("utf-8")).hexdigest()[:12]
-        hash_seed = f"{pair}_{ts}_15m_{side.upper()}_{current_price:.4f}_{traj_hash}_{macro_hash}_{ENGINE_VERSION}"
+        setup_tok = (setup or "").lower().strip()
+        hash_seed = (
+            f"{pair}_{ts}_15m_{side.upper()}_{setup_tok}_{current_price:.4f}_"
+            f"{traj_hash}_{macro_hash}_{ENGINE_VERSION}"
+        )
         payload_hash = hashlib.sha256(hash_seed.encode("utf-8")).hexdigest()[:16]
 
         return {
@@ -526,6 +542,7 @@ class CandleTrajectoryExtractor:
             "side": side.upper(),
             "timeframe": "15m",
             "current_price": current_price,
+            "setup": setup or "",
             "macro_context": macro_ctx,
             "trajectory_sequence": traj_seq,
             "payload_hash": payload_hash,
@@ -1213,25 +1230,42 @@ class JevDecisionEngine:
             confidence += 0.10
             reasons.append(f"AI Lens Confluence Score strong ({score:.1f})")
 
-        # Heavy penalty if ATR in extreme volatility zone (>90%)
-        if atr_pct >= 90.0:
-            confidence -= 0.20
-            reasons.append(f"Extreme ATR volatility risk ({atr_pct:.1f}%)")
+        raw_setup = payload.get("setup") or ""
+        setup = raw_setup.lower() if isinstance(raw_setup, str) else ""
+        is_waterfall_setup = "waterfall" in setup
 
         # E. Market structure & headroom
         floor_dist = macro.get("floor_20d_dist_pct", 0.0)
         dist_ema50_1h = macro.get("ema_50_1h_dist_pct", 0.0)
         rsi_1h = macro.get("rsi_1h", 50.0)
+        rel_vol = macro.get("rel_vol", 1.0)
+        is_vacuum = is_waterfall_setup and is_vacuum_breakdown(floor_dist, rel_vol)
+
+        # Heavy penalty if ATR in extreme volatility zone (>90%)
+        # Waived for waterfall ONLY during vacuum breakdown
+        if atr_pct >= 90.0:
+            if is_vacuum:
+                reasons.append(
+                    f"High ATR volatility aligned with waterfall vacuum breakdown ({atr_pct:.1f}%)"
+                )
+            else:
+                confidence -= 0.20
+                reasons.append(f"Extreme ATR volatility risk ({atr_pct:.1f}%)")
 
         if side == "SHORT":
-            # Confluence bonus: Large headroom (>= 15% above 20D floor) + Price < EMA50 1H + Bearish RSI 1H (< 50)
-            if floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
+            if is_waterfall_setup and floor_dist <= 0.0:
+                confidence += 0.10
+                reasons.append(
+                    f"Waterfall clean floor breakdown confirmed (floor_dist <= {floor_dist:.1f}%)"
+                )
+            elif floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
                 confidence += 0.10
                 reasons.append(
                     f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)"
                 )
             # Reversal trap penalty: Selling into hard floor (< 8%) or counter-wave
-            elif floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0):
+            # Waived only if is_vacuum
+            elif not is_vacuum and (floor_dist < 8.0 or (dist_ema50_1h > 0.0 and rsi_1h > 50.0)):
                 confidence -= 0.10
                 reasons.append("Counter-trend trap or exhausted floor risk on short")
         elif side == "LONG":

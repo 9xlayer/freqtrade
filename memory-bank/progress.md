@@ -4,6 +4,20 @@
 - Part sensors + SetupComposer recipes (`setup:sniper_short/long`)
 - Vectorized AND fast path in `EntryPipeline` (BT-safe)
 - Policy setup-only ACCEPT; live Hunter off
+- **Waterfall Vacuum Breakdown Standardization & Contract Unification (v4.5.3)**:
+  - Unified Single Source of Truth `is_vacuum_breakdown`: Pure function in `ShortPolicy`, shared directly with `JevDecisionEngine`. Requires `floor_dist_pct <= 0` or (`floor_dist_pct <= 0.5%` with `rel_vol >= 3.0` volume surge).
+  - Clean boolean `ignore_atr_on_vacuum: bool = True` replaces disguised magic percentile `vacuum_max_atr_pct = 101.0`.
+  - JEV Decision Gate asymmetry eliminated: bonus `+0.10` reserved strictly for clean floor breakdowns (`floor_dist <= 0`); near-floor buffer without surge retains `-0.10` floor trap and `-0.20` extreme ATR penalties.
+  - Frozen ladder trailing stop (production `Var C Gentle`), isolating entry vacuum edge from exit variations.
+  - **In-Sample Backtest Baseline (`20220101-20261101`, 335 trades, artifact: `backtest-result-2026-11-24_09-05-04.zip`)**:
+    - **+142,778.07 USDT (+14,277.81%)**, **54.93% WR**, **14.77% Max DD**, Sharpe: 1.44, Sortino: 1.80, Calmar: 1047.17.
+  - **Out-of-Sample November Flash Crash Window (`20261101-20261124`, 3 trades, artifact: `backtest-result-2026-11-24_09-01-17.zip`)**:
+    - **+350.46 USDT (+35.05%)**, **66.7% WR**, **9.48% Max DD**. Nov 20, 2026 BTC flash crash captured (+25.00%, +108.03 USDT).
+- **Unified Risk Engine (`custom_stoploss`) & Gentle Trailing Stop (Var C)**:
+  - Eliminated dead code in `custom_exit` (`strategy_mtf_sniper.py`), unifying all trade lifecycle exits in `stoploss_ladder.py`.
+  - Tuned trailing stop ladder with gentle thresholds (`+18% BE`, `+30% lock +10%`, `+50% lock +25%`, `+80% trail 0.25`, `+120% trail 0.20`), increasing 7Y PnL by +43% (+$40,978.99 USDT) and lowering Max DD to 31.96%.
+  - Overextension protection: Preserved `long_overextended_dist_max = 0.53` as essential macro crash shield.
+- **7Y 2020-2026 Backtest Proven (`20200101-20260331`)**: 432 trades, **+40,978.99 USDT (+4,097.90%)**, **Max DD: 31.96%**, **WR: 53.7%** (232W / 200L). Sharpe: 1.03, Sortino: 1.24, Calmar: 107.63.
 - **Dual-Regime Native Waterfall + ETH Pair Tuning**:
   - Regime A (Vacuum Breakdown `floor_dist <= 0`): Price breaks 20-day swing low, free-fall momentum permitted unless in capitulation selling climax (`dist_ema50_4h >= -6.0%`, `dist_ema50_1d >= -15.0%`).
   - Regime B (In-Range Breakdown `floor_dist > 0`): High-confidence momentum filters: not overextended (`dist_ema50_4h >= -3.5%`, `dist_ema50_1d >= -12.0%`), not macro bull (`dist_ema200_1d <= 5.0%`), 4H MACD histogram <= 35.0, 4H volatility expanding (`bb_width_4h >= 0.035`), high floor guard.
