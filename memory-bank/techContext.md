@@ -37,11 +37,14 @@
 ```bash
 JEV_API_KEY=...
 JEV_API_URL=https://api.typesafe.ai/v1/systemone
-JEV_MODE=native|external|backtest
-JEV_FAIL_POLICY=allow|reject|...
-JEV_CONFIRM_THRESHOLD=0.60
+MTF_RUNTIME_MODE=decision_external   # Docker production; use deterministic for local BT
+JEV_MODE=external                    # native|external|backtest (external in Docker)
+JEV_FAIL_POLICY=fallback_native      # allow|reject|fallback_native
+JEV_CONFIRM_THRESHOLD=0.70
 ENABLE_JEV_DECISION=true
 ENABLE_JEV_HUNTER=false
+ENABLE_WATERFALL=true
+ENABLE_DYNAMIC_SIZING=true
 JEV_HUNTER_MODEL_VERSION=jev-latest   # optional override when Hunter re-enabled
 ```
 

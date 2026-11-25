@@ -4,6 +4,15 @@
 - Part sensors + SetupComposer recipes (`setup:sniper_short/long`)
 - Vectorized AND fast path in `EntryPipeline` (BT-safe)
 - Policy setup-only ACCEPT; live Hunter off
+- **System Review Hardening (Nov 25, 2026)**:
+  - Fixed `circuit_breaker_blocks` UTC timestamp handling, backtest `LocalTrade` (`strategy=""`) parity, non-overlapping streak reset after pause, and correlated cross-pair entry loss deduplication.
+  - Filtered `_remember_accepted_candidates` post-cooldown/conflict, wired `EntryPipeline.live` policy params, fixed `ShortPolicy` waterfall scoring floor, and made `tag_*_sniper` duplicate-index-safe.
+  - Synced `jev_fail_policy` across Strategy/Adapter/Engine, fixed ETH base-asset check, added real AI/stake/`wallet_equity` telemetry + 15m reject-burst deduplication, bounded `DecisionLedger`/`TradeLedger` buffers + 10 MiB JSONL rotation (`telemetry/jsonl_io.py`), and lowered Docker `JEV_API_TIMEOUT` default to `4`s.
+  - Cleaned dead/lint debt: removed dead `evaluate_custom_exit()`, trimmed unused `RejectionReasonCode` members, extracted `MomentumRadar` into `signals/momentum_radar.py`, fixed `E402`/`F841`/`PTH`/`S112` in `intelligence/jev_*.py` (tightened `pyproject.toml`), and added `tests/strategy/test_mtf_config_resolve.py`.
+  - Fail-closed logic hardening: blocked `NaN`/`Inf`/`close <= 0` bypasses in `ShortPolicy`/`LongPolicy` & `EntryPipeline`, stopped `CandleTrajectoryExtractor` from classifying missing `swing_low_20d_1d` as vacuum breakdown (`floor_20d_valid`), deduplicated same-bar `EntryPipeline.accepted`, and hardened `portfolio_protection.py` against `None`/`NaN` `close_profit` and invalid prices.
+  - 1D Counter-Trend Stake Scaling & Config Standardization (`resolve_counter_1d_scale`, `0.50x`): reduced counter-1D Long stake by 50% when `macdhist_1d <= 0` or `ema_50_1d <= ema_200_1d` (and Short stake by 50% when `is_macro_bull_run_1d == 1.0`), exposed `counter_1d_stake_scale` as a hyperoptable `DecimalParameter` + `strategy_mtf_sniper.json`, and centralized `resolve_strategy_switches`, `merge_pair_overrides`, `tag_multipliers`, `default_leverage`, and `EffectiveConfig` (`enable_waterfall`, `filter_params`, `sizing_params`) in `core/config_resolve.py`.
+  - Live exchange position auto-sync (`bot_loop_start` -> `_sync_live_exchange_positions`, `exchange_sync_interval_secs=15`): refreshes live wallets/positions every 15s when filled trades are open so manual exchange closes trigger Freqtrade `handle_onexchange_order` immediately instead of waiting up to 3600s.
+  - Verified (`20220101-20261124`, `JEV_MODE=native`, cache=none): **334 trades**, **+184,121.66 USDT (+18,412.17%)**, **55.1% WR**, **14.42% Max DD (wallet)** (down from 19.20%), **PF 2.56**, **Sharpe 1.57**, **Sortino 1.96**, **Calmar 1365.48**, **SQN 2.67**. Tests: **444 passed, 1 skipped**; guardrails & Ruff clean.
 - **Waterfall Vacuum Breakdown Standardization & Reviewer Feedback Alignment (v4.5.3)**:
   - Justified and tested Climax overextension thresholds `-10.0% / -20.0%` for Vacuum Breakdown: Prevents premature throttling of true free-fall momentum when price drops >20-day swing low, lowering 5Y Max Drawdown to 14.77% (vs 21.62% with -6%).
   - Added unit test suite in `TestStoplossLadder` verifying exact stoploss outputs across every profit tier.
@@ -49,7 +58,7 @@
 - Entry pipeline duplicate-index write fix: iloc/numpy only for enter_*/tag/summary
 - Next: deterministic BT on real data — identity + entry positional closed
 - Hunter / Momentum Radar still out of scope
-- External Decision: no Pareto-feasible prompt on 5Y (richctx best PnL but ~99% confirm; calibrated has bite but −PnL) — do not default `decision_external`
+- External Decision: pure binary gate was NO_SHIP on 5Y, superseded by Hybrid Decision Score (`w_ai=0.10`, `fallback_native`); **Docker production intentionally runs `decision_external`**, while local backtests stay deterministic (`JEV_MODE=native`)
 
 ## BT evidence (wallet 1000, hunter off, commit `504bb31`, timerange `20220101-20261116`)
 - Live Decision ON: 204 trades, +3462.93% (+34,629 USDT), WR 60.8%, DD 25.43%, PF 2.18

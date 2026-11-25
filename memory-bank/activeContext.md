@@ -1,6 +1,44 @@
 # Active Context
 
 ## Current focus
+**v4.5.4-review-hardening** — System Review Fixes, Telemetry Hardening & Live-Parity Verification (Nov 25, 2026):
+- **Portfolio Protection (`risk/portfolio_protection.py`)**:
+  - Normalized naive UTC `close_date` vs UTC-aware `current_time` (`_to_utc_timestamp` / `close_date_utc`) so circuit-breaker pause windows never shift by local OS timezone.
+  - Included backtest `LocalTrade` rows with `strategy == ""` in `filter_strategy_trades` (keeping `strategy=None` and foreign strategy names excluded) to restore backtest–live parity.
+  - Fixed Circuit Breaker design flaws (`_compute_pause_until`, `_is_correlated_loss`): reset streak counter after triggering a pause window (preventing 1-loss cascading re-bans) and deduplicated simultaneous cross-pair entries on the same side (`<= 1h` open window).
+- **Entry Pipeline & Waterfall Policy (`execution/entry_pipeline.py`, `directional/short/policy.py`, `directional/*/setups.py`)**:
+  - Wired strategy policy parameters into `EntryPipeline.live` (`filter_wick_rejection`, `max_rejection_wick_ratio`, `max_close_pos_ratio_*`, RSI/EMA distance caps, PDH filter).
+  - Moved `_remember_accepted_candidates` & `mtf_sniper_accepted_candidates` filtering after `apply_cooldown` and Long/Short conflict cancellation so suppressed bars never overwrite active `candidate_id`s in `CandidateRegistry`.
+  - Fixed Waterfall scoring paradox in `ShortPolicy.evaluate` (`base = max(0.70, raw_base)` when `short_score > 0`) so passing waterfall collapses are not rejected below missing-score (`0 -> 0.85`).
+  - Converted `tag_short_sniper` / `tag_long_sniper` to positional numpy indexing (safe under duplicate DataFrame index labels).
+- **JEV Fail Policy, Telemetry & Ops Hardening (`strategy_mtf_sniper.py`, `decision_adapter.py`, `jev_decision.py`, `risk_engine.py`, `telemetry/`, `docker-compose.yml`)**:
+  - Propagated `jev_fail_policy` from `StrategyMTFSniper` through `JevDecisionAdapter` to `JevDecisionEngine` and aligned `"safe"` fail-closed semantics.
+  - Replaced `"ETH" in pair` substring matching with base-asset check (`ETH` only, preventing false match on `ETHFI`, etc.).
+  - Enriched `RiskEngine.authorize_entry` with structured AI verdict telemetry (`ai_verdict`, `ai_confidence`, `ai_model_version`, `market_regime`, `policy_score`), real `proposed_stake` & `wallet_equity` from `confirm_trade_entry`, and deduplicated repeated reject bursts within the same 15m candle.
+  - Bounded `DecisionLedger` / `TradeLedger` RAM buffers (`deque(maxlen=2000)`) and added 10 MiB JSONL rotation (`telemetry/jsonl_io.py`); lowered default `JEV_API_TIMEOUT` in `docker-compose.yml` from `10`s to `4`s to avoid blocking the 5s throttle loop.
+- **Dead/Bad Code Cleanup (Nov 25, 2026)**:
+  - Removed dead `evaluate_custom_exit()` from `execution/exit_policy.py`, `execution/__init__.py`, and `tests/strategy/test_mtf_sniper_exit_policy.py` (runtime uses `risk/stoploss_ladder.py` + `exit_policy.confirm_exit_allowed`).
+  - Removed 3 unused `RejectionReasonCode` enum members (`AI_VETO_CHOPPY_REGIME`, `AI_FAIL_SAFE_REJECT`, `RISK_INSUFFICIENT_LIQUIDATION_BUFFER`) from `core/enums.py`.
+  - Extracted `MomentumRadar` out of dormant `intelligence/jev_entry_hunter.py` into `signals/momentum_radar.py` (with compatibility re-export kept in `jev_entry_hunter.py`), decoupling `execution/entry_pipeline.py` and `intelligence/hunter_adapter.py`.
+  - Fixed `E402`, `F841`, `I001`, `PTH`, and silent-except `S112` lint debt in `intelligence/jev_decision.py` / `jev_entry_hunter.py` and removed `"PTH"`, `"E402"`, `"F841"` from `pyproject.toml` per-file-ignores.
+  - Added unit tests for `core/config_resolve.py` in `tests/strategy/test_mtf_config_resolve.py`.
+- **1D Counter-Trend Stake Scaling & Config Standardization (Nov 25, 2026)**:
+  - Implemented `COUNTER_1D_TREND_STAKE_SCALE = 0.50` via `resolve_counter_1d_scale` in `strategies/mtf_sniper/risk/position_sizing.py`, exposed `counter_1d_stake_scale` (`DecimalParameter(0.25, 1.00, default=0.50, decimals=2, space="buy", optimize=True)` + `strategy_mtf_sniper.json`), plus centralized `resolve_strategy_switches`, `merge_pair_overrides`, `tag_multipliers`, `default_leverage`, and expanded `EffectiveConfig` (`enable_waterfall`, `filter_params`, `sizing_params`) in `core/config_resolve.py` (hyperopt-safe: `strategy_params.counter_1d_stake_scale` does not clobber hyperopt trials).
+- **Fail-Closed & Data-Integrity Hardening (Nov 25, 2026)**:
+  - Fixed `NaN`/`Inf` fail-open bypasses in `ShortPolicy` & `LongPolicy` (`directional/common_gates.py`: `has_invalid_numeric`, `read_finite_float`, `finite_series_mask`) and guarded `close <= 0` division.
+  - Gated `MomentumRadar` waterfall scan in `EntryPipeline` by `data_ready_mask` + finite waterfall indicators, and deduplicated same-bar `accepted` entries per `(side, pos)` so duplicate bars never overwrite `CandidateRegistry`.
+  - Fixed fake vacuum classification in `CandleTrajectoryExtractor.extract_macro_context` & `JevDecisionEngine._evaluate_native_sequence` via `floor_20d_valid` when `swing_low_20d_1d` is missing/`NaN`/`<= 0`.
+  - Hardened `_compute_pause_until` & `distress_guard_blocks` in `risk/portfolio_protection.py` to skip `None`/`NaN` `close_profit` or non-finite prices instead of resetting streak or evaluating `NaN`.
+- **Live Exchange Position Auto-Sync (Nov 25, 2026)**:
+  - Added `bot_loop_start()` -> `_sync_live_exchange_positions()` in `strategies/mtf_sniper/strategy_mtf_sniper.py` controlled by `exchange_sync_interval_secs` (`15s` default in `config_resolve.py`, `user_data/config.json`, `docker/config.mtf_sniper.json`). When running `live` (`dry_run=False`) with at least one filled open position, refreshes `self.wallets.update(require_update=True)` every 15s before `manage_open_orders` / `exit_positions` so manual exchange closes trigger `handle_onexchange_order` immediately instead of waiting for Freqtrade's 3600s cache TTL.
+- **Verification (Nov 25, 2026)**:
+  - `pytest -q tests/strategy/`: **444 passed, 1 skipped**; `scripts/lint_guardrails.py`: **0 violations**; `ruff check`: clean.
+  - **Honest Live-Parity Backtest (`20220101-20261124`, `JEV_MODE=native`, `MTF_RUNTIME_MODE=deterministic`, cache=none)**:
+    - 334 trades (**55.1% WR**: 184W/150L), **+184,121.66 USDT (+18,412.17%)**, **14.42% Max DD (wallet)** (down from 19.20%), **PF 2.56**, **Sharpe 1.57**, **Sortino 1.96**, **Calmar 1365.48**, **SQN 2.67**.
+  - Earlier baseline (`20220101-20261101`, `JEV_MODE=native`, `MTF_RUNTIME_MODE=deterministic`, cache=none):
+    - 330 trades (**55.2% WR**: 182W/148L), **+149,375.82 USDT (+14,937.58%)**, **14.77% Max DD (wallet)** / 21.35% closed-trade DD, PF **2.03**, Sharpe **1.45**, Sortino **1.81**, Calmar **1095.64**.
+    - Circuit Breaker fired **7** times cleanly (eliminating cascading 1-loss re-bans & BTC+ETH double-counting that had cut PnL to +70,230 USDT on 323 trades), outperforming the CB-disabled `v4.5.3` run (+142,778 USDT / 54.9% WR) with identical 14.77% wallet Max DD and true live parity.
+
 **v4.5.3-standardized-waterfall-vacuum** — Quantitative Standardization, Reviewer Alignment & Guardrail Hardening:
 - **Reviewer Feedback Addressed & Fully Resolved (Nov 24, 2026):**
   1. *Climax Threshold Spec Justification & Boundary Testing*:
@@ -74,7 +112,7 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 
 ## Versions
 - Single hub: `strategies/mtf_sniper/__init__.py`
-- `STRATEGY_VERSION` `4.4.1-deterministic` / Decision engine `2.7.2` / Hunter `2.7.0`
+- `STRATEGY_VERSION` `4.5.0-waterfall` / Decision engine `2.7.2` / Hunter `2.7.0`
 - External prompt A/B via `JEV_DECISION_PROMPT_VARIANT` (default `richctx`); cache identity per suffix
 
 ## External Decision prompt A/B (2026-11-19, 5Y `20220101-20261116`)
@@ -101,9 +139,10 @@ Pareto required: PnL ≥ max(OFF, native), DD ≤ OFF+0.5pp, confirm_rate ∈ [5
 
 ## Deploy (Coolify / Docker Compose)
 - Image bakes `strategies/mtf_sniper` + `docker/config.mtf_sniper.json` overlay
-- **Scenario B Active:** `mtf_runtime_mode: decision_external`, `JEV_MODE=external`
-- `JEV_CONFIRM_THRESHOLD=0.70`, `JEV_FAIL_POLICY=fallback_native`
+- **Docker Production Profile (Intentional):** `mtf_runtime_mode: decision_external`, `JEV_MODE=external`, `ENABLE_WATERFALL=true`, `ENABLE_DYNAMIC_SIZING=true`
+- `JEV_CONFIRM_THRESHOLD=0.70`, `JEV_FAIL_POLICY=fallback_native` (Hybrid AI score with native heuristic fallback)
 - `JEV_DECISION_WEIGHT_AI=0.10`, `JEV_DECISION_CHOPPY_PENALTY=0.05`
+- Local backtests stay deterministic (`JEV_MODE=native` / `MTF_RUNTIME_MODE=deterministic`)
 - Compose command: dual `--config` + `--strategy-path …/mtf_sniper`
 - Mounted host config may still be stale; overlay forces correct path and runtime mode
 
@@ -148,7 +187,7 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Regression: `test_mtf_entry_pipeline_duplicate_index.py`
 
 ## Next
-- Coolify redeploy when ready (keep `deterministic` + native Decision ON for Ep46)
+- Coolify redeploy when ready (`decision_external` + Hybrid Decision Score with `fallback_native`, `enable_waterfall=true`, `enable_dynamic_sizing=true`)
 - Ops gap remains: live/Docker restart with open trade
-- External Decision only as explicit experiment (`decision_external` + variant env) — not production default
-- Hunter / Momentum Radar / AI-as-score-feature still deferred
+- Keep local backtests on `JEV_MODE=native` / `MTF_RUNTIME_MODE=deterministic` for reproducibility
+- Hunter / Momentum Radar / AI-as-score-feature still deferred on live entry pipeline

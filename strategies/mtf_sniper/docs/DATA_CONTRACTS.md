@@ -117,10 +117,11 @@ return bool(auth.is_approved)
 | Field | Live meaning on confirm path |
 |---|---|
 | `is_approved` | **Only field Strategy uses** to allow/deny entry |
-| `stake_amount` | **Not** the live order stake — confirm does **not** pass `proposed_stake` / `max_stake`, so this is typically **`0.0`** |
-| `leverage` | Metadata from authorize defaults (`max_leverage` → target 10x), **not** the leverage Freqtrade applied via `leverage()` |
+| `stake_amount` | Diagnostic echo of estimated stake (`amount * rate / lev`, `enable_dynamic_sizing=False` in `authorize_entry` so `custom_stake_amount` is never double-multiplied); `0.0` if `amount`/`rate` unavailable |
+| `leverage` | Target leverage (`get_leverage(None)` -> `10.0`) passed for exposure telemetry, **not** applied to order directly |
 | `stoploss_rate` | Pair/default SL passed into authorize (context only) |
 | `risk_budget_used_pct` / `risk_per_trade_pct` | **`None`** — stop-distance risk sizing **not** implemented |
+| `wallet_equity` / `total_exposure_pct` | Populated from `self.wallets.get_total(stake_currency)` when available; **`None`** when unavailable |
 | `sizing_method` | Label `"freqtrade_proposed"`; not proof that authorize sized the order |
 | other fields | Portfolio / fingerprint / exposure metadata — see `core/contracts.py` |
 
@@ -132,8 +133,8 @@ return bool(auth.is_approved)
 |---|---|---|
 | `leverage()` | `RiskEngine.get_leverage(max_leverage)` | `min(target_leverage, max_leverage)`; target default **10x** |
 | `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Keeps Freqtrade `proposed_stake`, capped by `max_stake` |
-| | | `enable_dynamic_sizing=False` (default) → multiplier **1.0** |
-| | | If dynamic sizing **on** → tag multipliers from `_TAG_MULTIPLIERS`, then `min(proposed * mult, max_stake)` |
+| | | `enable_dynamic_sizing=False` (Python default) → multiplier **1.0** |
+| | | If dynamic sizing **on** (Docker/config overlay: `true`) → tag multipliers from `_TAG_MULTIPLIERS`, then `min(proposed * mult, max_stake)` |
 
 Stoploss ladder remains `custom_stoploss` → `RiskEngine.get_stoploss()` (separate from authorize metadata).
 
@@ -141,13 +142,17 @@ Stoploss ladder remains `custom_stoploss` → `RiskEngine.get_stoploss()` (separ
 
 ### 3.6 Telemetry
 
-**`TelemetryDecisionRecord`** (frozen) — base decision fields plus:
+**`TelemetryDecisionRecord`** (frozen) — base decision fields (`ai_verdict`, `ai_confidence`, `ai_model_version`, `market_regime`, `policy_score`) plus:
 
 - `setup_type`, `signal_source`, `policy_version`
 - `config_fingerprint`
 - `feature_snapshot` (small dict — never full DataFrames)
 
+`RiskEngine` deduplicates identical reject bursts within the same 15m candle (`_seen_reject_bursts`) so 5s throttle loops do not flood the ledger.
+
 **`TelemetryTradeRecord`** (frozen) — trade outcome + MFE/MAE; `candidate_id` must be canonical or `candidate_id_missing`.
+
+Both `DecisionLedger` and `TradeLedger` use a bounded in-memory `deque(maxlen=2000)` and rotate JSONL files to `<path>.1` at `10 MiB` (`telemetry/jsonl_io.py`).
 
 ---
 

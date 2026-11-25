@@ -1,7 +1,7 @@
 # MTF Sniper — Migration Plan (historical + current)
 
 **Location:** `strategies/mtf_sniper/docs/MIGRATION_PLAN.md`  
-**Current package:** `STRATEGY_VERSION` in `__init__.py` (`4.4.1-deterministic`)  
+**Current package:** `STRATEGY_VERSION` in `__init__.py` (`4.5.0-waterfall`)  
 **Authoritative live architecture:** `ARCHITECTURE.md` + `STABILIZATION_DETERMINISTIC.md` + `DATA_CONTRACTS.md`
 
 > **How to read this file:** P0–P4 are **historical migration records**. Descriptions of “live path” inside those phases reflect the state **at that time**, not today. **P5+ / Stabilization** is the current live architecture.
@@ -38,7 +38,7 @@ P0 Audit → P1 Sensors → P2 Parity engine → P3 Risk/Telemetry → P4 Long H
 
 - Evidence package: `P4_LONG_HUNTER_EVIDENCE.md` at strategy tag **`v3.2.0-p4-hunter-gates`**.
 - Production default stayed `enable_hunter_long=false`.
-- **Current package** (`4.4.1-deterministic`) keeps Hunter **off the live entry pipeline** regardless of leftover config flags.
+- **Current package** (`4.5.0-waterfall`) keeps Hunter **off the live entry pipeline** regardless of leftover config flags.
 
 ---
 
@@ -67,4 +67,4 @@ P0 Audit → P1 Sensors → P2 Parity engine → P3 Risk/Telemetry → P4 Long H
 |---|---|
 | 1. Unit / contract suite | `tests/strategy/test_mtf*.py` green (incl. data contracts + candidate parity) |
 | 2. Full BT | Record trades / PnL / DD vs Ep46 gate when changing signal path |
-| 3. Docker | `strategy-path` → `strategies/mtf_sniper` + overlay `mtf_runtime_mode=deterministic` |
+| 3. Docker | `strategy-path` → `strategies/mtf_sniper` + overlay `mtf_runtime_mode=decision_external` (`fallback_native`) |

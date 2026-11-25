@@ -1,6 +1,6 @@
 # Stabilization — Deterministic MTF Sniper
 
-**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Version:** `STRATEGY_VERSION` in `__init__.py` (`4.4.1-deterministic`) · **Phase:** Hunter OFF by design
+**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone:** `4.4.1-deterministic` (current package in `__init__.py`: `4.5.0-waterfall`) · **Phase:** Hunter OFF by design
 
 ## Runtime modes
 
@@ -13,7 +13,8 @@
 
 Set via `strategy_params.mtf_runtime_mode` or env `MTF_RUNTIME_MODE`.
 
-- **Coolify / Ep46 production overlay:** `docker/config.mtf_sniper.json` → `"mtf_runtime_mode": "deterministic"` + `"enable_jev_decision": true` (native Decision ON).
+- **Docker production overlay (`docker/config.mtf_sniper.json` + `docker-compose.yml`):** `"mtf_runtime_mode": "decision_external"` + `"enable_jev_decision": true` + `JEV_FAIL_POLICY=fallback_native` + `enable_waterfall=true` + `enable_dynamic_sizing=true` (Hybrid AI score with native fallback).
+- **Local deterministic BT:** `"mtf_runtime_mode": "deterministic"` + `JEV_MODE=native`.
 - **Sniper-only measurement:** `"mtf_runtime_mode": "pure_deterministic"` (Decision cannot affect BT/live confirm).
 
 ## Call graph (deterministic)
