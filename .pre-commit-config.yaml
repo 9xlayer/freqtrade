@@ -12,6 +12,12 @@ repos:
         language: python
         pass_filenames: false
         additional_dependencies: ["python-rapidjson", "jsonschema"]
+      - id: mtf-sniper-guardrails
+        name: mtf-sniper-guardrails
+        entry: bash -c 'if [ -x .venv/bin/python ]; then .venv/bin/python scripts/lint_guardrails.py --verify-all; else python3 scripts/lint_guardrails.py --verify-all; fi'
+        language: system
+        pass_filenames: false
+        files: ^(strategies/mtf_sniper|scripts/lint_guardrails\.py|tests/strategy)/
 
 
   - repo: https://github.com/pre-commit/mirrors-mypy

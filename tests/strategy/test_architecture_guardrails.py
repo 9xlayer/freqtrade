@@ -18,6 +18,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+
 from scripts.lint_guardrails import ArchitectureGuardrailLinter
 
 
@@ -78,7 +79,9 @@ class TestArchitectureGuardrails(unittest.TestCase):
             core_dir = Path(tmpdir) / "core"
             core_dir.mkdir(parents=True)
             sample = core_dir / "sample.py"
-            sample.write_text("from strategies.mtf_sniper.risk import RiskEngine\n", encoding="utf-8")
+            sample.write_text(
+                "from strategies.mtf_sniper.risk import RiskEngine\n", encoding="utf-8"
+            )
             linter = ArchitectureGuardrailLinter(tmpdir)
             linter.run()
             self.assertTrue(any("LINT007" in v for v in linter.violations))
@@ -89,7 +92,8 @@ class TestArchitectureGuardrails(unittest.TestCase):
             core_dir.mkdir(parents=True)
             sample = core_dir / "contracts.py"
             sample.write_text(
-                "from dataclasses import dataclass\n\n@dataclass\nclass UnfrozenContract:\n    name: str\n",
+                "from dataclasses import dataclass\n\n"
+                "@dataclass\nclass UnfrozenContract:\n    name: str\n",
                 encoding="utf-8",
             )
             linter = ArchitectureGuardrailLinter(tmpdir)
@@ -105,6 +109,119 @@ class TestArchitectureGuardrails(unittest.TestCase):
             linter = ArchitectureGuardrailLinter(tmpdir)
             linter.run()
             self.assertTrue(any("LINT018" in v for v in linter.violations))
+
+    def test_linter_detects_signal_and_directional_boundary_violations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sig_dir = Path(tmpdir) / "signals"
+            sensor_dir = sig_dir / "sensors"
+            dir_dir = Path(tmpdir) / "directional"
+            sensor_dir.mkdir(parents=True)
+            dir_dir.mkdir(parents=True)
+
+            (sig_dir / "bad_signal.py").write_text(
+                "from strategies.mtf_sniper.risk import RiskEngine\n", encoding="utf-8"
+            )
+            (sensor_dir / "bad_sensor.py").write_text(
+                "col = 'enter_short'\n", encoding="utf-8"
+            )
+            (dir_dir / "setup_composer.py").write_text(
+                "class C:\n    def f(self, rs):\n        self._by_side = {r.side: r for r in rs}\n",
+                encoding="utf-8",
+            )
+            (dir_dir / "bad_policy.py").write_text(
+                "from strategies.mtf_sniper.execution import EntryPipeline\n",
+                encoding="utf-8",
+            )
+
+            linter = ArchitectureGuardrailLinter(tmpdir)
+            linter.run()
+            for code in ("LINT020", "LINT021", "LINT022", "LINT023"):
+                self.assertTrue(any(code in v for v in linter.violations), code)
+
+    def test_linter_detects_missing_engine_dispatch_and_duplicate_policy(self):
+        from dataclasses import dataclass
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dir_dir = Path(tmpdir) / "directional"
+            exec_dir = Path(tmpdir) / "execution"
+            dir_dir.mkdir(parents=True)
+            exec_dir.mkdir(parents=True)
+            (dir_dir / "engine.py").write_text(
+                "class DirectionalTradingEngine:\n    pass\n", encoding="utf-8"
+            )
+            (exec_dir / "entry_pipeline.py").write_text(
+                "def run():\n    return {}\n", encoding="utf-8"
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir)
+            linter.run()
+            self.assertEqual(sum("LINT026" in v for v in linter.violations), 2)
+
+        @dataclass(frozen=True)
+        class _FakeSpec:
+            subsystem_id: str
+            policy_module: str
+
+        from strategies.mtf_sniper.directional.setup_recipes import DirectionalPolicyProtocol
+
+        linter = ArchitectureGuardrailLinter("strategies/mtf_sniper")
+        linter.violations.clear()
+        linter._check_policy_modules_and_engine(
+            (
+                _FakeSpec("a", "strategies.mtf_sniper.directional.short.policy.ShortPolicy"),
+                _FakeSpec("b", "strategies.mtf_sniper.directional.short.policy.ShortPolicy"),
+            ),
+            DirectionalPolicyProtocol,
+        )
+        self.assertTrue(any("LINT025" in v for v in linter.violations))
+
+    def test_linter_detects_unregistered_subsystem_and_missing_sensor(self):
+        import ast
+        from dataclasses import dataclass
+
+        linter = ArchitectureGuardrailLinter("strategies/mtf_sniper")
+        linter.violations.clear()
+        tree = ast.parse('feats = {"subsystem": "unregistered_hack"}')
+        linter._check_pipeline_subsystem_values(
+            tree, Path("entry_pipeline.py"), {"short_sniper", "long_sniper", "waterfall"}
+        )
+        self.assertTrue(any("LINT027" in v for v in linter.violations))
+
+        @dataclass(frozen=True)
+        class _FakeRecipe:
+            name: str
+            required_sensors: frozenset[str]
+
+        linter.violations.clear()
+        linter._check_sensor_coverage(
+            (_FakeRecipe("setup:orphan", frozenset({"nonexistent_sensor"})),),
+            {"waterfall_drop"},
+        )
+        self.assertTrue(any("LINT028" in v for v in linter.violations))
+
+    def test_linter_detects_fast_path_bypass_lint029(self):
+        import ast
+
+        linter = ArchitectureGuardrailLinter("strategies/mtf_sniper")
+        linter.violations.clear()
+        tree = ast.parse(
+            "def _candidates_from_sniper_masks():\n"
+            "    return TradeCandidate()\n"
+        )
+        linter._check_pipeline_single_truth(tree, Path("entry_pipeline.py"))
+        self.assertGreaterEqual(sum("LINT029" in v for v in linter.violations), 2)
+
+    def test_strict_tools_fails_when_binary_missing(self):
+        from unittest.mock import patch
+
+        linter = ArchitectureGuardrailLinter("strategies/mtf_sniper", strict_tools=True)
+        with (
+            patch.object(ArchitectureGuardrailLinter, "_find_pyrefly_binary", return_value=None),
+            patch.object(ArchitectureGuardrailLinter, "_find_ruff_binary", return_value=None),
+        ):
+            linter._check_pyrefly()
+            linter._check_ruff()
+        self.assertTrue(any("LINT015" in v for v in linter.violations))
+        self.assertTrue(any("LINT019" in v for v in linter.violations))
 
 
 if __name__ == "__main__":

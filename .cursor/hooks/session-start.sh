@@ -23,7 +23,8 @@ ctx = f"""[freqtrade agent bootstrap]
 2) Prefer GitNexus graph tools over blind repo-wide grep. Repo index name: freqtrade.
 3) GitNexus status snapshot: {status}
 4) If index is stale/missing, run: gitnexus analyze
-5) Before editing symbols: impact analysis. Before commit: detect_changes. After commit: gitnexus analyze. Update Memory Bank only at milestone boundaries."""
+5) Before editing symbols: impact analysis. Before commit: detect_changes. After commit: gitnexus analyze. Update Memory Bank only at milestone boundaries.
+6) Before finishing strategy edits: run `.venv/bin/python scripts/lint_guardrails.py --verify-all` (AST LINT001-029 + Pyrefly + Ruff + strategy pytest)."""
 print(json.dumps({"additional_context": ctx}))
 PY
 exit 0

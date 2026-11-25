@@ -13,6 +13,7 @@ from strategies.mtf_sniper.signals.composite_catalog import atomic_anomaly_senso
 from strategies.mtf_sniper.signals.sensors import (
     A80PlusSensor,
     SwingBreakoutSensor,
+    WaterfallMomentumSensor,
 )
 from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
     long_sniper_part_sensors,
@@ -25,23 +26,30 @@ def hunter_sensors() -> list[BaseSensor]:
     return atomic_anomaly_sensors()
 
 
-def live_sensors(strategy: Any) -> list[BaseSensor]:
+def live_sensors(
+    strategy: Any,
+    *,
+    include_waterfall: bool = False,
+) -> list[BaseSensor]:
     """
-    Live catalog: sniper part facts only (deterministic phase).
+    Live catalog: sniper part facts plus optional waterfall momentum sensor.
 
-    Anomaly wakeups are intentionally omitted so they never reach Builder/Policy.
-    Sniper formation happens in Directional SetupComposer (4a).
+    Raw anomaly wakeups stay omitted unless explicitly registered by subsystem.
     """
-    return [
+    sensors: list[BaseSensor] = [
         *short_sniper_part_sensors(strategy),
         *long_sniper_part_sensors(strategy),
     ]
+    if include_waterfall:
+        sensors.append(WaterfallMomentumSensor())
+    return sensors
 
 
 def full_sensors() -> list[BaseSensor]:
-    """Diagnostics only — anomalies + thin patterns (not live EntryPipeline)."""
+    """Diagnostics + registry sensor catalog."""
     return [
         *atomic_anomaly_sensors(),
+        WaterfallMomentumSensor(),
         A80PlusSensor(),
         SwingBreakoutSensor(),
     ]
@@ -58,8 +66,8 @@ class SensorSuite:
         self._sensors: list[BaseSensor] = list(sensors) if sensors is not None else hunter_sensors()
 
     @classmethod
-    def live(cls, strategy: Any) -> SensorSuite:
-        return cls(live_sensors(strategy))
+    def live(cls, strategy: Any, *, include_waterfall: bool = False) -> SensorSuite:
+        return cls(live_sensors(strategy, include_waterfall=include_waterfall))
 
     @classmethod
     def hunter(cls) -> SensorSuite:

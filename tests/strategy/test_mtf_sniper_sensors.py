@@ -17,6 +17,7 @@ from strategies.mtf_sniper.signals.sensors import (
     VolatilityExpansionSensor,
     VolumeSurgeSensor,
     WaterfallDropSensor,
+    WaterfallMomentumSensor,
 )
 
 
@@ -244,6 +245,87 @@ class TestCandidateBuilder(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].side, TradeSide.LONG)
         self.assertGreaterEqual(candidates[0].confluence_count, 2)
+
+
+class TestWaterfallMomentumSensor(unittest.TestCase):
+    def _ready_df(self, n: int = 160) -> pd.DataFrame:
+        from strategies.mtf_sniper.market.data_guards import REQUIRED_INFORMATIVE_COLS
+
+        df = _base_df(n)
+        for col in REQUIRED_INFORMATIVE_COLS:
+            df[col] = 100.0
+        for col in (
+            "swing_low_20d_1d",
+            "ema_50_4h",
+            "bb_width_4h",
+            "ema_200_1d",
+            "rsi",
+            "ema_21",
+            "lower_wick_ratio",
+            "close_pos_ratio",
+            "rel_vol",
+        ):
+            df[col] = 1.0
+        return df
+
+    def test_matches_momentum_radar_and_ready_masks(self):
+        from strategies.mtf_sniper.market.data_guards import (
+            data_ready_mask,
+            finite_series_mask,
+        )
+        from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
+        from strategies.mtf_sniper.signals.sensors.anomaly_waterfall import (
+            _WATERFALL_FINITE_COLS,
+        )
+
+        df = self._ready_df(180)
+        df.loc[110, ["open", "close", "high", "low", "volume"]] = [
+            100.0, 96.0, 100.0, 95.5, 520.0,
+        ]
+        df.loc[115, ["open", "close", "high", "low", "volume"]] = [
+            100.0, 95.0, 100.0, 94.5, 550.0,
+        ]
+        df.loc[130, ["open", "close", "high", "low", "volume"]] = [
+            99.0, 94.0, 99.0, 93.5, 450.0,
+        ]
+        df.loc[150, ["open", "close", "high", "low", "volume"]] = [
+            99.0, 93.0, 99.0, 92.5, 450.0,
+        ]
+        df.loc[150, "ema_50_4h"] = float("nan")
+
+        sensor = WaterfallMomentumSensor()
+        mask = sensor.scan_mask(df, "BTC/USDT:USDT")
+        assert mask is not None
+        ready = (data_ready_mask(df) & finite_series_mask(df, _WATERFALL_FINITE_COLS)).to_numpy(
+            dtype=bool, na_value=False
+        )
+        expected = [
+            (pos, ev)
+            for pos, ev in MomentumRadar.find_candidates(
+                df, cooldown_bars=12, directional_cooldown=True
+            )
+            if "SHORT" in ev and ready[pos]
+        ]
+        expected_bars = [pos for pos, _ in expected]
+        actual_bars = [int(i) for i in np.flatnonzero(mask)]
+        self.assertEqual(actual_bars, expected_bars)
+        self.assertNotIn(150, actual_bars)
+
+        feats = sensor.scan_mask_features(df, np.asarray(actual_bars, dtype=int))
+        for pos, ev in expected:
+            self.assertEqual(feats[pos]["event_trigger"], ev)
+            self.assertEqual(feats[pos]["signal_source"], "momentum_radar")
+            self.assertEqual(feats[pos]["setup_name"], "waterfall_collapse")
+
+    def test_waterfall_sensor_emits_events(self):
+        df = self._ready_df(140)
+        df.loc[110, ["open", "close", "high", "low", "volume"]] = [
+            100.0, 96.0, 100.0, 95.5, 520.0,
+        ]
+        events = WaterfallMomentumSensor().scan(df, "BTC/USDT:USDT")
+        self.assertEqual([e.candle_index for e in events], [110])
+        self.assertEqual(events[0].side, TradeSide.SHORT)
+        self.assertEqual(events[0].sensor_name, "waterfall_momentum")
 
 
 if __name__ == "__main__":

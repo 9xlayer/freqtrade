@@ -1,11 +1,8 @@
 """
-LIVE entry generation for MTF Sniper — deterministic flow (AI/Hunter off).
+LIVE entry generation for MTF Sniper — Single-Truth unified flow.
 
-  Vectorized part AND (fast path) or SensorSuite parts → Builder → SetupComposer
-    → Policy 4b → strategy cooldown → enter_*
-
-Hunter escalation disabled until deterministic sniper is re-validated.
-JEV Decision Gate remains on confirm_trade_entry (separate from Hunter).
+  SensorSuite -> SetupComposer.compose_suite (SUBSYSTEM_REGISTRY)
+    -> DirectionalTradingEngine (subsystem_policies) -> Policy -> entry masks
 """
 
 from __future__ import annotations
@@ -13,47 +10,33 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from functools import reduce
-from operator import and_
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import (
     PolicyEvaluationResult,
     TradeCandidate,
     TriggerEvent,
 )
 from strategies.mtf_sniper.core.enums import TradeSide
-from strategies.mtf_sniper.directional.common_gates import (
-    data_ready_mask,
-    finite_series_mask,
-    missing_informative_columns,
-)
+from strategies.mtf_sniper.directional.common_gates import missing_informative_columns
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
 from strategies.mtf_sniper.directional.long.policy import LongPolicyConfig
-from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
 from strategies.mtf_sniper.directional.policy_escalation import is_soft_policy_reject
 from strategies.mtf_sniper.directional.setup_composer import SetupComposer
-from strategies.mtf_sniper.directional.setup_recipes import SETUP_SNIPER_LONG, SETUP_SNIPER_SHORT
+from strategies.mtf_sniper.directional.setup_recipes import all_live_recipes
 from strategies.mtf_sniper.directional.short.policy import (
     DEFAULT_ETH_WATERFALL_FILTER,
     DEFAULT_WATERFALL_FILTER,
     ShortPolicyConfig,
     build_waterfall_config_from_params,
 )
-from strategies.mtf_sniper.directional.short.setups import SHORT_SNIPER_PART_NAMES
 from strategies.mtf_sniper.intelligence.hunter_escalation import HunterEscalationGateway
 from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
 from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
-from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
-    LegacySniperPartSensor,
-    cached_sniper_parts,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +115,11 @@ class EntryPipeline:
         max_wick = float(_pval("max_rejection_wick_ratio", 0.25))
 
         return cls(
-            sensor_suite=SensorSuite.live(strategy),
+            sensor_suite=SensorSuite.live(strategy, include_waterfall=enable_waterfall),
+            setup_composer=SetupComposer(
+                recipes=all_live_recipes(include_waterfall=enable_waterfall),
+                drop_anomalies=not enable_waterfall,
+            ),
             hunter_escalation=None,
             long_config=LongPolicyConfig(
                 enable_hunter_long=False,
@@ -210,11 +197,14 @@ class EntryPipeline:
         rejected: list[dict] = []
 
         events: list[TriggerEvent] = []
-        candidates = self._candidates_from_sniper_masks(dataframe, pair)
-        if candidates is None:
-            events = self.sensor_suite.scan(dataframe, pair)
-            raw_candidates = self.candidate_builder.process(events, rejected=rejected)
-            candidates = self.setup_composer.compose(raw_candidates, dropped=rejected)
+        candidates = self.setup_composer.compose_suite(
+            self.sensor_suite,
+            dataframe,
+            pair,
+            candidate_builder=self.candidate_builder,
+            dropped=rejected,
+            trigger_events_out=events,
+        )
 
         rows_by_index: dict[int, dict[str, Any]] = {}
         for c in candidates:
@@ -279,183 +269,6 @@ class EntryPipeline:
             hunter_promoted=hunter_promoted,
             trigger_events=list(events),
         )
-
-    def _candidates_from_sniper_masks(
-        self,
-        dataframe: pd.DataFrame,
-        pair: str,
-    ) -> list[TradeCandidate] | None:
-        """
-        Build setup-complete candidates from vectorized AND of part masks.
-
-        Returns None when the suite is not a pure live part-sensor catalog
-        (fallback to event scan).
-        """
-        sensors = self.sensor_suite.sensors
-        if not sensors or not all(isinstance(s, LegacySniperPartSensor) for s in sensors):
-            return None
-
-        strategy = getattr(sensors[0], "_strategy", None)
-        if strategy is None:
-            return None
-
-        min_history = max(getattr(s, "min_history", 100) for s in sensors)
-        short_parts = cached_sniper_parts(strategy, dataframe, pair, TradeSide.SHORT)
-        long_parts = cached_sniper_parts(strategy, dataframe, pair, TradeSide.LONG)
-
-        short_and = reduce(
-            and_,
-            (short_parts[name].fillna(False).astype(bool) for name in SHORT_SNIPER_PART_NAMES),
-        )
-        long_and = reduce(
-            and_,
-            (long_parts[name].fillna(False).astype(bool) for name in LONG_SNIPER_PART_NAMES),
-        )
-        if min_history > 0:
-            short_and.iloc[:min_history] = False
-            long_and.iloc[:min_history] = False
-
-        # Positional cancel — Series & under duplicate labels can mis-align.
-        short_arr = short_and.to_numpy(dtype=bool, copy=True)
-        long_arr = long_and.to_numpy(dtype=bool, copy=True)
-        both_arr = short_arr & long_arr
-        if both_arr.any():
-            short_arr &= ~both_arr
-            long_arr &= ~both_arr
-            short_and = pd.Series(short_arr, index=dataframe.index)
-            long_and = pd.Series(long_arr, index=dataframe.index)
-
-        candidates: list[TradeCandidate] = []
-        candidates.extend(
-            self._candidates_for_mask(
-                dataframe,
-                pair,
-                short_and,
-                side=TradeSide.SHORT,
-                setup_name=SETUP_SNIPER_SHORT,
-                part_names=SHORT_SNIPER_PART_NAMES,
-                score_key="short_score",
-            )
-        )
-        candidates.extend(
-            self._candidates_for_mask(
-                dataframe,
-                pair,
-                long_and,
-                side=TradeSide.LONG,
-                setup_name=SETUP_SNIPER_LONG,
-                part_names=LONG_SNIPER_PART_NAMES,
-                score_key="long_score",
-            )
-        )
-        if getattr(self.engine.short_policy.config, "allow_anomaly_entries", False):
-            from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
-
-            radar_cands = MomentumRadar.find_candidates(
-                dataframe, cooldown_bars=12, directional_cooldown=True
-            )
-            waterfall_ready = (
-                data_ready_mask(dataframe)
-                & finite_series_mask(
-                    dataframe,
-                    (
-                        "swing_low_20d_1d",
-                        "ema_50_4h",
-                        "bb_width_4h",
-                        "ema_200_1d",
-                        "rsi",
-                        "ema_21",
-                        "lower_wick_ratio",
-                        "close_pos_ratio",
-                        "rel_vol",
-                    ),
-                )
-            ).to_numpy(dtype=bool, na_value=False)
-            has_date = "date" in dataframe.columns
-            for pos, event_type in radar_cands:
-                if "SHORT" not in event_type or not waterfall_ready[pos]:
-                    continue
-                i = pos
-                row = dataframe.iloc[i]
-                ts = (
-                    normalize_utc(row["date"])
-                    if has_date
-                    else normalize_utc(datetime(1970, 1, 1, tzinfo=UTC))
-                )
-                feats = {
-                    "setup_name": "waterfall_collapse",
-                    "signal_source": "momentum_radar",
-                    "event_trigger": event_type,
-                    "short_score": float(row.get("short_score", 0.0) or 0.0),
-                }
-                candidates.append(
-                    TradeCandidate(
-                        candidate_id=make_candidate_id(pair, TradeSide.SHORT, ts, i),
-                        pair=pair,
-                        side=TradeSide.SHORT,
-                        primary_sensor="waterfall_drop",
-                        secondary_sensors=[],
-                        confluence_count=1,
-                        timestamp=ts,
-                        candle_index=i,
-                        raw_features=feats,
-                        cooldown_bars=0,
-                    )
-                )
-
-        candidates.sort(key=lambda c: (c.candle_index, c.side.value))
-        return candidates
-
-    def _candidates_for_mask(
-        self,
-        dataframe: pd.DataFrame,
-        pair: str,
-        mask: pd.Series,
-        *,
-        side: TradeSide,
-        setup_name: str,
-        part_names: Sequence[str],
-        score_key: str,
-    ) -> list[TradeCandidate]:
-        hits = np.flatnonzero(mask.to_numpy(dtype=bool, na_value=False))
-        if len(hits) == 0:
-            return []
-
-        has_date = "date" in dataframe.columns
-        out: list[TradeCandidate] = []
-        for idx in hits:
-            i = int(idx)
-            row = dataframe.iloc[i]
-            if has_date:
-                ts = normalize_utc(row["date"])
-            else:
-                ts = normalize_utc(datetime(1970, 1, 1, tzinfo=UTC))
-            feats: dict[str, Any] = {
-                "setup_complete": True,
-                "setup_name": setup_name,
-                "legacy_sniper": side.value,
-                "mask": f"legacy_and_{side.value}",
-                "signal_source": "vectorized_and",
-                "recipe_sensors": list(part_names),
-                "sensors": list(part_names),
-                "part": "structure",
-                score_key: float(row.get(score_key, 0.0) or 0.0),
-            }
-            out.append(
-                TradeCandidate(
-                    candidate_id=make_candidate_id(pair, side, ts, i),
-                    pair=pair,
-                    side=side,
-                    primary_sensor=setup_name,
-                    secondary_sensors=list(part_names),
-                    confluence_count=len(part_names),
-                    timestamp=ts,
-                    candle_index=i,
-                    raw_features=feats,
-                    cooldown_bars=0,
-                )
-            )
-        return out
 
 
 def apply_entry_pipeline(

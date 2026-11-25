@@ -35,7 +35,7 @@ def resolve_short_setup(primary_sensor: str, raw_features: dict) -> ShortSetup:
             return ShortSetup.B65_PLUS
         return ShortSetup.C_SUB65
 
-    if primary_sensor == "waterfall_drop":
+    if primary_sensor in ("waterfall_drop", "waterfall_momentum"):
         return ShortSetup.WATERFALL_COLLAPSE
     if primary_sensor == "a80_plus":
         return ShortSetup.A80_PLUS
@@ -44,10 +44,10 @@ def resolve_short_setup(primary_sensor: str, raw_features: dict) -> ShortSetup:
     if primary_sensor in ("volume_surge", "volatility_expansion"):
         return ShortSetup.WATERFALL_COLLAPSE
 
-    # Hunter-style composites built from anomaly atomics (no sniper mask child)
     if candidate_includes_sensor(primary_sensor, raw_features, "volume_surge") or (
         candidate_includes_sensor(primary_sensor, raw_features, "volatility_expansion")
         or candidate_includes_sensor(primary_sensor, raw_features, "waterfall_drop")
+        or candidate_includes_sensor(primary_sensor, raw_features, "waterfall_momentum")
     ):
         return ShortSetup.WATERFALL_COLLAPSE
 

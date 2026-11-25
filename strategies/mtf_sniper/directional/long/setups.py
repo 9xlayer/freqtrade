@@ -40,6 +40,7 @@ def resolve_long_setup(primary_sensor: str, raw_features: dict) -> LongSetup:
         "volume_surge",
         "volatility_expansion",
         "waterfall_drop",
+        "waterfall_momentum",
     ):
         score = float(raw_features.get("long_score", 0.0) or 0.0)
         if score >= 80.0:

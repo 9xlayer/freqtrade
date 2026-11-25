@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from strategies.mtf_sniper.core.contracts import TradeCandidate
+from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate
 from strategies.mtf_sniper.core.enums import RejectionReasonCode, TradeSide
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
 from strategies.mtf_sniper.directional.long.policy import LongPolicy, LongPolicyConfig
@@ -591,7 +591,7 @@ class TestEntryPipeline(unittest.TestCase):
             idx=10,
             features={"setup_name": "waterfall_collapse", "short_score": 80.0},
         )
-        pipe._candidates_from_sniper_masks = lambda _df, _pair: [c1, c2]  # type: ignore[method-assign]
+        pipe.setup_composer.compose_suite = lambda *_a, **_kw: [c1, c2]  # type: ignore[method-assign]
         res = pipe.run(df, "BTC/USDT:USDT")
         self.assertEqual(len(res.accepted), 1)
         self.assertEqual(res.accepted[0][0].candidate_id, c1.candidate_id)
@@ -628,10 +628,71 @@ class TestEntryPipeline(unittest.TestCase):
             short_min_rsi_entry=_p(27.8),
         )
         live_pipe = EntryPipeline.live(strat)
-        live_cands = live_pipe._candidates_from_sniper_masks(df, "BTC/USDT:USDT") or []
+        live_cands = live_pipe.setup_composer.compose_suite(
+            live_pipe.sensor_suite, df, "BTC/USDT:USDT"
+        )
         radar_bars = [c.candle_index for c in live_cands if c.primary_sensor == "waterfall_drop"]
         self.assertNotIn(105, radar_bars)
         self.assertIn(118, radar_bars)
+
+    def test_engine_dispatches_waterfall_and_custom_subsystem_policies(self):
+        from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
+        from strategies.mtf_sniper.directional.short.waterfall_policy import (
+            WaterfallShortConfig,
+            WaterfallShortPolicy,
+        )
+
+        class _CustomSubPolicy:
+            def evaluate(self, candidate, row):
+                return PolicyEvaluationResult(
+                    is_valid=True,
+                    score=0.95,
+                    quality_grade="A+",
+                    reasons=["ACCEPT"],
+                    suggested_stop_distance_pct=0.015,
+                    target_rr=2.5,
+                    metadata={"subsystem": "custom_squeeze", "entry_tag": "custom_squeeze"},
+                )
+
+        wf_policy = WaterfallShortPolicy(WaterfallShortConfig(enabled=True))
+        engine = DirectionalTradingEngine(
+            short_config=ShortPolicyConfig(allow_anomaly_entries=True),
+            waterfall_policy=wf_policy,
+            subsystem_policies={"custom_squeeze": _CustomSubPolicy()},
+        )
+        self.assertIsInstance(engine.subsystem_policies["waterfall"], WaterfallShortPolicy)
+
+        wf_cand = _candidate(
+            TradeSide.SHORT, "waterfall_drop", features={"subsystem": "waterfall"}
+        )
+        wf_row = {
+            "open": 50600.0,
+            "close": 49500.0,
+            "high": 50650.0,
+            "low": 49450.0,
+            "swing_low_20d_1d": 50000.0,
+            "ema_50_4h": 54000.0,
+            "ema_50_1d": 60000.0,
+            "ema_200_1d": 58000.0,
+            "macdhist_4h": -20.0,
+            "bb_width_4h": 0.08,
+            "rel_vol": 4.0,
+            "atr_pct": 50.0,
+            "lower_wick_ratio": 0.05,
+            "close_pos_ratio": 0.08,
+            "rsi": 35.0,
+            "ema_21": 50000.0,
+        }
+        wf_res = engine.evaluate(wf_cand, wf_row)
+        self.assertTrue(wf_res.is_valid)
+        self.assertEqual(wf_res.metadata.get("subsystem"), "waterfall")
+
+        custom_cand = _candidate(
+            TradeSide.SHORT, "setup:custom_squeeze", features={"subsystem": "custom_squeeze"}
+        )
+        custom_res = engine.evaluate(custom_cand, wf_row)
+        self.assertTrue(custom_res.is_valid)
+        self.assertEqual(custom_res.metadata.get("entry_tag"), "custom_squeeze")
 
 
 if __name__ == "__main__":

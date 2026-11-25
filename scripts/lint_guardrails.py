@@ -25,7 +25,9 @@ Enforces AGENT OPERATING PRINCIPLES & VERIFICATION STANDARDS:
 
 from __future__ import annotations
 
+import argparse
 import ast
+import importlib
 import os
 import re
 import shutil
@@ -35,8 +37,14 @@ from pathlib import Path
 
 
 class ArchitectureGuardrailLinter:
-    def __init__(self, root_dir: str = "strategies/mtf_sniper"):
+    def __init__(
+        self,
+        root_dir: str = "strategies/mtf_sniper",
+        *,
+        strict_tools: bool = False,
+    ):
         self.root_dir = Path(root_dir)
+        self.strict_tools = strict_tools
         self.violations: list[str] = []
         self.vn_pattern = re.compile(
             r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]",
@@ -47,6 +55,7 @@ class ArchitectureGuardrailLinter:
         self.violations.clear()
         self._check_comment_policy()
         self._check_ast_rules()
+        self._check_subsystem_registry()
         self._check_pyrefly()
         self._check_ruff()
 
@@ -148,6 +157,37 @@ class ArchitectureGuardrailLinter:
                 "Directional trading paths must remain strictly isolated."
             )
 
+    def _check_signals_directional_imports(
+        self, module_name: str, rel_str: str, lineno: int, py_path: Path
+    ) -> None:
+        if rel_str.startswith(("signals/", "signals\\")):
+            for forbidden in ("execution", "risk", "intelligence", "strategy_mtf_sniper"):
+                if f"mtf_sniper.{forbidden}" in module_name or f".{forbidden}" in module_name:
+                    self.violations.append(
+                        f"{py_path}:{lineno} LINT020: "
+                        f"Signals layer cannot import upward from '{forbidden}' ({module_name}). "
+                        "Sensors emit isolated TriggerEvents only."
+                    )
+            is_legacy_parts = py_path.name == "pattern_sniper_parts.py"
+            if (
+                ("signals/sensors" in rel_str or "signals\\sensors" in rel_str)
+                and not is_legacy_parts
+                and ("mtf_sniper.directional" in module_name or ".directional" in module_name)
+            ):
+                self.violations.append(
+                    f"{py_path}:{lineno} LINT020: "
+                    f"Concrete sensor cannot import directional policy/recipes ({module_name})."
+                )
+
+        if rel_str.startswith(("directional/", "directional\\")):
+            for forbidden in ("execution", "risk", "intelligence", "strategy_mtf_sniper"):
+                if f"mtf_sniper.{forbidden}" in module_name or f".{forbidden}" in module_name:
+                    self.violations.append(
+                        f"{py_path}:{lineno} LINT023: "
+                        f"Directional layer cannot import '{forbidden}' ({module_name}). "
+                        "Directional subsystems evaluate signals/policy only."
+                    )
+
     def _check_layer_isolation(
         self, module_name: str, rel_str: str, lineno: int, py_path: Path
     ) -> None:
@@ -158,6 +198,7 @@ class ArchitectureGuardrailLinter:
                 f"{py_path}:{lineno} LINT004: "
                 "Sensor module cannot import upward from execution pipeline or strategy."
             )
+        self._check_signals_directional_imports(module_name, rel_str, lineno, py_path)
 
         forbidden_upper = (
             "signals",
@@ -279,8 +320,133 @@ class ArchitectureGuardrailLinter:
                     "Label assignment via .loc is prohibited in entry_pipeline. "
                     "Use NumPy boolean masks or positional .iloc[pos] indexing."
                 )
+            if (
+                "directional/setup_composer.py" in rel_str
+                and isinstance(target, ast.Attribute)
+                and target.attr == "_by_side"
+            ):
+                self.violations.append(
+                    f"{py_path}:{node.lineno} LINT022: "
+                    "Single-recipe-per-side mapping (_by_side) is prohibited. "
+                    "Use multi-subsystem recipes_grouped_by_side."
+                )
 
-    def _check_misc_node(self, node: ast.AST, py_path: Path) -> None:
+    def _check_engine_dispatch_ast(self, tree: ast.AST, py_path: Path) -> None:
+        source_names = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        } | {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        if "subsystem_policies" not in source_names:
+            self.violations.append(
+                f"{py_path}: LINT026: DirectionalTradingEngine must maintain and dispatch "
+                "through `subsystem_policies` registry instead of side-only branching."
+            )
+
+    @staticmethod
+    def _extract_str_constants(node: ast.AST) -> set[str]:
+        return {
+            sub.value
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+        }
+
+    def _check_pipeline_subsystem_values(
+        self, tree: ast.AST, py_path: Path, valid_subsystems: set[str]
+    ) -> None:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for k, v in zip(node.keys, node.values, strict=False):
+                if (
+                    isinstance(k, ast.Constant)
+                    and k.value == "subsystem"
+                    and v is not None
+                ):
+                    for candidate_val in self._extract_str_constants(v):
+                        if candidate_val not in valid_subsystems:
+                            self.violations.append(
+                                f"{py_path}:{node.lineno} LINT027: Unknown subsystem tag "
+                                f"{candidate_val!r} in EntryPipeline. Register in "
+                                "SUBSYSTEM_REGISTRY first."
+                            )
+
+    def _check_pipeline_single_truth(self, tree: ast.AST, py_path: Path) -> None:
+        banned_names = {
+            "_candidates_from_sniper_masks",
+            "_candidates_for_mask",
+            "MomentumRadar",
+            "cached_sniper_parts",
+            "LegacySniperPartSensor",
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in banned_names
+            ):
+                self.violations.append(
+                    f"{py_path}:{node.lineno} LINT029: Forbidden fast-path method "
+                    f"'{node.name}' in EntryPipeline. Use SetupComposer.compose_suite()."
+                )
+            elif isinstance(node, ast.Name) and node.id in banned_names:
+                self.violations.append(
+                    f"{py_path}:{node.lineno} LINT029: Forbidden fast-path symbol "
+                    f"'{node.id}' in execution layer. Route all signals via SetupComposer."
+                )
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "TradeCandidate"
+            ):
+                self.violations.append(
+                    f"{py_path}:{node.lineno} LINT029: Direct TradeCandidate() construction "
+                    "in execution layer bypasses SetupComposer."
+                )
+
+    def _check_pipeline_subsystem_tag_ast(self, tree: ast.AST, py_path: Path) -> None:
+        source_names = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        } | {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        if "compose_suite" not in source_names:
+            self.violations.append(
+                f"{py_path}: LINT026: EntryPipeline must dispatch signals through "
+                "SetupComposer.compose_suite() (Single Truth)."
+            )
+            return
+        self._check_pipeline_single_truth(tree, py_path)
+        if self._is_mtf_package():
+            try:
+                from strategies.mtf_sniper.directional.setup_recipes import SUBSYSTEM_REGISTRY
+
+                valid_ids = {s.subsystem_id for s in SUBSYSTEM_REGISTRY}
+                self._check_pipeline_subsystem_values(tree, py_path, valid_ids)
+            except Exception as exc:
+                self.violations.append(f"{py_path}: LINT027: {exc}")
+
+    def _check_misc_node(self, node: ast.AST, py_path: Path, rel_str: str = "") -> None:
+        if (
+            ("signals/sensors" in rel_str or "signals\\sensors" in rel_str)
+            and isinstance(node, ast.Constant)
+            and node.value in ("enter_long", "enter_short", "exit_long", "exit_short")
+        ):
+            self.violations.append(
+                f"{py_path}:{node.lineno} LINT021: "
+                f"Sensor cannot emit/mutate trade column '{node.value}'. "
+                "Return TriggerEvents only."
+            )
+        if (
+            "directional/setup_composer.py" in rel_str
+            and isinstance(node, ast.DictComp)
+            and isinstance(node.key, ast.Attribute)
+            and node.key.attr == "side"
+            and isinstance(node.value, ast.Name)
+        ):
+            self.violations.append(
+                f"{py_path}:{node.lineno} LINT022: "
+                "1-to-1 {r.side: r} dict comprehension overwrites multiple subsystems per side."
+            )
         if (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -405,6 +571,10 @@ class ArchitectureGuardrailLinter:
 
         for py_path, tree in parsed_trees.items():
             rel_str = str(py_path.relative_to(self.root_dir))
+            if rel_str.replace("\\", "/") == "directional/engine.py":
+                self._check_engine_dispatch_ast(tree, py_path)
+            elif rel_str.replace("\\", "/") == "execution/entry_pipeline.py":
+                self._check_pipeline_subsystem_tag_ast(tree, py_path)
 
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -414,7 +584,7 @@ class ArchitectureGuardrailLinter:
                 elif isinstance(node, ast.Assign):
                     self._check_assign_node(node, rel_str, py_path)
                 else:
-                    self._check_misc_node(node, py_path)
+                    self._check_misc_node(node, py_path, rel_str)
 
             for func_node in [
                 n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -438,15 +608,26 @@ class ArchitectureGuardrailLinter:
                 return str(c)
         return None
 
+    def _tool_targets(self) -> list[str]:
+        targets = [str(self.root_dir)]
+        self_script = Path("scripts/lint_guardrails.py")
+        if self._is_mtf_package() and self_script.is_file():
+            targets.append(str(self_script))
+        return targets
+
     def _check_pyrefly(self) -> None:
         binary = self._find_pyrefly_binary()
         if not binary:
+            if self.strict_tools:
+                self.violations.append(
+                    "LINT015 (Pyrefly): Binary not found under --strict. "
+                    "Install pyrefly into .venv or PATH."
+                )
             return
 
         try:
-            target = str(self.root_dir)
             result = subprocess.run(
-                [binary, "check", target],
+                [binary, "check", *self._tool_targets()],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -480,12 +661,16 @@ class ArchitectureGuardrailLinter:
     def _check_ruff(self) -> None:
         binary = self._find_ruff_binary()
         if not binary:
+            if self.strict_tools:
+                self.violations.append(
+                    "LINT019 (Ruff): Binary not found under --strict. "
+                    "Install ruff into .venv or PATH."
+                )
             return
 
         try:
-            target = str(self.root_dir)
             result = subprocess.run(
-                [binary, "check", "--output-format", "concise", target],
+                [binary, "check", "--output-format", "concise", *self._tool_targets()],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -498,8 +683,173 @@ class ArchitectureGuardrailLinter:
         except Exception as exc:
             self.violations.append(f"LINT019 (Ruff): Execution error: {exc}")
 
+    def _validate_recipe_and_specs(self, recipes: tuple, specs: tuple) -> None:
+        recipe_map = {r.name: r for r in recipes}
+        if len(recipe_map) != len(recipes):
+            self.violations.append("LINT024: Duplicate SetupRecipe.name in all_live_recipes().")
+        for r in recipes:
+            if r.side not in ("long", "short") or not r.required_sensors or not r.subsystem:
+                self.violations.append(
+                    f"LINT024: Recipe '{r.name}' has invalid side/sensors/subsystem."
+                )
+        for spec in specs:
+            rec = recipe_map.get(spec.recipe_name)
+            if rec is None or rec.side != spec.side or rec.subsystem != spec.subsystem_id:
+                self.violations.append(
+                    f"LINT024: Subsystem '{spec.subsystem_id}' recipe mismatch: "
+                    f"{spec.recipe_name!r}."
+                )
+
+    def _check_policy_modules_and_engine(self, specs: tuple, protocol: type) -> None:
+        seen_modules: dict[str, str] = {}
+        for spec in specs:
+            prev = seen_modules.get(spec.policy_module)
+            if prev is not None:
+                self.violations.append(
+                    f"LINT025: Subsystem '{spec.subsystem_id}' shares policy_module "
+                    f"'{spec.policy_module}' with '{prev}'. "
+                    "Each directional sub-system must have its own dedicated Policy class."
+                )
+            seen_modules[spec.policy_module] = spec.subsystem_id
+
+            try:
+                mod_name, cls_name = spec.policy_module.rsplit(".", 1)
+                mod = importlib.import_module(mod_name)
+                cls = getattr(mod, cls_name)
+                instance = cls()
+                if not isinstance(instance, protocol):
+                    self.violations.append(
+                        f"LINT025: Policy '{spec.policy_module}' for '{spec.subsystem_id}' "
+                        "does not satisfy DirectionalPolicyProtocol."
+                    )
+            except Exception as exc:
+                self.violations.append(
+                    f"LINT025: Failed to load policy '{spec.policy_module}' for "
+                    f"'{spec.subsystem_id}': {exc}"
+                )
+
+    def _check_engine_wiring(self, specs: tuple, protocol: type) -> None:
+        from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
+
+        engine = DirectionalTradingEngine()
+        policies = getattr(engine, "subsystem_policies", None)
+        if not isinstance(policies, dict):
+            self.violations.append(
+                "LINT026: DirectionalTradingEngine.subsystem_policies dict is missing."
+            )
+            return
+        for spec in specs:
+            pol = policies.get(spec.subsystem_id)
+            if pol is None or not isinstance(pol, protocol):
+                self.violations.append(
+                    f"LINT026: DirectionalTradingEngine.subsystem_policies missing valid "
+                    f"protocol implementation for '{spec.subsystem_id}'."
+                )
+
+    def _is_mtf_package(self) -> bool:
+        resolved = self.root_dir.resolve()
+        return resolved.name == "mtf_sniper" and (resolved / "__init__.py").is_file()
+
+    def _check_sensor_coverage(self, recipes: tuple, known_sensors: set[str]) -> None:
+        for rec in recipes:
+            missing = sorted(set(rec.required_sensors) - known_sensors)
+            if missing:
+                self.violations.append(
+                    f"LINT028: Recipe '{rec.name}' references missing sensor(s) "
+                    f"{missing} not implemented in signals/sensors/."
+                )
+
+    def _check_subsystem_registry(self) -> None:
+        """LINT024-028: Validate sub-systems, dedicated policies, sensors, and dispatch."""
+        if not self._is_mtf_package():
+            return
+        try:
+            from types import SimpleNamespace
+
+            pkg_root = str(self.root_dir.resolve().parent.parent)
+            if pkg_root not in sys.path:
+                sys.path.insert(0, pkg_root)
+            from strategies.mtf_sniper.directional.setup_recipes import (
+                SUBSYSTEM_REGISTRY,
+                DirectionalPolicyProtocol,
+                all_live_recipes,
+            )
+            from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
+        except Exception as exc:
+            self.violations.append(f"LINT024: Failed to load subsystem registry: {exc}")
+            return
+
+        recipes = all_live_recipes(include_waterfall=True)
+        self._validate_recipe_and_specs(recipes, SUBSYSTEM_REGISTRY)
+        self._check_policy_modules_and_engine(SUBSYSTEM_REGISTRY, DirectionalPolicyProtocol)
+        self._check_engine_wiring(SUBSYSTEM_REGISTRY, DirectionalPolicyProtocol)
+
+        dummy_strat = SimpleNamespace(custom_pair_params={})
+        known_sensors = {
+            *(s.name for s in SensorSuite.live(dummy_strat).sensors),
+            *(s.name for s in SensorSuite.full().sensors),
+        }
+        self._check_sensor_coverage(recipes, known_sensors)
+
+
+def print_subsystem_registry() -> None:
+    repo_root = str(Path.cwd())
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from strategies.mtf_sniper.directional.setup_recipes import (
+        SUBSYSTEM_REGISTRY,
+        all_live_recipes,
+    )
+
+    recipe_map = {r.name: r for r in all_live_recipes(include_waterfall=True)}
+    print("MTF Sniper Registered Directional Sub-Systems:")
+    for spec in SUBSYSTEM_REGISTRY:
+        rec = recipe_map.get(spec.recipe_name)
+        sensors = ", ".join(sorted(rec.required_sensors)) if rec else "MISSING"
+        policy_cls = spec.policy_module.rsplit(".", 1)[-1]
+        print(
+            f"  - {spec.subsystem_id:14s} | side={spec.side:5s} | "
+            f"policy={policy_cls:20s} | recipe={spec.recipe_name:22s} | sensors=[{sensors}]"
+        )
+
+
+def _run_strategy_tests() -> int:
+    venv_pytest = Path(".venv/bin/pytest")
+    cmd = [str(venv_pytest) if venv_pytest.is_file() else sys.executable]
+    if not venv_pytest.is_file():
+        cmd.extend(["-m", "pytest"])
+    cmd.extend(["-q", "tests/strategy/"])
+    return subprocess.run(cmd, check=False).returncode
+
 
 if __name__ == "__main__":
-    target_dir = sys.argv[1] if len(sys.argv) > 1 else "strategies/mtf_sniper"
-    linter = ArchitectureGuardrailLinter(target_dir)
-    sys.exit(linter.run())
+    parser = argparse.ArgumentParser(description="MTF Sniper Architectural Guardrail CLI")
+    parser.add_argument("target_dir", nargs="?", default="strategies/mtf_sniper")
+    parser.add_argument(
+        "--subsystems",
+        action="store_true",
+        help="Print registered directional sub-systems and run all guardrails",
+    )
+    parser.add_argument(
+        "--verify-all",
+        action="store_true",
+        help="Run --subsystems guardrails (AST + Pyrefly + Ruff, strict) AND tests/strategy/",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail if Pyrefly or Ruff binaries are unavailable instead of skipping",
+    )
+    args = parser.parse_args()
+    if args.subsystems or args.verify_all:
+        print_subsystem_registry()
+    linter = ArchitectureGuardrailLinter(
+        args.target_dir,
+        strict_tools=bool(args.strict or args.verify_all),
+    )
+    rc = linter.run()
+    if rc != 0:
+        sys.exit(rc)
+    if args.verify_all:
+        sys.exit(_run_strategy_tests())
+    sys.exit(0)

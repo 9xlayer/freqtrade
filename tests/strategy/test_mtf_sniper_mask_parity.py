@@ -258,8 +258,12 @@ class TestCombinationMaskLivePath(unittest.TestCase):
         self.assertNotIn("volume_surge", names)
         self.assertNotIn("volatility_expansion", names)
         self.assertNotIn("waterfall_drop", names)
+        self.assertNotIn("waterfall_momentum", names)
         self.assertNotIn("composite_sniper_short", names)
         self.assertNotIn("sniper_short_mask", names)
+
+        wf_names = {s.name for s in SensorSuite.live(strat, include_waterfall=True).sensors}
+        self.assertIn("waterfall_momentum", wf_names)
 
         pipe = EntryPipeline.live(strat)
         self.assertIsNone(pipe.hunter_escalation)
@@ -289,6 +293,70 @@ class TestCombinationMaskLivePath(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].primary_sensor, SETUP_SNIPER_SHORT)
         self.assertTrue(out[0].raw_features["setup_complete"])
+
+    def test_setup_composer_supports_multiple_subsystems_same_side(self):
+        from datetime import datetime
+
+        from strategies.mtf_sniper.core.contracts import TradeCandidate
+        from strategies.mtf_sniper.core.enums import TradeSide
+        from strategies.mtf_sniper.directional.setup_recipes import (
+            SetupRecipe,
+            all_live_recipes,
+        )
+
+        squeeze = SetupRecipe(
+            name="setup:squeeze_short",
+            required_sensors=frozenset({"bb_squeeze_4h", "break_15m"}),
+            side="short",
+            subsystem="squeeze_short",
+            priority=30,
+        )
+        composer = SetupComposer(
+            recipes=(*all_live_recipes(include_waterfall=True), squeeze),
+            drop_anomalies=False,
+        )
+        c_sniper = TradeCandidate(
+            candidate_id="s1",
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="short_structure",
+            secondary_sensors=list(SHORT_SNIPER_PART_NAMES[1:]),
+            confluence_count=4,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=10,
+            raw_features={"sensors": list(SHORT_SNIPER_PART_NAMES)},
+        )
+        c_wf = TradeCandidate(
+            candidate_id="w1",
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="waterfall_momentum",
+            secondary_sensors=[],
+            confluence_count=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=11,
+            raw_features={"sensors": ["waterfall_momentum"]},
+        )
+        c_sq = TradeCandidate(
+            candidate_id="q1",
+            pair="BTC/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="bb_squeeze_4h",
+            secondary_sensors=["break_15m"],
+            confluence_count=2,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=12,
+            raw_features={"sensors": ["bb_squeeze_4h", "break_15m"]},
+        )
+
+        out = composer.compose([c_sniper, c_wf, c_sq])
+        self.assertEqual(len(out), 3)
+        self.assertEqual(
+            [c.raw_features["subsystem"] for c in out],
+            ["short_sniper", "waterfall", "squeeze_short"],
+        )
+        self.assertEqual(out[1].primary_sensor, "waterfall_drop")
+        self.assertEqual(out[2].primary_sensor, "setup:squeeze_short")
 
 
 if __name__ == "__main__":

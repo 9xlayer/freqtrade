@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from strategies.mtf_sniper.core.contracts import TriggerEvent
@@ -24,6 +25,7 @@ class BaseSensor(ABC):
 
     name: str = "base"
     sensor_type: SensorType = SensorType.ANOMALY
+    side: TradeSide | None = None
     # Minimum bars of history required before scanning begins
     min_history: int = 100
 
@@ -41,6 +43,24 @@ class BaseSensor(ABC):
         If candle_index is provided, only that bar is evaluated.
         Otherwise the full series (from min_history onward) is scanned.
         """
+
+    def scan_mask(
+        self,
+        dataframe: pd.DataFrame,
+        pair: str,
+    ) -> np.ndarray | None:
+        """Optional vectorized boolean mask (length == len(dataframe))."""
+        _ = dataframe, pair
+        return None
+
+    def scan_mask_features(
+        self,
+        dataframe: pd.DataFrame,
+        indices: np.ndarray,
+    ) -> dict[int, dict[str, Any]]:
+        """Optional per-bar feature metadata for matched indices from scan_mask."""
+        _ = dataframe, indices
+        return {}
 
     def _resolve_indices(
         self,

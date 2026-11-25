@@ -111,6 +111,36 @@ class LegacySniperPartSensor(BaseSensor):
         self._strategy = strategy
         self._part_name = part_name
         self._side = side
+        self.side = side
+
+    def scan_mask(self, dataframe: pd.DataFrame, pair: str) -> np.ndarray:
+        n = len(dataframe)
+        if n < self.min_history:
+            return np.zeros(n, dtype=bool)
+        parts = cached_sniper_parts(self._strategy, dataframe, pair, self._side)
+        arr = parts[self._part_name].to_numpy(dtype=bool, na_value=False).copy()
+        if self.min_history > 0:
+            arr[: self.min_history] = False
+        return arr
+
+    def scan_mask_features(
+        self, dataframe: pd.DataFrame, indices: np.ndarray
+    ) -> dict[int, dict[str, Any]]:
+        score_key = "short_score" if self._side == TradeSide.SHORT else "long_score"
+        legacy_tag = "short" if self._side == TradeSide.SHORT else "long"
+        out: dict[int, dict[str, Any]] = {}
+        has_score = score_key in dataframe.columns
+        for idx in indices:
+            i = int(idx)
+            feat: dict[str, Any] = {
+                "part": self._part_name,
+                "legacy_sniper": legacy_tag,
+                "mask": f"legacy_and_{legacy_tag}",
+            }
+            if has_score and self._part_name.endswith("_structure"):
+                feat[score_key] = float(dataframe.iloc[i].get(score_key, 0.0) or 0.0)
+            out[i] = feat
+        return out
 
     def scan(
         self,

@@ -74,9 +74,9 @@ class TestEntryPipelineRunDuplicateIndex(unittest.TestCase):
             setup_composer=MagicMock(),
             hunter_escalation=None,
         )
+        pipe.setup_composer.compose_suite.return_value = [cand]
         pipe.engine.evaluate_many.return_value = [(cand, pol)]
-        with patch.object(EntryPipeline, "_candidates_from_sniper_masks", return_value=[cand]):
-            result = pipe.run(df, "BTC/USDT:USDT")
+        result = pipe.run(df, "BTC/USDT:USDT")
         return df, result
 
     def test_short_signal_only_at_iloc_2(self):

@@ -125,13 +125,13 @@ class CandidateBuilder:
         if not long_events and not short_events:
             return []
 
-        from strategies.mtf_sniper.directional.setup_recipes import recipes_by_side
+        from strategies.mtf_sniper.directional.setup_recipes import recipes_grouped_by_side
 
-        recipes = recipes_by_side()
+        grouped = recipes_grouped_by_side()
         long_names = {e.sensor_name for e in long_events}
         short_names = {e.sensor_name for e in short_events}
-        long_complete = recipes["long"].is_satisfied(long_names)
-        short_complete = recipes["short"].is_satisfied(short_names)
+        long_complete = any(r.is_satisfied(long_names) for r in grouped.get("long", ()))
+        short_complete = any(r.is_satisfied(short_names) for r in grouped.get("short", ()))
 
         if long_complete and short_complete:
             if rejected is not None:

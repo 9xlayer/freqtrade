@@ -1,0 +1,36 @@
+---
+description: Enforce MTF Sniper Sensor -> Builder -> Directional Sub-System Architecture & Guardrails
+globs:
+  - "strategies/mtf_sniper/**/*.py"
+  - "tests/strategy/**/*.py"
+alwaysApply: false
+---
+
+# MTF Sniper Event-Driven Sub-System Architecture
+
+All future strategy changes MUST follow the layered **Atomic Sensor -> CandidateBuilder -> Directional Sub-System** architecture and pass `scripts/lint_guardrails.py`.
+
+## Architectural Contract
+
+1. **Sensors (`signals/sensors/`, `signals/`) emit single `TriggerEvent` facts only:**
+   - Every `*Sensor` in `signals/sensors/` MUST inherit `BaseSensor` (`LINT018`).
+   - Sensors NEVER reference `"enter_long"`, `"enter_short"`, `"exit_long"`, or `"exit_short"` (`LINT021`).
+   - `signals/` modules NEVER import `execution`, `risk`, `intelligence`, or `strategy_mtf_sniper` (`LINT020`). New concrete sensors NEVER import `directional/`.
+2. **Directional Sub-Systems (`directional/`) own recipe matching & evaluation:**
+   - Register every sub-system (`short_sniper`, `long_sniper`, `waterfall`, or new sub-systems) in `directional/setup_recipes.py` via `SetupRecipe` + `SubSystemSpec` inside `SUBSYSTEM_REGISTRY`.
+   - Every sub-system MUST have its own unique `policy_module` (1 Sub-System = 1 dedicated Policy class, e.g., `LongPolicy`, `ShortPolicy`, `WaterfallShortPolicy`) verified dynamically (`LINT025`).
+   - `DirectionalTradingEngine` MUST dispatch through `subsystem_policies` (`LINT026`).
+   - Never map recipes 1-to-1 by side (`{r.side: r}`); always support multiple sub-systems per side via `recipes_grouped_by_side` (`LINT022`).
+   - All policies must satisfy `DirectionalPolicyProtocol` (checked statically by Pyrefly + runtime `LINT024`–`LINT026`).
+   - `directional/` modules NEVER import `execution`, `risk`, `intelligence`, or `strategy_mtf_sniper` (`LINT023`), and `long` / `short` paths stay isolated (`LINT003`).
+3. **Single-Truth Pipeline (`LINT029`):**
+   - `EntryPipeline.run()` MUST compose all signals via `SetupComposer.compose_suite(...)` — never reconstruct `_candidates_from_sniper_masks`, bypass sensors with direct `MomentumRadar`/`cached_sniper_parts`, or instantiate `TradeCandidate` in `execution/` (`LINT029`).
+   - Optimize speed inside individual `BaseSensor.scan_mask()` / `scan_mask_features()` implementations while maintaining 100% parity with event `scan()`.
+
+## Mandatory Verification CLI
+
+Run before committing or proposing any architecture change (also baked into `docker/Dockerfile.custom`):
+
+```bash
+.venv/bin/python scripts/lint_guardrails.py --verify-all
+```

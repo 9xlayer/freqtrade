@@ -211,10 +211,9 @@ def _policy_view(pol) -> dict:
 
 
 def _assert_path_parity(self, pipe, df, pair, idx, side, part_names, expected_tag):
-    fast = pipe._candidates_from_sniper_masks(df, pair)
-    self.assertIsNotNone(fast)
-    fast_hits = [c for c in fast if c.candle_index == idx and c.side == side]
-    self.assertEqual(len(fast_hits), 1)
+    composed = pipe.setup_composer.compose_suite(pipe.sensor_suite, df, pair)
+    comp_hits = [c for c in composed if c.candle_index == idx and c.side == side]
+    self.assertEqual(len(comp_hits), 1)
 
     events = pipe.sensor_suite.scan(df, pair)
     pipe.candidate_builder.reset()
@@ -223,9 +222,9 @@ def _assert_path_parity(self, pipe, df, pair, idx, side, part_names, expected_ta
     event_hits = [c for c in event if c.candle_index == idx and c.side == side]
     self.assertEqual(len(event_hits), 1)
 
-    f, e = fast_hits[0], event_hits[0]
+    f, e = comp_hits[0], event_hits[0]
     self.assertEqual(_semantic_view(f), _semantic_view(e))
-    self.assertEqual((f.raw_features or {}).get("signal_source"), "vectorized_and")
+    self.assertEqual((f.raw_features or {}).get("signal_source"), "vectorized_compose")
     self.assertEqual((e.raw_features or {}).get("signal_source"), "event_scan")
     self.assertEqual(f.secondary_sensors, list(part_names))
 
@@ -354,6 +353,88 @@ class TestFastVsEventCandidateParity(unittest.TestCase):
             reg.lookup(pair=pair, side="short", entry_tag="short_A80_plus", current_time=ts_125),
             expected_120,
         )
+
+
+class TestSetupComposerComposeSuiteParity(unittest.TestCase):
+    def test_vectorized_compose_suite_matches_event_sniper_and_waterfall(self):
+        from strategies.mtf_sniper.directional.setup_composer import SetupComposer
+        from strategies.mtf_sniper.directional.setup_recipes import (
+            SETUP_SNIPER_LONG,
+            SETUP_SNIPER_SHORT,
+        )
+        from strategies.mtf_sniper.signals.sensors.anomaly_waterfall import WaterfallMomentumSensor
+
+        strat = _make_strategy(enable_waterfall=True)
+        df = _full_df(200)
+        _force_short_sniper_bar(df, 110)
+        _force_long_sniper_bar(df, 150)
+        df.loc[180, ["open", "high", "low", "close", "volume"]] = [
+            100.0, 100.0, 95.0, 95.2, 600.0,
+        ]
+
+        pipe = EntryPipeline.live(strat)
+        composed = pipe.setup_composer.compose_suite(pipe.sensor_suite, df, "BTC/USDT:USDT")
+        self.assertEqual(
+            [(c.candle_index, c.side, c.primary_sensor) for c in composed],
+            [
+                (110, TradeSide.SHORT, SETUP_SNIPER_SHORT),
+                (150, TradeSide.LONG, SETUP_SNIPER_LONG),
+                (180, TradeSide.SHORT, "waterfall_drop"),
+            ],
+        )
+
+        events = pipe.sensor_suite.scan(df, "BTC/USDT:USDT")
+        pipe.candidate_builder.reset()
+        raw = pipe.candidate_builder.process(events)
+        event_composed = SetupComposer(
+            recipes=pipe.setup_composer._recipes, drop_anomalies=False
+        ).compose(raw)
+        wf_bars = [
+            int(i)
+            for i in np.flatnonzero(WaterfallMomentumSensor().scan_mask(df, "BTC/USDT:USDT"))
+        ]
+        self.assertEqual(wf_bars, [180])
+        self.assertEqual(len(composed), len(event_composed))
+        for comp, ev in zip(composed, event_composed, strict=True):
+            if comp.primary_sensor != "waterfall_drop":
+                self.assertEqual(_semantic_view(comp), _semantic_view(ev))
+            row = df.iloc[comp.candle_index].to_dict()
+            self.assertEqual(
+                _policy_view(pipe.engine.evaluate(comp, row)),
+                _policy_view(pipe.engine.evaluate(ev, row)),
+            )
+
+    def test_vectorized_compose_suite_cancels_simultaneous_opposite_sniper(self):
+        df = _full_df(140)
+        df.loc[120, ["short_score", "long_score"]] = [85.0, 85.0]
+        pipe = EntryPipeline.live(_make_strategy(enable_waterfall=False))
+        # Simulate both sniper recipes active at bar 120 via direct _compose_from_masks.
+        n = len(df)
+        both_true = np.zeros(n, dtype=bool)
+        both_true[120] = True
+        masks = {s.name: both_true.copy() for s in pipe.sensor_suite.sensors}
+        out = pipe.setup_composer._compose_from_masks(
+            pipe.sensor_suite.sensors, masks, df, "BTC/USDT:USDT"
+        )
+        self.assertEqual(out, [])
+
+    def test_compose_suite_falls_back_to_events_when_sensor_has_no_mask(self):
+        from strategies.mtf_sniper.directional.setup_composer import SetupComposer
+        from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
+        from strategies.mtf_sniper.signals.sensors import WaterfallDropSensor
+
+        df = _full_df(140)
+        df.loc[120, ["open", "high", "low", "close", "volume"]] = [
+            100.0, 100.0, 95.0, 95.5, 600.0,
+        ]
+        suite = SensorSuite.from_sensors(WaterfallDropSensor())
+        composer = SetupComposer(drop_anomalies=False)
+        events_out: list = []
+        cands = composer.compose_suite(
+            suite, df, "BTC/USDT:USDT", trigger_events_out=events_out
+        )
+        self.assertEqual([e.candle_index for e in events_out], [120])
+        self.assertEqual([c.candle_index for c in cands], [120])
 
 
 if __name__ == "__main__":
