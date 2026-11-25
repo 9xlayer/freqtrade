@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir socksio
 # Coolify/CI: bake strategies from git into the image so every rebuild
 # picks up strategies/mtf_sniper without relying on the user_data volume.
 COPY --chown=ftuser:ftuser strategies/ /freqtrade/strategies/
-COPY scripts/lint_guardrails.py /tmp/lint_guardrails.py
+COPY --chown=ftuser:ftuser scripts/lint_guardrails.py /tmp/lint_guardrails.py
 
 # Fail image build immediately if MTF Sniper architectural guardrails fail.
 ENV PYTHONPATH=/freqtrade
