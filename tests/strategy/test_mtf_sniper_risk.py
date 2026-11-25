@@ -307,6 +307,115 @@ class TestPositionSizing(unittest.TestCase):
             100.0,
         )
 
+    def test_risk_budget_caps_stake_by_pair_stoploss(self):
+        from strategies.mtf_sniper.risk.position_sizing import resolve_risk_cap_stake
+
+        # 1000 equity * 3% risk / 0.25 BTC SL = 120 USDT hard ceiling (< 500 proposed)
+        # 1.10x tag multiplier NEVER breaches 3% budget (caps at 120.0, not 132.0).
+        self.assertAlmostEqual(resolve_risk_cap_stake(1000.0, -0.25, 0.03) or 0.0, 120.0, places=9)
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=500.0,
+                max_stake=700.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=True,
+                counter_trend_scale=1.0,
+                wallet_equity=1000.0,
+                stoploss_pct=-0.25,
+                risk_per_trade_pct=0.03,
+            ),
+            120.0,
+            places=9,
+        )
+        # Downward scaling (counter_trend_scale=0.50 or tag < 1.0) scales below hard ceiling.
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=500.0,
+                max_stake=700.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=True,
+                counter_trend_scale=0.50,
+                wallet_equity=1000.0,
+                stoploss_pct=-0.25,
+                risk_per_trade_pct=0.03,
+            ),
+            60.0,
+            places=9,
+        )
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=500.0,
+                max_stake=700.0,
+                entry_tag="short_C_sub65",
+                enable_dynamic_sizing=True,
+                counter_trend_scale=1.0,
+                wallet_equity=1000.0,
+                stoploss_pct=-0.25,
+                risk_per_trade_pct=0.03,
+            ),
+            102.0,
+            places=9,
+        )
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=500.0,
+                max_stake=700.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=False,
+                wallet_equity=1000.0,
+                stoploss_pct=-0.25,
+                risk_per_trade_pct=0.03,
+            ),
+            120.0,
+            places=9,
+        )
+        # Invalid inputs fall back cleanly without capping
+        self.assertIsNone(resolve_risk_cap_stake(1000.0, -0.25, None))
+        self.assertIsNone(resolve_risk_cap_stake(float("nan"), -0.25, 0.03))
+        self.assertIsNone(resolve_risk_cap_stake(1000.0, 0.0, 0.03))
+
+    def test_custom_stake_amount_rejects_when_risk_cap_below_min_stake(self):
+        from strategies.mtf_sniper.risk.risk_engine import RiskEngine
+        from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
+
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat.enable_dynamic_sizing = True
+        strat.risk_per_trade_pct = 0.03
+        strat.stoploss = -0.28
+        strat.custom_pair_params = {"BTC/USDT:USDT": {"stoploss": -0.25}}
+        strat._resolve_wallet_equity = lambda: 100.0  # type: ignore[method-assign]
+        strat._get_risk_engine = lambda: RiskEngine(risk_per_trade_pct=0.03)  # type: ignore[method-assign]
+
+        # 100 equity * 3% / 0.25 = 12 < min_stake=20 -> returns 0.0 (reject) instead of 20.0
+        out = strat.custom_stake_amount(
+            pair="BTC/USDT:USDT",
+            current_time=datetime.now(UTC),
+            current_rate=50000.0,
+            proposed_stake=50.0,
+            min_stake=20.0,
+            max_stake=70.0,
+            leverage=10.0,
+            entry_tag="long_A80_plus",
+            side="long",
+        )
+        self.assertEqual(out, 0.0)
+
+        # When risk_per_trade_pct is None, preserves legacy min_stake floor fallback
+        strat.risk_per_trade_pct = None
+        strat._get_risk_engine = lambda: RiskEngine(risk_per_trade_pct=None)  # type: ignore[method-assign]
+        out_legacy = strat.custom_stake_amount(
+            pair="BTC/USDT:USDT",
+            current_time=datetime.now(UTC),
+            current_rate=50000.0,
+            proposed_stake=10.0,
+            min_stake=20.0,
+            max_stake=70.0,
+            leverage=10.0,
+            entry_tag="long_A80_plus",
+            side="long",
+        )
+        self.assertEqual(out_legacy, 20.0)
+
 
 class TestStoplossLadder(unittest.TestCase):
     def test_base_stoploss_positive_relative(self):

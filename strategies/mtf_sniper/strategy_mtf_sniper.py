@@ -162,6 +162,7 @@ class StrategyMTFSniper(IStrategy):
         self.enable_telemetry = switches.enable_telemetry
         self.default_leverage = switches.default_leverage
         self._tag_multipliers = switches.tag_multipliers
+        self.risk_per_trade_pct = switches.risk_per_trade_pct
         self.exchange_sync_interval_secs = switches.exchange_sync_interval_secs
         self.custom_pair_params = merge_pair_overrides(
             type(self).custom_pair_params, strat_cfg
@@ -323,6 +324,7 @@ class StrategyMTFSniper(IStrategy):
                 config_fingerprint=self._config_fingerprint,
                 default_leverage=float(getattr(self, "default_leverage", 10.0) or 10.0),
                 tag_multipliers=getattr(self, "_tag_multipliers", None),
+                risk_per_trade_pct=getattr(self, "risk_per_trade_pct", None),
             )
         return self._risk_engine
 
@@ -376,15 +378,26 @@ class StrategyMTFSniper(IStrategy):
             counter_scale = resolve_counter_1d_scale(
                 side, row, counter_scale=self._resolve_counter_1d_stake_scale()
             )
+        pair_sl = float(self._get_pair_params(pair).get("stoploss", self.stoploss) or self.stoploss)
+        risk_pct = getattr(self, "risk_per_trade_pct", None)
         stake = self._get_risk_engine().get_stake_amount(
             proposed_stake=proposed_stake,
             max_stake=max_stake,
             entry_tag=entry_tag,
             enable_dynamic_sizing=enable_dynamic,
             counter_trend_scale=counter_scale,
+            wallet_equity=self._resolve_wallet_equity(),
+            stoploss_pct=pair_sl,
         )
-        if min_stake is not None and stake < min_stake <= max_stake:
-            return min_stake
+        if min_stake is not None and stake < min_stake:
+            if risk_pct is not None:
+                logger.info(
+                    f"[RiskBudget] {pair}: capped stake {stake:.2f} < min_stake {min_stake:.2f} "
+                    "— rejecting entry instead of breaching risk budget."
+                )
+                return 0.0
+            if min_stake <= max_stake:
+                return min_stake
         return stake
 
     stoploss = -0.28

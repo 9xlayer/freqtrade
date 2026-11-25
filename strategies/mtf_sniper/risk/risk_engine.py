@@ -43,12 +43,14 @@ class RiskEngine:
         config_fingerprint: str = "",
         default_leverage: float = 10.0,
         tag_multipliers: Mapping[str, float] | None = None,
+        risk_per_trade_pct: float | None = None,
     ) -> None:
         self.decision_ledger = decision_ledger
         self.max_open_trades = max_open_trades
         self.config_fingerprint = config_fingerprint
         self.default_leverage = default_leverage
         self.tag_multipliers = dict(tag_multipliers) if tag_multipliers is not None else None
+        self.risk_per_trade_pct = risk_per_trade_pct
         self._seen_reject_bursts: set[tuple[str, str, str, tuple[str, ...], int]] = set()
 
     @staticmethod
@@ -396,6 +398,8 @@ class RiskEngine:
         entry_tag: str | None,
         enable_dynamic_sizing: bool,
         counter_trend_scale: float = 1.0,
+        wallet_equity: float | None = None,
+        stoploss_pct: float | None = None,
     ) -> float:
         return resolve_stake_amount(
             proposed_stake=proposed_stake,
@@ -404,6 +408,9 @@ class RiskEngine:
             enable_dynamic_sizing=enable_dynamic_sizing,
             counter_trend_scale=counter_trend_scale,
             tag_multipliers=self.tag_multipliers,
+            wallet_equity=wallet_equity,
+            stoploss_pct=stoploss_pct,
+            risk_per_trade_pct=self.risk_per_trade_pct,
         )
 
     def get_stoploss(

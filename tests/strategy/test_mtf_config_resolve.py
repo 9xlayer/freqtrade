@@ -166,6 +166,17 @@ class TestConfigResolve(unittest.TestCase):
         self.assertNotEqual(base.fingerprint(), changed_wf.fingerprint())
         self.assertNotEqual(base.fingerprint(), changed_scale.fingerprint())
 
+    def test_risk_per_trade_pct_is_opt_in_and_fingerprinted(self) -> None:
+        self.assertIsNone(resolve_strategy_switches({}).risk_per_trade_pct)
+        cfg_opt = resolve_strategy_switches({"risk_per_trade_pct": 0.04})
+        self.assertEqual(cfg_opt.risk_per_trade_pct, 0.04)
+        env_opt = resolve_strategy_switches({}, environ={"RISK_PER_TRADE_PCT": "0.05"})
+        self.assertEqual(env_opt.risk_per_trade_pct, 0.05)
+
+        fp_default = build_effective_config(_fake_strategy()).fingerprint()
+        fp_risk4 = build_effective_config(_fake_strategy(risk_per_trade_pct=0.04)).fingerprint()
+        self.assertNotEqual(fp_default, fp_risk4)
+
 
 if __name__ == "__main__":
     unittest.main()

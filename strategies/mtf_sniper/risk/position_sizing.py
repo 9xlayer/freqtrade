@@ -88,6 +88,27 @@ def resolve_leverage(max_leverage: float | None, target: float = DEFAULT_LEVERAG
     return target
 
 
+def resolve_risk_cap_stake(
+    wallet_equity: float | None,
+    stoploss_pct: float | None,
+    risk_per_trade_pct: float | None,
+) -> float | None:
+    """Return max margin stake capping hard-SL loss at ``risk_per_trade_pct`` of equity."""
+    if wallet_equity is None or stoploss_pct is None or risk_per_trade_pct is None:
+        return None
+    try:
+        eq = float(wallet_equity)
+        sl = abs(float(stoploss_pct))
+        risk = float(risk_per_trade_pct)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(eq) and math.isfinite(sl) and math.isfinite(risk)):
+        return None
+    if eq <= 0.0 or sl <= 0.0 or not (0.0 < risk < 1.0):
+        return None
+    return (eq * risk) / sl
+
+
 def resolve_stake_amount(
     *,
     proposed_stake: float,
@@ -96,13 +117,20 @@ def resolve_stake_amount(
     enable_dynamic_sizing: bool,
     counter_trend_scale: float = 1.0,
     tag_multipliers: Mapping[str, float] | tuple[tuple[str, float], ...] | None = None,
+    wallet_equity: float | None = None,
+    stoploss_pct: float | None = None,
+    risk_per_trade_pct: float | None = None,
 ) -> float:
     """
-    Flat 1.0x when dynamic sizing is off. When enabled, apply tag multipliers and
-    counter-1D trend scaling (in (0, 1]), then cap at max_stake.
+    Scale proposed_stake by tag multipliers and counter-1D trend scale (when dynamic
+    sizing is enabled). When risk_per_trade_pct is active, enforce a hard budget
+    ceiling (`risk_cap * min(1.0, multiplier) * trend_scale`) so multipliers > 1.0
+    never breach the risk budget while downward scaling stays effective.
     """
+    risk_cap = resolve_risk_cap_stake(wallet_equity, stoploss_pct, risk_per_trade_pct)
     if not enable_dynamic_sizing:
-        return min(proposed_stake, max_stake)
+        base_stake = min(proposed_stake, risk_cap) if risk_cap is not None else proposed_stake
+        return min(base_stake, max_stake)
 
     multiplier = 1.0
     pairs = (
@@ -116,4 +144,8 @@ def resolve_stake_amount(
                 multiplier = float(mult)
                 break
     trend_scale = normalize_counter_1d_scale(counter_trend_scale, default=1.0)
-    return min(proposed_stake * multiplier * trend_scale, max_stake)
+    scaled = proposed_stake * multiplier * trend_scale
+    if risk_cap is not None:
+        budget_cap = risk_cap * min(1.0, multiplier) * trend_scale
+        scaled = min(scaled, budget_cap)
+    return min(scaled, max_stake)

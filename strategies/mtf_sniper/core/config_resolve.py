@@ -26,6 +26,7 @@ class StrategySwitchConfig:
     default_leverage: float = 10.0
     counter_1d_stake_scale: float | None = None
     tag_multipliers: dict[str, float] | None = None
+    risk_per_trade_pct: float | None = None
     exchange_sync_interval_secs: float = 15.0
 
 
@@ -72,6 +73,23 @@ def _parse_tag_multipliers(raw: object) -> dict[str, float] | None:
     return out or None
 
 
+def _parse_optional_unit_float(
+    cfg: Mapping[str, Any],
+    env: Mapping[str, str],
+    cfg_key: str,
+    env_key: str,
+    *,
+    max_val: float = 1.0,
+) -> float | None:
+    raw = cfg.get(cfg_key)
+    if raw is None:
+        raw = env.get(env_key)
+    if raw is None or str(raw).strip() == "":
+        return None
+    parsed = parse_float(raw, -1.0, min_value=0.0, max_value=max_val)
+    return parsed if 0.0 < parsed <= max_val else None
+
+
 def resolve_strategy_switches(
     strat_cfg: Mapping[str, Any] | None,
     *,
@@ -98,19 +116,18 @@ def resolve_strategy_switches(
         raw_lev = env.get("DEFAULT_LEVERAGE")
     default_leverage = parse_float(raw_lev, 10.0, min_value=1.0, max_value=125.0)
 
-    raw_counter_scale = cfg.get("counter_1d_stake_scale")
-    if raw_counter_scale is None:
-        raw_counter_scale = env.get("COUNTER_1D_STAKE_SCALE")
-    counter_scale: float | None = None
-    if raw_counter_scale is not None and str(raw_counter_scale).strip() != "":
-        parsed_scale = parse_float(raw_counter_scale, -1.0, min_value=0.0, max_value=1.0)
-        if parsed_scale > 0.0:
-            counter_scale = parsed_scale
+    counter_scale = _parse_optional_unit_float(
+        cfg, env, "counter_1d_stake_scale", "COUNTER_1D_STAKE_SCALE", max_val=1.0
+    )
 
     raw_sync_secs = cfg.get("exchange_sync_interval_secs")
     if raw_sync_secs is None:
         raw_sync_secs = env.get("EXCHANGE_SYNC_INTERVAL_SECS")
     sync_secs = parse_float(raw_sync_secs, 15.0, min_value=0.0, max_value=3600.0)
+
+    risk_pct = _parse_optional_unit_float(
+        cfg, env, "risk_per_trade_pct", "RISK_PER_TRADE_PCT", max_val=0.99
+    )
 
     return StrategySwitchConfig(
         block_macro_bull_shorts=_bool_switch(
@@ -125,6 +142,7 @@ def resolve_strategy_switches(
         default_leverage=default_leverage,
         counter_1d_stake_scale=counter_scale,
         tag_multipliers=_parse_tag_multipliers(cfg.get("tag_multipliers")),
+        risk_per_trade_pct=risk_pct,
         exchange_sync_interval_secs=sync_secs,
     )
 
@@ -240,6 +258,7 @@ def build_effective_config(
         ),
         "default_leverage": _pval("default_leverage", 10.0),
         "tag_multipliers": _pval("_tag_multipliers"),
+        "risk_per_trade_pct": _pval("risk_per_trade_pct"),
     }
     pair_overrides = {
         str(k): dict(v) for k, v in (getattr(strategy, "custom_pair_params", {}) or {}).items()
