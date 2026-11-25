@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current focus
-**v4.5.4-review-hardening** — System Review Fixes, Telemetry Hardening & Live-Parity Verification (Nov 25, 2026):
+**v4.6.0-counter1d** — System Review Hardening, Counter-1D Sizing (`0.50x`), Standardized Config & Live Exchange Sync (Nov 25, 2026):
 - **Portfolio Protection (`risk/portfolio_protection.py`)**:
   - Normalized naive UTC `close_date` vs UTC-aware `current_time` (`_to_utc_timestamp` / `close_date_utc`) so circuit-breaker pause windows never shift by local OS timezone.
   - Included backtest `LocalTrade` rows with `strategy == ""` in `filter_strategy_trades` (keeping `strategy=None` and foreign strategy names excluded) to restore backtest–live parity.
@@ -112,7 +112,7 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 
 ## Versions
 - Single hub: `strategies/mtf_sniper/__init__.py`
-- `STRATEGY_VERSION` `4.5.0-waterfall` / Decision engine `2.7.2` / Hunter `2.7.0`
+- `STRATEGY_VERSION` `4.6.0-counter1d` / Decision engine `2.7.2` / Hunter `2.7.0`
 - External prompt A/B via `JEV_DECISION_PROMPT_VARIANT` (default `richctx`); cache identity per suffix
 
 ## External Decision prompt A/B (2026-11-19, 5Y `20220101-20261116`)

@@ -1,6 +1,6 @@
 # Stabilization — Deterministic MTF Sniper
 
-**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone:** `4.4.1-deterministic` (current package in `__init__.py`: `4.5.0-waterfall`) · **Phase:** Hunter OFF by design
+**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone:** `4.4.1-deterministic` (current package in `__init__.py`: `4.6.0-counter1d`) · **Phase:** Hunter OFF by design
 
 ## Runtime modes
 

@@ -1,6 +1,6 @@
 # MTF Sniper — System Architecture
 
-**Package:** `strategies/mtf_sniper/` · **Version:** `STRATEGY_VERSION` in `__init__.py` (`4.5.0-waterfall`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
+**Package:** `strategies/mtf_sniper/` · **Version:** `STRATEGY_VERSION` in `__init__.py` (`4.6.0-counter1d`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
 
 **Invariant:** Layered modules. Legacy AND-mask rules are ported into layers; live entry always goes through `EntryPipeline` (never a strategy-facade short-circuit of Policy).
 

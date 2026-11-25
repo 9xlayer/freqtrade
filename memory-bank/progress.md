@@ -4,7 +4,7 @@
 - Part sensors + SetupComposer recipes (`setup:sniper_short/long`)
 - Vectorized AND fast path in `EntryPipeline` (BT-safe)
 - Policy setup-only ACCEPT; live Hunter off
-- **System Review Hardening (Nov 25, 2026)**:
+- **System Review Hardening, Counter-1D Sizing & Live Exchange Sync (v4.6.0-counter1d, Nov 25, 2026)**:
   - Fixed `circuit_breaker_blocks` UTC timestamp handling, backtest `LocalTrade` (`strategy=""`) parity, non-overlapping streak reset after pause, and correlated cross-pair entry loss deduplication.
   - Filtered `_remember_accepted_candidates` post-cooldown/conflict, wired `EntryPipeline.live` policy params, fixed `ShortPolicy` waterfall scoring floor, and made `tag_*_sniper` duplicate-index-safe.
   - Synced `jev_fail_policy` across Strategy/Adapter/Engine, fixed ETH base-asset check, added real AI/stake/`wallet_equity` telemetry + 15m reject-burst deduplication, bounded `DecisionLedger`/`TradeLedger` buffers + 10 MiB JSONL rotation (`telemetry/jsonl_io.py`), and lowered Docker `JEV_API_TIMEOUT` default to `4`s.
@@ -36,7 +36,7 @@
 - **5Y 2022-2026 Backtest Proven (`20220101-20261116`)**: 344 trades, **+77,412.93 USDT (+7,741.29%)**, **Max DD: 18.89%**, **WR: 57.8%**. Outperforms pre-waterfall baseline (+52,690 USDT) by **+$24,722.16 USDT (+2,472 pp)** with ZERO increase in Drawdown (18.89% flat)! Calmar surges to **440.14**! Sharpe: **1.35**, Sortino: **1.60**. Waterfall trades contributed **+$36,637.40 USDT nominal PnL**.
 - **Architectural Guardrails Linter & Quality Standards**: Enforces AGENT OPERATING PRINCIPLES with automated checks (`scripts/lint_guardrails.py`, LINT001-LINT018) covering 100% English codebase (Rule 2), 99% No-Comment Policy (<5% density), anti-lookahead bias (`shift(-k)`), anti-silent-exception-swallowing, directional isolation, redundant type-cast prevention (`LINT014`), Meta Pyrefly strict type checking (`LINT015`), immutable data contracts (`LINT016`), Facade thinness (`LINT017`), and sensor OOP inheritance (`LINT018`).
 - **Linter & VS Code Problems Tab Fully Clean**: Zero errors across Ruff (`.venv/bin/ruff check`), Pyrefly (`pyrefly check`), Pyright, and Python compiler. `scripts/lint_guardrails.py` refactored to modular architecture (McCabe complexity <= 12, line length <= 100). 421 strategy unit tests passing, 1 skipped (`pytest tests/strategy/`).
-- Version sync: package/strategy `4.5.0-waterfall`; Decision engine `2.7.2` (richctx + prompt variants); Hunter `2.7.0`
+- Version sync: package/strategy `4.6.0-counter1d`; Decision engine `2.7.2` (richctx + prompt variants); Hunter `2.7.0`
 - Hybrid Decision Score + High-Runway Confluence: AI noul integrated as continuous score term (`w_ai=0.10`, `choppy_penalty=0.05`). With structural runway confluence (`floor_dist >= 15%`, `dist_ema50_1h < 0`, `rsi_1h < 50` -> +0.10 bonus) and trap protection, 5Y BT reaches **+5269.08%** (+$52,690.77 USDT), **PF 1.730**, **WR 58.80%**, **DD 18.89%**. Successfully rescues the +107.34% winner (2024-01-20 ETH) while fully vetoing the -27.95% crash (2025-11-24 ETH), outperforming Decision OFF (+5096.55%) by +172.5 pp!
 - External prompt A/B harness: `JEV_DECISION_PROMPT_VARIANT` + scorecard — **5Y Pareto NO_SHIP** for binary gate (hybrid score succeeds instead)
 

@@ -17,7 +17,7 @@ from strategies.mtf_sniper.core.runtime_mode import RuntimeMode, RuntimeProfile
 
 def _fake_strategy(**overrides: object) -> SimpleNamespace:
     defaults: dict[str, object] = {
-        "strategy_version": "4.5.0-waterfall",
+        "strategy_version": "4.6.0-counter1d",
         "config": {"strategy_params": {"mtf_runtime_mode": "deterministic"}},
         "block_macro_bull_shorts": False,
         "enable_dynamic_sizing": False,
