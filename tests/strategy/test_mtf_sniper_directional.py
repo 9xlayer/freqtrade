@@ -196,7 +196,7 @@ class TestShortPolicy(unittest.TestCase):
         self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, result.reasons)
 
     def test_waterfall_vacuum_deep_runway_accepted(self):
-        """Deep vacuum momentum (e.g. Nov 20 crash: -8% 4H / -18% 1D) within -10%/-20% is accepted."""
+        """Deep vacuum momentum (-8% 4H / -18% 1D) within -10%/-20% band is accepted."""
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
         cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={})
         # Deep vacuum breakdown: -8.0% from 4H EMA50, -18.0% from 1D EMA50 (within -10% / -20% band)
@@ -428,6 +428,210 @@ class TestEntryPipeline(unittest.TestCase):
         self.assertIsNone(pipe.hunter_escalation)
         self.assertFalse(pipe.engine.long_policy.config.allow_anomaly_entries)
         self.assertTrue(pipe.engine.short_policy.config.allow_anomaly_entries)
+
+    def test_live_factory_wires_strategy_policy_parameters(self):
+        strat = type(
+            "S",
+            (),
+            {
+                "block_macro_bull_shorts": False,
+                "enable_waterfall": True,
+                "max_rejection_wick_ratio": 0.35,
+                "max_close_pos_ratio_short": 0.35,
+                "short_min_rsi_entry": 26.0,
+            },
+        )()
+        pipe = EntryPipeline.live(strat)
+        self.assertAlmostEqual(pipe.engine.short_policy.config.max_rejection_wick_ratio, 0.35)
+        self.assertAlmostEqual(pipe.engine.short_policy.config.max_close_pos_ratio, 0.35)
+        self.assertAlmostEqual(pipe.engine.short_policy.config.min_rsi_entry, 26.0)
+
+    def test_waterfall_low_short_score_not_rejected_against_zero(self):
+        cand = _candidate(TradeSide.SHORT, "waterfall_drop", features={"short_score": 50.0})
+        row = {
+            "open": 100.0,
+            "high": 100.5,
+            "low": 94.8,
+            "close": 95.0,
+            "lower_wick_ratio": 0.05,
+            "close_pos_ratio": 0.05,
+            "rsi": 35.0,
+            "ema_21": 96.0,
+            "ema_50_4h": 97.0,
+            "ema_50_1d": 102.0,
+            "ema_200_1d": 105.0,
+            "swing_low_20d_1d": 96.0,
+            "macdhist_4h": -5.0,
+            "bb_width_4h": 0.06,
+            "rel_vol": 4.0,
+            "atr_pct": 60.0,
+            "short_score": 50.0,
+        }
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        res = policy.evaluate(cand, row)
+        self.assertTrue(res.is_valid)
+        self.assertGreaterEqual(res.score, 0.70)
+
+    def test_short_policy_fails_closed_on_nan_indicators(self):
+        cand = TradeCandidate(
+            candidate_id="ETH_SHORT_20240101T0000_105",
+            pair="ETH/USDT:USDT",
+            side=TradeSide.SHORT,
+            primary_sensor="waterfall_drop",
+            secondary_sensors=[],
+            confluence_count=1,
+            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            candle_index=105,
+            raw_features={"setup_name": "waterfall_collapse", "short_score": 80.0},
+        )
+        row = {
+            "open": 100.0,
+            "high": 100.5,
+            "low": 98.0,
+            "close": 98.2,
+            "swing_low_20d_1d": 99.0,
+            "ema_50_4h": float("nan"),
+            "bb_width_4h": float("nan"),
+            "atr_pct": float("nan"),
+            "rel_vol": 3.5,
+            "lower_wick_ratio": float("nan"),
+            "close_pos_ratio": float("nan"),
+            "rsi": float("nan"),
+            "ema_21": float("nan"),
+            "short_score": 80.0,
+        }
+        policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
+        res = policy.evaluate(cand, row)
+        self.assertFalse(res.is_valid)
+        self.assertIn(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value, res.reasons)
+
+    def test_long_policy_fails_closed_on_nan_and_non_positive_close(self):
+        cand = _candidate(TradeSide.LONG, "volume_surge", features={"long_score": 85.0})
+        policy = LongPolicy(LongPolicyConfig(allow_anomaly_entries=True, enable_hunter_long=True))
+        nan_row = {
+            "close": 100.0,
+            "upper_wick_ratio": float("nan"),
+            "close_pos_ratio": float("nan"),
+            "rsi": float("nan"),
+            "ema_21": float("nan"),
+        }
+        self.assertFalse(policy.evaluate(cand, nan_row).is_valid)
+        self.assertFalse(policy.evaluate(cand, {"close": 0.0, "rsi": 55.0}).is_valid)
+
+    def test_entry_pipeline_dedups_same_bar_accepted_and_gates_unready_radar(self):
+        from types import SimpleNamespace
+
+        import pandas as pd
+
+        n = 120
+        dates = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": [100.0] * n,
+                "high": [101.0] * n,
+                "low": [99.0] * n,
+                "close": [100.0] * n,
+                "volume": [10.0] * n,
+                "body": [1.0] * n,
+                "total_range": [2.0] * n,
+                "atr": [1.0] * n,
+                "atr_pct": [50.0] * n,
+                "close_1h": [100.0] * n,
+                "ema_50_1h": [100.0] * n,
+                "macdhist_1h": [-0.1] * n,
+                "macdhist_prev_1h": [0.0] * n,
+                "rsi_max_24_1h": [60.0] * n,
+                "rsi_min_24_1h": [40.0] * n,
+                "adx_4h": [25.0] * n,
+                "macdhist_4h": [-0.2] * n,
+                "is_bull_wave_4h": [0] * n,
+                "is_bear_wave_4h": [1] * n,
+                "ema_50_1d": [105.0] * n,
+                "macdhist_1d": [-0.3] * n,
+                "pdh_1d": [104.0] * n,
+                "swing_low": [98.0] * n,
+                "swing_high": [102.0] * n,
+                "swing_low_20d_1d": [102.0] * n,
+                "ema_50_4h": [103.0] * n,
+                "bb_width_4h": [0.05] * n,
+                "bb_width_1d": [0.15] * n,
+                "range_24h": [0.03] * n,
+                "ema_10": [98.0] * n,
+                "ema_200_1d": [110.0] * n,
+                "dist_from_ema_200_1d": [0.1] * n,
+                "is_macro_bull_run_1d": [0] * n,
+                "is_macro_bear_market_1d": [0] * n,
+                "is_deep_capitulation_1d": [0] * n,
+                "rsi": [35.0] * n,
+                "ema_21": [96.0] * n,
+                "upper_wick_ratio": [0.05] * n,
+                "lower_wick_ratio": [0.05] * n,
+                "close_pos_ratio": [0.05] * n,
+                "rel_vol": [5.0] * n,
+                "short_score": [85.0] * n,
+                "long_score": [50.0] * n,
+            }
+        )
+        # Bar 105 triggers MomentumRadar MEGA_SURGE_SHORT, but atr_pct is NaN -> must be gated out.
+        df.loc[105, ["open", "high", "low", "close", "volume"]] = [100.0, 100.0, 95.0, 95.2, 60.0]
+        df.loc[105, "atr_pct"] = float("nan")
+        # Bar 118 triggers MomentumRadar after 12-bar cooldown with all valid fields.
+        df.loc[118, ["open", "high", "low", "close", "volume"]] = [100.0, 100.0, 95.0, 95.2, 60.0]
+
+        pipe = EntryPipeline(
+            short_config=ShortPolicyConfig(allow_anomaly_entries=True),
+        )
+        c1 = _candidate(
+            TradeSide.SHORT, "setup:sniper_short", idx=10, features=_setup_features("short", 85.0)
+        )
+        c2 = _candidate(
+            TradeSide.SHORT,
+            "waterfall_drop",
+            idx=10,
+            features={"setup_name": "waterfall_collapse", "short_score": 80.0},
+        )
+        pipe._candidates_from_sniper_masks = lambda _df, _pair: [c1, c2]  # type: ignore[method-assign]
+        res = pipe.run(df, "BTC/USDT:USDT")
+        self.assertEqual(len(res.accepted), 1)
+        self.assertEqual(res.accepted[0][0].candidate_id, c1.candidate_id)
+
+        def _p(v: object) -> SimpleNamespace:
+            return SimpleNamespace(value=v)
+
+        strat = SimpleNamespace(
+            block_macro_bull_shorts=False,
+            enable_waterfall=True,
+            custom_pair_params={},
+            block_high_vol=_p(True),
+            high_vol_pct=_p(90.0),
+            min_adx_4h=_p(18.0),
+            filter_wick_rejection=_p(True),
+            max_rejection_wick_ratio=_p(0.35),
+            min_close_pos_ratio_long=_p(0.65),
+            max_close_pos_ratio_short=_p(0.35),
+            filter_pdh_ceiling=_p(True),
+            block_4h_counter_wave=_p(True),
+            block_1d_counter_wave=_p(True),
+            long_max_dist_ema21=_p(3.3),
+            long_candle_body_ratio_min=_p(0.63),
+            long_lookback_resistance=_p(15),
+            long_loc_tolerance_1h=_p(0.988),
+            long_max_1h_rsi_exhaustion=_p(57.1),
+            long_block_1d_macd=_p(False),
+            long_overextended_dist_max=_p(0.53),
+            long_max_rsi_entry=_p(68.1),
+            short_max_dist_ema21=_p(1.0),
+            short_candle_body_ratio_min=_p(0.62),
+            short_loc_tolerance_1h=_p(0.991),
+            short_min_1h_rsi_exhaustion=_p(55.1),
+            short_min_rsi_entry=_p(27.8),
+        )
+        live_pipe = EntryPipeline.live(strat)
+        live_cands = live_pipe._candidates_from_sniper_masks(df, "BTC/USDT:USDT") or []
+        radar_bars = [c.candle_index for c in live_cands if c.primary_sensor == "waterfall_drop"]
+        self.assertNotIn(105, radar_bars)
+        self.assertIn(118, radar_bars)
 
 
 if __name__ == "__main__":

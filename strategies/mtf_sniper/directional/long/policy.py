@@ -7,12 +7,17 @@ Anomaly path behind ``allow_anomaly_entries`` (default False / AI off).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from strategies.mtf_sniper.core.contracts import PolicyEvaluationResult, TradeCandidate
 from strategies.mtf_sniper.core.enums import RejectionReasonCode, TradeSide
+from strategies.mtf_sniper.directional.common_gates import (
+    has_invalid_numeric,
+    read_finite_float,
+)
 from strategies.mtf_sniper.directional.long.hunter_gates import DEFAULT_LONG_HUNTER_GATES
 from strategies.mtf_sniper.directional.long.setups import (
     LongSetup,
@@ -76,27 +81,55 @@ class LongPolicy:
             },
         )
 
+    _ANOMALY_NUM_KEYS = (
+        "ema_50_1d",
+        "ema_200_1d",
+        "is_macro_bear_market_1d",
+        "upper_wick_ratio",
+        "close_pos_ratio",
+        "rsi",
+        "ema_21",
+        "dist_from_ema_200_1d",
+        "pdh_1d",
+    )
+
+    def _check_macro_and_ceiling(self, row: Mapping[str, Any], close: float) -> list[str]:
+        reasons: list[str] = []
+        cfg = self.config
+        ema_50_1d = row.get("ema_50_1d")
+        ema_200_1d = row.get("ema_200_1d")
+        if cfg.require_macro_bull and ema_50_1d is not None and ema_200_1d is not None:
+            in_bear = close < float(ema_200_1d) or close < float(ema_50_1d)
+            macro_bear_flag = read_finite_float(row, "is_macro_bear_market_1d", 0.0) == 1.0
+            if in_bear or macro_bear_flag:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+
+        if cfg.filter_pdh_ceiling and "pdh_1d" in row and row.get("pdh_1d") is not None:
+            pdh = float(row["pdh_1d"])
+            if close < pdh and close >= pdh * 0.997:
+                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+        return reasons
+
     def _check_anomaly_filters(
         self,
         row: Mapping[str, Any],
         close: float,
         is_hunterish: bool,
     ) -> list[str]:
-        reasons: list[str] = []
+        if (
+            not math.isfinite(close)
+            or close <= 0.0
+            or has_invalid_numeric(row, self._ANOMALY_NUM_KEYS)
+        ):
+            return [RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value]
+
         cfg = self.config
         hg = DEFAULT_LONG_HUNTER_GATES
-        ema_50_1d = row.get("ema_50_1d")
-        ema_200_1d = row.get("ema_200_1d")
-
-        if cfg.require_macro_bull and ema_50_1d is not None and ema_200_1d is not None:
-            in_bear = close < float(ema_200_1d) or close < float(ema_50_1d)
-            macro_bear_flag = float(row.get("is_macro_bear_market_1d", 0) or 0) == 1
-            if in_bear or macro_bear_flag:
-                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
+        reasons = self._check_macro_and_ceiling(row, close)
 
         if cfg.filter_wick_rejection:
-            upper_wick = float(row.get("upper_wick_ratio", 0.0) or 0.0)
-            close_pos = float(row.get("close_pos_ratio", 0.5) or 0.5)
+            upper_wick = read_finite_float(row, "upper_wick_ratio", 0.0)
+            close_pos = read_finite_float(row, "close_pos_ratio", 0.5)
             wick_limit = hg.max_upper_wick_ratio if is_hunterish else cfg.max_rejection_wick_ratio
             close_floor = hg.min_close_pos_ratio if is_hunterish else cfg.min_close_pos_ratio
             if upper_wick > wick_limit:
@@ -104,7 +137,7 @@ class LongPolicy:
             if close_pos < close_floor:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
-        rsi = float(row.get("rsi", 50.0) or 50.0)
+        rsi = read_finite_float(row, "rsi", 50.0)
         rsi_cap = hg.max_rsi if is_hunterish else cfg.max_rsi_entry
         if rsi > rsi_cap:
             reasons.append(RejectionReasonCode.REJECT_RSI_OVEREXTENDED.value)
@@ -117,17 +150,9 @@ class LongPolicy:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
         overext_cap = hg.max_dist_ema200_1d if is_hunterish else cfg.overextended_dist_max
-        if (
-            "dist_from_ema_200_1d" in row
-            and row.get("dist_from_ema_200_1d") is not None
-            and float(row["dist_from_ema_200_1d"]) > overext_cap
-        ):
+        dist_200 = row.get("dist_from_ema_200_1d")
+        if dist_200 is not None and float(dist_200) > overext_cap:
             reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
-
-        if cfg.filter_pdh_ceiling and "pdh_1d" in row and row.get("pdh_1d") is not None:
-            pdh = float(row["pdh_1d"])
-            if close < pdh and close >= pdh * 0.997:
-                reasons.append(RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value)
 
         return reasons
 

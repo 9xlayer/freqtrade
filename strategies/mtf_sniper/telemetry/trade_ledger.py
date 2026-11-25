@@ -4,21 +4,36 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import deque
 from collections.abc import Iterable
-from dataclasses import asdict
 from pathlib import Path
 
 from strategies.mtf_sniper.core.contracts import TelemetryTradeRecord
+from strategies.mtf_sniper.telemetry.jsonl_io import DEFAULT_MAX_FILE_BYTES, append_jsonl_row
+
+
+DEFAULT_MAX_BUFFER = 2000
 
 
 class TradeLedger:
-    """Persists TelemetryTradeRecord rows as JSONL."""
+    """Persists TelemetryTradeRecord rows as JSONL with bounded RAM buffer and rotation."""
 
-    def __init__(self, path: str | Path | None = None, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        enabled: bool = True,
+        max_buffer: int | None = DEFAULT_MAX_BUFFER,
+        max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    ) -> None:
         self.enabled = enabled
         self.path = Path(path) if path else None
+        self.max_buffer = max_buffer
+        self.max_file_bytes = max_file_bytes
         self._lock = threading.Lock()
-        self._buffer: list[TelemetryTradeRecord] = []
+        self._buffer: deque[TelemetryTradeRecord] = deque(
+            maxlen=max_buffer if (max_buffer is not None and max_buffer > 0) else None
+        )
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -38,8 +53,7 @@ class TradeLedger:
         with self._lock:
             self._buffer.append(row)
             if self.path is not None:
-                with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(row), ensure_ascii=True) + "\n")
+                append_jsonl_row(self.path, row, max_file_bytes=self.max_file_bytes)
 
     def record_dict(self, **kwargs) -> TelemetryTradeRecord:
         row = TelemetryTradeRecord(**kwargs)

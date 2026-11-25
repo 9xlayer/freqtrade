@@ -14,8 +14,8 @@ JEV Decision Gate remains optional and is invoked here so Strategy stays thin.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from strategies.mtf_sniper.core.contracts import RiskAuthorization, TelemetryDecisionRecord
@@ -41,10 +41,111 @@ class RiskEngine:
         *,
         max_open_trades: int = 2,
         config_fingerprint: str = "",
+        default_leverage: float = 10.0,
+        tag_multipliers: Mapping[str, float] | None = None,
     ) -> None:
         self.decision_ledger = decision_ledger
         self.max_open_trades = max_open_trades
         self.config_fingerprint = config_fingerprint
+        self.default_leverage = default_leverage
+        self.tag_multipliers = dict(tag_multipliers) if tag_multipliers is not None else None
+        self._seen_reject_bursts: set[tuple[str, str, str, tuple[str, ...], int]] = set()
+
+    @staticmethod
+    def _unpack_jev_result(
+        raw: bool | Mapping[str, Any],
+    ) -> tuple[bool, str, float, str | None, str]:
+        if isinstance(raw, Mapping):
+            return (
+                bool(raw.get("approved", False)),
+                str(raw.get("ai_verdict") or ""),
+                float(raw.get("ai_confidence") or 0.0),
+                raw.get("ai_model_version"),
+                str(raw.get("market_regime") or ""),
+            )
+        return raw, ("CONFIRM" if raw else "VETO"), 0.0, None, ""
+
+    def _is_duplicate_reject_burst(
+        self,
+        *,
+        pair: str,
+        side: str,
+        candidate_id: str,
+        reasons: Sequence[str],
+        current_time: datetime,
+    ) -> bool:
+        dt = (
+            current_time.replace(tzinfo=UTC)
+            if current_time.tzinfo is None
+            else current_time.astimezone(UTC)
+        )
+        candle_bucket = int(dt.timestamp() // 900)
+        key = (pair, side.lower(), candidate_id, tuple(reasons), candle_bucket)
+        if key in self._seen_reject_bursts:
+            return True
+        if len(self._seen_reject_bursts) >= 256:
+            self._seen_reject_bursts.clear()
+        self._seen_reject_bursts.add(key)
+        return False
+
+    def _resolve_ai_confirmation(
+        self,
+        *,
+        reasons: list[str],
+        stage: str,
+        jev_confirm: Callable[[], bool | Mapping[str, Any]] | None,
+        ai_verdict: str,
+        ai_confidence: float,
+        ai_model_version: str | None,
+        market_regime: str,
+    ) -> tuple[str, str, float, str | None, str]:
+        ai_verdict_out = ai_verdict
+        ai_confidence_out = ai_confidence
+        ai_model_out = ai_model_version
+        market_regime_out = market_regime
+        if reasons or jev_confirm is None:
+            return stage, ai_verdict_out, ai_confidence_out, ai_model_out, market_regime_out
+
+        jev_ok, j_verdict, j_conf, j_model, j_regime = self._unpack_jev_result(jev_confirm())
+        ai_verdict_out = ai_verdict_out or j_verdict
+        ai_confidence_out = ai_confidence_out or j_conf
+        ai_model_out = ai_model_out or j_model
+        market_regime_out = market_regime_out or j_regime
+        if not jev_ok:
+            reasons.append(RejectionReasonCode.AI_VETO_LOW_CONFIDENCE.value)
+            stage = stage or "entry"
+            ai_verdict_out = ai_verdict_out or "VETO"
+        return stage, ai_verdict_out, ai_confidence_out, ai_model_out, market_regime_out
+
+    @staticmethod
+    def _compute_exposure_metrics(
+        *,
+        open_trades: Sequence[Any],
+        approved: bool,
+        stake: float,
+        lev: float,
+        wallet_equity: float | None,
+    ) -> tuple[float, float | None, float | None]:
+        total_exposure = 0.0
+        for t in open_trades:
+            try:
+                total_exposure += float(getattr(t, "stake_amount", 0.0) or 0.0) * float(
+                    getattr(t, "leverage", 1.0) or 1.0
+                )
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if approved:
+            total_exposure += stake * (lev or 1.0)
+
+        equity: float | None = None
+        if wallet_equity is not None:
+            try:
+                if wallet_equity > 0:
+                    equity = wallet_equity
+            except (TypeError, ValueError):
+                equity = None
+        exposure_pct: float | None = (total_exposure / equity) if equity is not None else None
+        return total_exposure, equity, exposure_pct
 
     def _check_portfolio_blocks(
         self,
@@ -87,7 +188,7 @@ class RiskEngine:
         closed_trades: Sequence[Any],
         open_trades: Sequence[Any],
         get_price: Callable[[str, datetime], float | None],
-        jev_confirm: Callable[[], bool] | None = None,
+        jev_confirm: Callable[[], bool | Mapping[str, Any]] | None = None,
         entry_tag: str | None = None,
         sensors_triggered: list[str] | None = None,
         confluence_count: int = 1,
@@ -135,15 +236,17 @@ class RiskEngine:
             open_n=open_n,
         )
 
-        ai_verdict_out = ai_verdict
-        ai_confidence_out = ai_confidence
-
-        # Decision Gate is entry-eligibility adjacent (confirm path)
-        if not reasons and jev_confirm is not None and not jev_confirm():
-            reasons.append(RejectionReasonCode.AI_VETO_LOW_CONFIDENCE.value)
-            stage = stage or "entry"
-            if not ai_verdict_out:
-                ai_verdict_out = "VETO"
+        stage, ai_verdict_out, ai_confidence_out, ai_model_out, market_regime_out = (
+            self._resolve_ai_confirmation(
+                reasons=reasons,
+                stage=stage,
+                jev_confirm=jev_confirm,
+                ai_verdict=ai_verdict,
+                ai_confidence=ai_confidence,
+                ai_model_version=ai_model_version,
+                market_regime=market_regime,
+            )
+        )
 
         approved = len(reasons) == 0
 
@@ -156,36 +259,19 @@ class RiskEngine:
                 max_stake=float(max_stake or proposed_stake or 0.0),
                 entry_tag=entry_tag,
                 enable_dynamic_sizing=enable_dynamic_sizing,
+                tag_multipliers=self.tag_multipliers,
             )
-            lev = resolve_leverage(max_leverage)
+            lev = resolve_leverage(max_leverage, target=self.default_leverage)
 
-        # Notional exposure = sum(stake * leverage). Pct only if equity known.
-        total_exposure = 0.0
-        for t in open_trades:
-            try:
-                total_exposure += float(getattr(t, "stake_amount", 0.0) or 0.0) * float(
-                    getattr(t, "leverage", 1.0) or 1.0
-                )
-            except (TypeError, ValueError, AttributeError):
-                continue
-        if approved:
-            total_exposure += float(stake) * float(lev or 1.0)
-
-        equity: float | None = None
-        if wallet_equity is not None:
-            try:
-                eq = wallet_equity
-                if eq > 0:
-                    equity = eq
-            except (TypeError, ValueError):
-                equity = None
-        exposure_pct: float | None = (total_exposure / equity) if equity is not None else None
+        total_exposure, equity, exposure_pct = self._compute_exposure_metrics(
+            open_trades=open_trades,
+            approved=approved,
+            stake=stake,
+            lev=lev,
+            wallet_equity=wallet_equity,
+        )
         # Stop-distance risk budget is not implemented — leave None (unavailable).
         risk_per_trade: float | None = None
-        if stop_distance_pct and stop_distance_pct > 0 and equity is not None:
-            # Only claim per-trade risk when an explicit stop distance was supplied
-            # AND we sized from it (we do not today). Keep None until that lands.
-            risk_per_trade = None
 
         auth = RiskAuthorization(
             is_approved=approved,
@@ -209,20 +295,35 @@ class RiskEngine:
 
         from strategies.mtf_sniper.core.candidate_id import CANDIDATE_ID_MISSING
 
+        cid_resolved = candidate_id or CANDIDATE_ID_MISSING
+        if not approved and self._is_duplicate_reject_burst(
+            pair=pair,
+            side=side,
+            candidate_id=cid_resolved,
+            reasons=auth.rejection_reasons,
+            current_time=current_time,
+        ):
+            return auth
+
+        default_ai_verdict = (
+            "CONFIRM"
+            if (approved and jev_confirm is not None)
+            else ("DISABLED" if approved else "")
+        )
         self._log_decision(
-            candidate_id=candidate_id or CANDIDATE_ID_MISSING,
+            candidate_id=cid_resolved,
             current_time=current_time,
             pair=pair,
             side=side,
             sensors_triggered=sensors_triggered or ([entry_tag] if entry_tag else []),
             confluence_count=confluence_count,
-            market_regime=market_regime,
+            market_regime=market_regime_out,
             policy_score=policy_score,
             quality_grade=quality_grade or ("ACCEPT" if approved else "REJECT"),
             policy_verdict=policy_verdict or ("ACCEPT" if approved else "REJECT"),
-            ai_verdict=ai_verdict_out or ("CONFIRM" if approved else ""),
+            ai_verdict=ai_verdict_out or default_ai_verdict,
             ai_confidence=ai_confidence_out,
-            ai_model_version=ai_model_version,
+            ai_model_version=ai_model_out,
             auth=auth,
             setup_type=setup_type or (entry_tag or ""),
             signal_source=signal_source,
@@ -285,7 +386,7 @@ class RiskEngine:
             logger.warning(f"[DecisionLedger] Failed to record decision: {exc}")
 
     def get_leverage(self, max_leverage: float | None) -> float:
-        return resolve_leverage(max_leverage)
+        return resolve_leverage(max_leverage, target=self.default_leverage)
 
     def get_stake_amount(
         self,
@@ -294,12 +395,15 @@ class RiskEngine:
         max_stake: float,
         entry_tag: str | None,
         enable_dynamic_sizing: bool,
+        counter_trend_scale: float = 1.0,
     ) -> float:
         return resolve_stake_amount(
             proposed_stake=proposed_stake,
             max_stake=max_stake,
             entry_tag=entry_tag,
             enable_dynamic_sizing=enable_dynamic_sizing,
+            counter_trend_scale=counter_trend_scale,
+            tag_multipliers=self.tag_multipliers,
         )
 
     def get_stoploss(

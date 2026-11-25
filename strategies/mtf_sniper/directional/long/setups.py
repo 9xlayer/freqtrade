@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
@@ -218,7 +219,8 @@ def build_raw_sniper_long_mask(
 
 
 def tag_long_sniper(dataframe: DataFrame, raw_mask: pd.Series) -> pd.Series:
-    tags = pd.Series("", index=dataframe.index)
-    for idx in dataframe.index[raw_mask]:
-        tags.loc[idx] = LongSetup.A80_PLUS.value
-    return tags
+    arr = np.full(len(dataframe), "", dtype=object)
+    positions = np.flatnonzero(raw_mask.to_numpy(dtype=bool, na_value=False))
+    if len(positions):
+        arr[positions] = LongSetup.A80_PLUS.value
+    return pd.Series(arr, index=dataframe.index)

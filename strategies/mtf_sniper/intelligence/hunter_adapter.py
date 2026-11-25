@@ -9,8 +9,8 @@ from pandas import DataFrame
 from strategies.mtf_sniper.intelligence.jev_entry_hunter import (
     JevHunterEngine,
     JevSetupType,
-    MomentumRadar,
 )
+from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
 
 
 class JevHunterAdapter:

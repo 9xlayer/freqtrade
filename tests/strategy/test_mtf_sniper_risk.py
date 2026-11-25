@@ -6,6 +6,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from freqtrade.persistence.trade_model import LocalTrade
 from freqtrade.strategy import stoploss_from_open
 from strategies.mtf_sniper.core.enums import RejectionReasonCode
 from strategies.mtf_sniper.risk.portfolio_protection import (
@@ -71,6 +72,124 @@ class TestPortfolioProtection(unittest.TestCase):
             circuit_breaker_blocks(closed, strategy_name="StrategyMTFSniper", current_time=now)
         )
 
+    def test_circuit_breaker_naive_utc_close_date(self):
+        now = datetime(2024, 1, 10, 12, 0, tzinfo=UTC)
+        # Naive UTC timestamps must be compared in UTC, not local OS timezone.
+        closed_71h = [
+            _trade(close_profit=-0.12, close_date=datetime(2024, 1, 7, 13, 0)),
+            _trade(close_profit=-0.15, close_date=datetime(2024, 1, 7, 12, 0)),
+            _trade(close_profit=-0.11, close_date=datetime(2024, 1, 7, 11, 0)),
+        ]
+        self.assertTrue(
+            circuit_breaker_blocks(closed_71h, strategy_name="StrategyMTFSniper", current_time=now)
+        )
+        closed_73h = [
+            _trade(close_profit=-0.12, close_date=datetime(2024, 1, 7, 11, 0)),
+            _trade(close_profit=-0.15, close_date=datetime(2024, 1, 7, 10, 0)),
+            _trade(close_profit=-0.11, close_date=datetime(2024, 1, 7, 9, 0)),
+        ]
+        self.assertFalse(
+            circuit_breaker_blocks(closed_73h, strategy_name="StrategyMTFSniper", current_time=now)
+        )
+
+    def test_circuit_breaker_includes_backtest_local_trade_blank_strategy(self):
+        now = datetime(2024, 1, 10, 12, 0, tzinfo=UTC)
+        bt_closed = [
+            LocalTrade(
+                pair="BTC/USDT:USDT",
+                open_date=now - timedelta(hours=10),
+                close_date=datetime(2024, 1, 10, 11, 0),
+                close_profit=-0.12,
+                strategy="",
+            ),
+            LocalTrade(
+                pair="BTC/USDT:USDT",
+                open_date=now - timedelta(hours=12),
+                close_date=datetime(2024, 1, 10, 10, 0),
+                close_profit=-0.15,
+                strategy="",
+            ),
+            LocalTrade(
+                pair="BTC/USDT:USDT",
+                open_date=now - timedelta(hours=14),
+                close_date=datetime(2024, 1, 10, 9, 0),
+                close_profit=-0.11,
+                strategy="",
+            ),
+        ]
+        self.assertTrue(
+            circuit_breaker_blocks(bt_closed, strategy_name="StrategyMTFSniper", current_time=now)
+        )
+        other_bt = [
+            LocalTrade(
+                pair="BTC/USDT:USDT",
+                open_date=now - timedelta(hours=10),
+                close_date=datetime(2024, 1, 10, 11, 0),
+                close_profit=-0.20,
+                strategy="OtherStrategy",
+            )
+            for _ in range(3)
+        ]
+        self.assertFalse(
+            circuit_breaker_blocks(other_bt, strategy_name="StrategyMTFSniper", current_time=now)
+        )
+
+    def test_circuit_breaker_resets_after_pause_no_single_loss_retrigger(self):
+        # 3 losses end at day 1 -> pause until day 4. A single loss on day 6 must NOT re-trigger.
+        t0 = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+        closed = [
+            _trade(close_profit=-0.25, close_date=t0 - timedelta(hours=4)),
+            _trade(close_profit=-0.25, close_date=t0 - timedelta(hours=2)),
+            _trade(close_profit=-0.25, close_date=t0),
+            _trade(close_profit=-0.25, close_date=t0 + timedelta(days=5)),
+        ]
+        # Inside first pause -> blocked
+        self.assertTrue(
+            circuit_breaker_blocks(
+                closed[:3],
+                strategy_name="StrategyMTFSniper",
+                current_time=t0 + timedelta(hours=24),
+            )
+        )
+        # After 72h pause + 1 single loss on day 6 -> NOT re-triggered
+        self.assertFalse(
+            circuit_breaker_blocks(
+                closed,
+                strategy_name="StrategyMTFSniper",
+                current_time=t0 + timedelta(days=5, hours=1),
+            )
+        )
+
+    def test_circuit_breaker_dedups_simultaneous_cross_pair_entry_losses(self):
+        t0 = datetime(2024, 1, 10, 12, 0, tzinfo=UTC)
+        # BTC & ETH longs opened on same candle count as 1 correlated event + 1 later short = 2
+        closed = [
+            _trade(
+                pair="ETH/USDT:USDT",
+                is_short=False,
+                open_date_utc=t0 - timedelta(hours=5),
+                close_date=t0 - timedelta(hours=3),
+                close_profit=-0.28,
+            ),
+            _trade(
+                pair="BTC/USDT:USDT",
+                is_short=False,
+                open_date_utc=t0 - timedelta(hours=5),
+                close_date=t0 - timedelta(hours=2),
+                close_profit=-0.25,
+            ),
+            _trade(
+                pair="BTC/USDT:USDT",
+                is_short=True,
+                open_date_utc=t0 - timedelta(hours=2),
+                close_date=t0 - timedelta(minutes=30),
+                close_profit=-0.11,
+            ),
+        ]
+        self.assertFalse(
+            circuit_breaker_blocks(closed, strategy_name="StrategyMTFSniper", current_time=t0)
+        )
+
     def test_directional_lock(self):
         open_trades = [_trade(is_short=True)]
         self.assertTrue(directional_lock_blocks(open_trades, "long"))
@@ -117,6 +236,76 @@ class TestPositionSizing(unittest.TestCase):
     def test_leverage_cap(self):
         self.assertEqual(resolve_leverage(5.0), 5.0)
         self.assertEqual(resolve_leverage(20.0), 10.0)
+
+    def test_counter_1d_scale_long_and_short(self):
+        from strategies.mtf_sniper.risk.position_sizing import resolve_counter_1d_scale
+
+        # Bull aligned 1D -> full 1.0x for Long
+        bull_row = {"macdhist_1d": 120.0, "ema_50_1d": 82000.0, "ema_200_1d": 76000.0}
+        self.assertEqual(resolve_counter_1d_scale("long", bull_row), 1.0)
+        # Negative 1D MACD (bounce in bear wave, e.g. 2026-11-04) -> 0.50x
+        self.assertEqual(
+            resolve_counter_1d_scale(
+                "long",
+                {"macdhist_1d": -422.9, "ema_50_1d": 80095.0, "ema_200_1d": 76471.0},
+            ),
+            0.50,
+        )
+        # EMA50_1D <= EMA200_1D death cross -> 0.50x even if MACD ticked positive
+        self.assertEqual(
+            resolve_counter_1d_scale(
+                "long",
+                {"macdhist_1d": 15.0, "ema_50_1d": 70000.0, "ema_200_1d": 76000.0},
+            ),
+            0.50,
+        )
+        # Short in non-macro-bull keeps 1.0x even with positive MACD (top crashes);
+        # Short inside confirmed 1D macro bull run scales down to 0.50x.
+        self.assertEqual(
+            resolve_counter_1d_scale("short", {"macdhist_1d": 80.0, "is_macro_bull_run_1d": 0}),
+            1.0,
+        )
+        self.assertEqual(
+            resolve_counter_1d_scale("short", {"macdhist_1d": 80.0, "is_macro_bull_run_1d": 1}),
+            0.50,
+        )
+
+    def test_resolve_stake_amount_applies_counter_trend_scale(self):
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=100.0,
+                max_stake=200.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=True,
+                counter_trend_scale=0.50,
+            ),
+            55.0,
+            places=9,
+        )
+        # Custom tag_multipliers map override works cleanly
+        self.assertAlmostEqual(
+            resolve_stake_amount(
+                proposed_stake=100.0,
+                max_stake=200.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=True,
+                counter_trend_scale=0.60,
+                tag_multipliers={"long_A80_plus": 1.20},
+            ),
+            72.0,
+            places=9,
+        )
+        # Dynamic sizing off preserves flat 1.0x
+        self.assertEqual(
+            resolve_stake_amount(
+                proposed_stake=100.0,
+                max_stake=200.0,
+                entry_tag="long_A80_plus",
+                enable_dynamic_sizing=False,
+                counter_trend_scale=0.50,
+            ),
+            100.0,
+        )
 
 
 class TestStoplossLadder(unittest.TestCase):
@@ -228,6 +417,35 @@ class TestStoplossLadder(unittest.TestCase):
         )
         self.assertEqual(sl_120_short, -0.20)
 
+    def test_resolve_custom_stoploss_24h_loss_timeout(self):
+        now = datetime(2024, 1, 10, tzinfo=UTC)
+        trade_24h = _trade(
+            is_short=False,
+            leverage=10.0,
+            open_date_utc=now - timedelta(hours=25),
+        )
+        # At -2% ROE after >= 24h, stoploss tightens toward -5% ROE from open.
+        sl_mild = resolve_custom_stoploss(
+            trade=trade_24h,
+            current_time=now,
+            current_profit=-0.02,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(
+            sl_mild,
+            max(stoploss_from_open(-0.05, -0.02, is_short=False, leverage=10.0), 0.01),
+        )
+        # Already worse than -5% ROE: clamped cleanly at 0.01 minimum relative stop.
+        sl_deep = resolve_custom_stoploss(
+            trade=trade_24h,
+            current_time=now,
+            current_profit=-0.08,
+            pair_cfg={"stoploss": -0.25},
+            default_stoploss=-0.28,
+        )
+        self.assertEqual(sl_deep, 0.01)
+
 
 class TestRiskEngine(unittest.TestCase):
     def test_authorize_blocks_on_directional_lock(self):
@@ -315,6 +533,64 @@ class TestRiskEngine(unittest.TestCase):
         self.assertEqual(auth.wallet_equity, 2000.0)
         self.assertAlmostEqual(auth.total_exposure_notional, 1000.0, places=6)
         self.assertAlmostEqual(auth.total_exposure_pct or 0.0, 0.5, places=6)
+
+
+class TestPortfolioNullAndNanGuards(unittest.TestCase):
+    def test_circuit_breaker_ignores_none_or_nan_close_profit_without_resetting_streak(self):
+        from strategies.mtf_sniper.risk.portfolio_protection import distress_guard_blocks
+
+        now = datetime(2024, 1, 10, tzinfo=UTC)
+        closed = [
+            _trade(
+                pair="BTC/USDT:USDT",
+                close_date=now - timedelta(hours=40),
+                open_date_utc=now - timedelta(hours=42),
+                close_profit=-0.20,
+                strategy="StrategyMTFSniper",
+            ),
+            _trade(
+                pair="ETH/USDT:USDT",
+                close_date=now - timedelta(hours=30),
+                open_date_utc=now - timedelta(hours=32),
+                close_profit=-0.20,
+                strategy="StrategyMTFSniper",
+            ),
+            _trade(
+                pair="BTC/USDT:USDT",
+                close_date=now - timedelta(hours=20),
+                open_date_utc=now - timedelta(hours=22),
+                close_profit=None,
+                strategy="StrategyMTFSniper",
+            ),
+            _trade(
+                pair="ETH/USDT:USDT",
+                close_date=now - timedelta(hours=10),
+                open_date_utc=now - timedelta(hours=12),
+                close_profit=float("nan"),
+                strategy="StrategyMTFSniper",
+            ),
+            _trade(
+                pair="BTC/USDT:USDT",
+                close_date=now - timedelta(hours=2),
+                open_date_utc=now - timedelta(hours=4),
+                close_profit=-0.20,
+                strategy="StrategyMTFSniper",
+            ),
+        ]
+        self.assertTrue(
+            circuit_breaker_blocks(closed, strategy_name="StrategyMTFSniper", current_time=now)
+        )
+        # NaN/non-positive price must not throw or falsely trigger distress guard.
+        open_other = _trade(pair="ETH/USDT:USDT")
+        open_other.calc_profit_ratio = lambda _p: -0.50
+        self.assertFalse(
+            distress_guard_blocks(
+                [open_other],
+                pair="BTC/USDT:USDT",
+                current_time=now,
+                get_price=lambda _p, _t: float("nan"),
+            )
+        )
 
 
 if __name__ == "__main__":

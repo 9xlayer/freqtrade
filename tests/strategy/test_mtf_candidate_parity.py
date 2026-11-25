@@ -337,6 +337,24 @@ class TestFastVsEventCandidateParity(unittest.TestCase):
         )
         self.assertEqual(looked, expected)
 
+    def test_apply_entry_cooldown_does_not_overwrite_registry(self):
+        strat = _make_strategy(short_cooldown_candles=_param(10))
+        df = _full_df()
+        _force_short_sniper_bar(df, 120)
+        _force_short_sniper_bar(df, 125)
+        pair = "BTC/USDT:USDT"
+        out = apply_entry_pipeline(strat, df, {"pair": pair})
+        self.assertEqual(int(out.loc[120, "enter_short"]), 1)
+        self.assertEqual(int(out.loc[125, "enter_short"]), 0)
+        ts_120 = normalize_utc(df.loc[120, "date"])
+        ts_125 = normalize_utc(df.loc[125, "date"])
+        expected_120 = make_candidate_id(pair, TradeSide.SHORT, ts_120, 120)
+        reg = strat._candidate_registry
+        self.assertEqual(
+            reg.lookup(pair=pair, side="short", entry_tag="short_A80_plus", current_time=ts_125),
+            expected_120,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

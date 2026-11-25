@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 class StrategyMTFSniper(IStrategy):
     """
-    MTF Sniper — deterministic layered entry (v4.4.0).
+    MTF Sniper — deterministic layered entry (v4.5.0-waterfall).
 
     Entry: part sensors → SetupComposer (AND recipes) → Policy → cooldown.
     Confirm: optional JEV Decision Gate + Risk. Hunter escalation is off by default.
@@ -44,6 +44,11 @@ class StrategyMTFSniper(IStrategy):
     enable_hunter_long: bool = False
     block_macro_bull_shorts: bool = False
     enable_dynamic_sizing: bool = False
+    default_leverage: float = 10.0
+    _tag_multipliers: dict[str, float] | None = None
+    _counter_1d_scale_override: float | None = None
+    exchange_sync_interval_secs: float = 15.0
+    _last_exchange_sync_ts: float | None = None
     jev_fail_policy: str = "allow"
     mtf_runtime_mode: str = "deterministic"
     _runtime_profile: Any = None
@@ -81,13 +86,9 @@ class StrategyMTFSniper(IStrategy):
 
     @staticmethod
     def _to_bool(val: object, default: bool = False) -> bool:
-        if val is None:
-            return default
-        if isinstance(val, bool):
-            return val
-        if isinstance(val, (int, float)):
-            return bool(val)
-        return str(val).strip().lower() in ("true", "1", "yes", "on")
+        from strategies.mtf_sniper.core.config_resolve import parse_bool
+
+        return parse_bool(val, default)
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
@@ -95,25 +96,28 @@ class StrategyMTFSniper(IStrategy):
 
     def _load_external_config(self) -> None:
         """
-        Load external config with safe boolean parsing, priority order:
+        Load external config with safe parsing, priority order:
         1. Runtime mode profile (authoritative for AI/Hunter/Decision mode)
         2. `strategy_params` in config.json
         3. Environment variables (.env / Docker Compose / Coolify)
-        4. Built-in defaults
+        4. Built-in defaults & Freqtrade hyperopt Parameter defaults
         """
         from strategies.mtf_sniper.core.config_resolve import (
             build_effective_config,
+            merge_pair_overrides,
+            resolve_strategy_switches,
             warn_pair_override_divergences,
         )
-        from strategies.mtf_sniper.core.runtime_mode import build_runtime_profile
+        from strategies.mtf_sniper.core.runtime_mode import (
+            InvalidRuntimeModeError,
+            build_runtime_profile,
+        )
 
         strat_cfg = (
             self.config.get("strategy_params", {})
             if hasattr(self, "config") and self.config
             else {}
         )
-
-        # Raw intent before mode clamp
         want_decision = (
             self._to_bool(strat_cfg["enable_jev_decision"], True)
             if "enable_jev_decision" in strat_cfg
@@ -129,8 +133,6 @@ class StrategyMTFSniper(IStrategy):
             if "enable_hunter_long" in strat_cfg
             else self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
         )
-
-        from strategies.mtf_sniper.core.runtime_mode import InvalidRuntimeModeError
 
         try:
             profile = build_runtime_profile(
@@ -151,39 +153,26 @@ class StrategyMTFSniper(IStrategy):
         self.enable_jev_decision = profile.enable_jev_decision
         self.enable_jev_hunter = profile.enable_jev_hunter
         self.enable_hunter_long = profile.enable_hunter_long
-        # Decision mode is passed explicitly to JevDecisionAdapter — do not mutate
-        # process-global os.environ["JEV_MODE"] (cross-strategy / multi-instance safe).
 
-        if "block_macro_bull_shorts" in strat_cfg:
-            self.block_macro_bull_shorts = self._to_bool(
-                strat_cfg["block_macro_bull_shorts"], False
-            )
-        else:
-            self.block_macro_bull_shorts = self._to_bool(
-                os.environ.get("BLOCK_MACRO_BULL_SHORTS", "false"), False
-            )
-
-        if "enable_waterfall" in strat_cfg:
-            self.enable_waterfall = self._to_bool(strat_cfg["enable_waterfall"], True)
-        else:
-            self.enable_waterfall = self._to_bool(os.environ.get("ENABLE_WATERFALL", "true"), True)
-
-        if "enable_dynamic_sizing" in strat_cfg:
-            self.enable_dynamic_sizing = self._to_bool(strat_cfg["enable_dynamic_sizing"], False)
-        else:
-            self.enable_dynamic_sizing = self._to_bool(
-                os.environ.get("ENABLE_DYNAMIC_SIZING", "false"), False
-            )
-
-        if "jev_fail_policy" in strat_cfg:
-            self.jev_fail_policy = str(strat_cfg["jev_fail_policy"]).lower()
-        else:
-            self.jev_fail_policy = os.environ.get("JEV_FAIL_POLICY", "allow").lower()
-
-        if "enable_telemetry" in strat_cfg:
-            self.enable_telemetry = self._to_bool(strat_cfg["enable_telemetry"], True)
-        else:
-            self.enable_telemetry = self._to_bool(os.environ.get("ENABLE_TELEMETRY", "true"), True)
+        switches = resolve_strategy_switches(strat_cfg)
+        self.block_macro_bull_shorts = switches.block_macro_bull_shorts
+        self.enable_waterfall = switches.enable_waterfall
+        self.enable_dynamic_sizing = switches.enable_dynamic_sizing
+        self.jev_fail_policy = switches.jev_fail_policy
+        self.enable_telemetry = switches.enable_telemetry
+        self.default_leverage = switches.default_leverage
+        self._tag_multipliers = switches.tag_multipliers
+        self.exchange_sync_interval_secs = switches.exchange_sync_interval_secs
+        self.custom_pair_params = merge_pair_overrides(
+            type(self).custom_pair_params, strat_cfg
+        )
+        self._counter_1d_scale_override = None
+        if switches.counter_1d_stake_scale is not None and not self._is_hyperopt_run():
+            param = getattr(self, "counter_1d_stake_scale", None)
+            if param is not None and hasattr(param, "value"):
+                param.value = switches.counter_1d_stake_scale
+            else:
+                self._counter_1d_scale_override = switches.counter_1d_stake_scale
 
         self._effective_config = build_effective_config(self, profile=profile)
         self._config_fingerprint = self._effective_config.fingerprint()
@@ -234,6 +223,7 @@ class StrategyMTFSniper(IStrategy):
             f"Waterfall={self.enable_waterfall} "
             f"block_macro_bull_shorts={self.block_macro_bull_shorts} "
             f"dynamic_sizing={self.enable_dynamic_sizing} "
+            f"exchange_sync_s={self.exchange_sync_interval_secs} "
             f"telemetry={self.enable_telemetry}"
         )
         if self.enable_jev_hunter:
@@ -262,6 +252,56 @@ class StrategyMTFSniper(IStrategy):
         else:
             logger.info("[JEV] Decision and Hunter disabled — pure technical path.")
 
+    def _is_live_trading(self) -> bool:
+        from collections.abc import Mapping
+
+        cfg = getattr(self, "config", None)
+        if not isinstance(cfg, Mapping) or bool(cfg.get("dry_run", True)):
+            return False
+        runmode = cfg.get("runmode")
+        value = getattr(runmode, "value", runmode)
+        return str(value).strip().lower() == "live"
+
+    def _sync_live_exchange_positions(self, current_time: datetime) -> bool:
+        """Refresh live wallet/position cache on an interval when filled trades are open.
+
+        Freqtrade limits periodic wallet refreshes to once per hour; refreshing here before
+        ``manage_open_orders`` and ``exit_positions`` lets manual exchange closes trigger
+        ``handle_onexchange_order`` within seconds rather than staying stale for up to 1h.
+        """
+        interval = getattr(self, "exchange_sync_interval_secs", 15.0)
+        if interval <= 0.0 or not self._is_live_trading():
+            return False
+        wallets = getattr(self, "wallets", None)
+        if wallets is None or not hasattr(wallets, "update"):
+            return False
+
+        now_ts = current_time.timestamp()
+        last_ts = getattr(self, "_last_exchange_sync_ts", None)
+        if last_ts is not None and (now_ts - last_ts) < interval:
+            return False
+
+        open_trades = Trade.get_trades_proxy(is_open=True)
+        has_filled_position = any(
+            not getattr(t, "has_open_orders", False)
+            and not getattr(t, "has_open_sl_orders", False)
+            and getattr(t, "fee_open_currency", None) is not None
+            for t in open_trades
+        )
+        if not has_filled_position:
+            return False
+
+        self._last_exchange_sync_ts = now_ts
+        try:
+            wallets.update(require_update=True)
+            return True
+        except Exception as exc:
+            logger.warning(f"[ExchangeSync] Failed to refresh live wallets/positions: {exc}")
+            return False
+
+    def bot_loop_start(self, current_time: datetime, **kwargs) -> None:
+        self._sync_live_exchange_positions(current_time)
+
     def version(self) -> str | None:
         return (
             f"v{self.strategy_version} "
@@ -281,6 +321,8 @@ class StrategyMTFSniper(IStrategy):
                 decision_ledger=self._decision_ledger,
                 max_open_trades=max_open,
                 config_fingerprint=self._config_fingerprint,
+                default_leverage=float(getattr(self, "default_leverage", 10.0) or 10.0),
+                tag_multipliers=getattr(self, "_tag_multipliers", None),
             )
         return self._risk_engine
 
@@ -297,6 +339,19 @@ class StrategyMTFSniper(IStrategy):
     ) -> float:
         return self._get_risk_engine().get_leverage(max_leverage)
 
+    def _resolve_counter_1d_stake_scale(self) -> float:
+        from strategies.mtf_sniper.risk.position_sizing import (
+            COUNTER_1D_TREND_STAKE_SCALE,
+            normalize_counter_1d_scale,
+        )
+
+        override = getattr(self, "_counter_1d_scale_override", None)
+        if override is not None:
+            return normalize_counter_1d_scale(override, default=COUNTER_1D_TREND_STAKE_SCALE)
+        raw = getattr(self, "counter_1d_stake_scale", COUNTER_1D_TREND_STAKE_SCALE)
+        val = getattr(raw, "value", raw)
+        return normalize_counter_1d_scale(val, default=COUNTER_1D_TREND_STAKE_SCALE)
+
     def custom_stake_amount(
         self,
         pair: str,
@@ -310,12 +365,27 @@ class StrategyMTFSniper(IStrategy):
         side: str,
         **kwargs,
     ) -> float:
-        return self._get_risk_engine().get_stake_amount(
+        enable_dynamic = bool(getattr(self, "enable_dynamic_sizing", False))
+        counter_scale = 1.0
+        if enable_dynamic and getattr(self, "dp", None):
+            from strategies.mtf_sniper.execution.exit_policy import resolve_market_row
+            from strategies.mtf_sniper.risk.position_sizing import resolve_counter_1d_scale
+
+            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            row = resolve_market_row(df, current_time)
+            counter_scale = resolve_counter_1d_scale(
+                side, row, counter_scale=self._resolve_counter_1d_stake_scale()
+            )
+        stake = self._get_risk_engine().get_stake_amount(
             proposed_stake=proposed_stake,
             max_stake=max_stake,
             entry_tag=entry_tag,
-            enable_dynamic_sizing=bool(getattr(self, "enable_dynamic_sizing", False)),
+            enable_dynamic_sizing=enable_dynamic,
+            counter_trend_scale=counter_scale,
         )
+        if min_stake is not None and stake < min_stake <= max_stake:
+            return min_stake
+        return stake
 
     stoploss = -0.28
     use_custom_stoploss = True
@@ -394,6 +464,9 @@ class StrategyMTFSniper(IStrategy):
         0.35, 1.00, default=0.53, decimals=2, space="buy", optimize=True
     )
     long_block_1d_macd = BooleanParameter(default=False, space="buy", optimize=True)
+    counter_1d_stake_scale = DecimalParameter(
+        0.25, 1.00, default=0.50, decimals=2, space="buy", optimize=True
+    )
 
     block_4h_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
     block_1d_counter_wave = BooleanParameter(default=True, space="buy", optimize=False)
@@ -464,6 +537,7 @@ class StrategyMTFSniper(IStrategy):
         return df_window if len(df_window) >= min_bars else None
 
     def _get_decision_adapter(self):
+        fail_policy = str(getattr(self, "jev_fail_policy", "allow") or "allow").lower()
         if self._decision_adapter is None:
             from strategies.mtf_sniper.intelligence.decision_adapter import JevDecisionAdapter
 
@@ -473,15 +547,24 @@ class StrategyMTFSniper(IStrategy):
             self._decision_adapter = JevDecisionAdapter(
                 force_native=force_native,
                 mode=mode,
+                fail_policy=fail_policy,
             )
+        elif getattr(self._decision_adapter, "fail_policy", None) != fail_policy:
+            self._decision_adapter.fail_policy = fail_policy
         return self._decision_adapter
 
-    def _jev_confirm_entry(
+    def _jev_confirm_entry_detail(
         self, pair: str, side: str, current_time: datetime, entry_tag: str | None = None
-    ) -> bool:
-        """JEV Decision Gate for confirm_trade_entry (fail policy preserved)."""
+    ) -> dict[str, Any]:
+        """JEV Decision Gate evaluation returning decision boolean plus telemetry fields."""
         if not getattr(self, "enable_jev_decision", False):
-            return True
+            return {
+                "approved": True,
+                "ai_verdict": "DISABLED",
+                "ai_confidence": 0.0,
+                "ai_model_version": None,
+                "market_regime": "",
+            }
         try:
             decision = self._get_decision_adapter()
             lookback = 32
@@ -494,8 +577,20 @@ class StrategyMTFSniper(IStrategy):
                         f"[JEV AI] Fail-safe active -> Trade {pair} rejected: "
                         "insufficient candle history (<16 bars)."
                     )
-                    return False
-                return True
+                    return {
+                        "approved": False,
+                        "ai_verdict": "VETO",
+                        "ai_confidence": 0.0,
+                        "ai_model_version": None,
+                        "market_regime": "INSUFFICIENT_DATA",
+                    }
+                return {
+                    "approved": True,
+                    "ai_verdict": "BYPASS",
+                    "ai_confidence": 0.0,
+                    "ai_model_version": None,
+                    "market_regime": "INSUFFICIENT_DATA",
+                }
 
             payload = decision.build_payload(
                 df_window, pair, side, lookback=lookback, setup=entry_tag
@@ -507,33 +602,79 @@ class StrategyMTFSniper(IStrategy):
             )
 
             v_status = verdict.get("status", decision.status.SUCCESS.value)
+            v_conf = float(verdict.get("confidence") or 0.0)
+            v_model = verdict.get("model_version")
+            v_regime = str(verdict.get("market_regime") or "")
+
             if v_status != decision.status.SUCCESS.value:
                 if self._is_fail_closed():
                     logger.warning(
                         f"[JEV AI] Fail-safe active -> Trade {pair} rejected: status={v_status}"
                     )
-                    return False
+                    return {
+                        "approved": False,
+                        "ai_verdict": "VETO",
+                        "ai_confidence": v_conf,
+                        "ai_model_version": v_model,
+                        "market_regime": v_regime,
+                    }
                 logger.warning(
                     f"[JEV AI] Fail-safe policy is 'allow' -> Bypass AI gate: status {v_status}"
                 )
-                return True
+                return {
+                    "approved": True,
+                    "ai_verdict": "BYPASS",
+                    "ai_confidence": v_conf,
+                    "ai_model_version": v_model,
+                    "market_regime": v_regime,
+                }
 
             if verdict.get("decision") != "CONFIRM":
                 logger.info(
                     f"Jev AI Vetoed trade: {pair} {side.upper()} @ {current_time} | "
                     f"Reasons: {verdict.get('reasons')}"
                 )
-                return False
-            return True
+                return {
+                    "approved": False,
+                    "ai_verdict": str(verdict.get("decision") or "VETO"),
+                    "ai_confidence": v_conf,
+                    "ai_model_version": v_model,
+                    "market_regime": v_regime,
+                }
+            return {
+                "approved": True,
+                "ai_verdict": "CONFIRM",
+                "ai_confidence": v_conf,
+                "ai_model_version": v_model,
+                "market_regime": v_regime,
+            }
         except Exception as e:
             logger.warning(f"Jev AI evaluation error: {e}")
             if self._is_fail_closed():
                 logger.warning(
                     f"[JEV AI] Fail-safe active -> Trade {pair} rejected on AI error: {e}"
                 )
-                return False
+                return {
+                    "approved": False,
+                    "ai_verdict": "VETO",
+                    "ai_confidence": 0.0,
+                    "ai_model_version": None,
+                    "market_regime": "",
+                }
             logger.warning(f"[JEV AI] Fail-safe 'allow' -> Bypassing AI gate on exception: {e}")
-            return True
+            return {
+                "approved": True,
+                "ai_verdict": "BYPASS",
+                "ai_confidence": 0.0,
+                "ai_model_version": None,
+                "market_regime": "",
+            }
+
+    def _jev_confirm_entry(
+        self, pair: str, side: str, current_time: datetime, entry_tag: str | None = None
+    ) -> bool:
+        """JEV Decision Gate for confirm_trade_entry (fail policy preserved)."""
+        return bool(self._jev_confirm_entry_detail(pair, side, current_time, entry_tag)["approved"])
 
     def _resolve_candidate_id(
         self,
@@ -686,6 +827,34 @@ class StrategyMTFSniper(IStrategy):
             return None
         return cid
 
+    def _lookup_accepted_candidate_meta(
+        self, pair: str, candidate_id: str | None
+    ) -> dict[str, Any]:
+        if not candidate_id or not getattr(self, "dp", None):
+            return {}
+        try:
+            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        except Exception:
+            return {}
+        if df is None:
+            return {}
+        for item in getattr(df, "attrs", {}).get("mtf_sniper_accepted_candidates") or []:
+            if item.get("candidate_id") == candidate_id:
+                return item
+        return {}
+
+    def _resolve_wallet_equity(self) -> float | None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is None or not hasattr(wallets, "get_total"):
+            return None
+        cfg = getattr(self, "config", None) or {}
+        stake_ccy = cfg.get("stake_currency", "USDT")
+        try:
+            total = float(wallets.get_total(stake_ccy))
+            return total if total > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     def confirm_trade_entry(
         self,
         pair: str,
@@ -715,8 +884,17 @@ class StrategyMTFSniper(IStrategy):
                 f"[CandidateID] Missing at confirm {pair} {side} tag={entry_tag} "
                 f"@ {current_time} — logging as {CANDIDATE_ID_MISSING}"
             )
+        cand_meta = self._lookup_accepted_candidate_meta(pair, candidate_id)
         pair_cfg = self._get_pair_params(pair)
-        auth = self._get_risk_engine().authorize_entry(
+        risk_engine = self._get_risk_engine()
+        lev = risk_engine.get_leverage(None) if hasattr(risk_engine, "get_leverage") else 10.0
+        est_stake = (amount * rate / lev) if (amount > 0 and rate > 0 and lev > 0) else 0.0
+        jev_fn = (
+            self._jev_confirm_entry
+            if "_jev_confirm_entry" in getattr(self, "__dict__", {})
+            else self._jev_confirm_entry_detail
+        )
+        auth = risk_engine.authorize_entry(
             strategy_name=self.__class__.__name__,
             pair=pair,
             side=side,
@@ -724,15 +902,20 @@ class StrategyMTFSniper(IStrategy):
             closed_trades=Trade.get_trades_proxy(is_open=False),
             open_trades=Trade.get_trades_proxy(is_open=True),
             get_price=_get_price,
-            jev_confirm=lambda: self._jev_confirm_entry(
-                pair, side, current_time, entry_tag=entry_tag
-            ),
+            jev_confirm=lambda: jev_fn(pair, side, current_time, entry_tag=entry_tag),
             entry_tag=entry_tag,
             sensors_triggered=[entry_tag] if entry_tag else [],
+            policy_score=float(cand_meta.get("policy_score") or 0.0),
+            quality_grade=str(cand_meta.get("quality_grade") or ""),
             candidate_id=candidate_id or CANDIDATE_ID_MISSING,
             setup_type=entry_tag or "",
-            signal_source="confirm_trade_entry",
+            signal_source=str(cand_meta.get("signal_source") or "confirm_trade_entry"),
+            proposed_stake=est_stake,
+            max_stake=est_stake,
+            enable_dynamic_sizing=False,
+            max_leverage=lev,
             default_stoploss=float(pair_cfg.get("stoploss", self.stoploss)),
+            wallet_equity=self._resolve_wallet_equity(),
         )
         return auth.is_approved
 

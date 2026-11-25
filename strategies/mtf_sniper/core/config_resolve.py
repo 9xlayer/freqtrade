@@ -4,11 +4,147 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from strategies.mtf_sniper import STRATEGY_VERSION
 from strategies.mtf_sniper.core.runtime_mode import RuntimeProfile, build_runtime_profile
+
+
+@dataclass(frozen=True)
+class StrategySwitchConfig:
+    """Resolved runtime switches & sizing overrides (strategy_params -> env -> default)."""
+
+    block_macro_bull_shorts: bool = False
+    enable_waterfall: bool = True
+    enable_dynamic_sizing: bool = False
+    jev_fail_policy: str = "allow"
+    enable_telemetry: bool = True
+    default_leverage: float = 10.0
+    counter_1d_stake_scale: float | None = None
+    tag_multipliers: dict[str, float] | None = None
+    exchange_sync_interval_secs: float = 15.0
+
+
+def parse_bool(val: object, default: bool = False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+
+def parse_float(
+    val: object,
+    default: float,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
+    if val is None or val == "":
+        return default
+    try:
+        parsed = float(val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    if min_value is not None:
+        parsed = max(min_value, parsed)
+    if max_value is not None:
+        parsed = min(max_value, parsed)
+    return parsed
+
+
+def _parse_tag_multipliers(raw: object) -> dict[str, float] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        mult = parse_float(v, -1.0)
+        if mult > 0.0:
+            out[str(k)] = mult
+    return out or None
+
+
+def resolve_strategy_switches(
+    strat_cfg: Mapping[str, Any] | None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> StrategySwitchConfig:
+    """Resolve runtime switches with priority: strategy_params > env > built-in defaults."""
+    cfg = strat_cfg or {}
+    env = environ if environ is not None else os.environ
+
+    def _bool_switch(cfg_key: str, env_key: str, default: bool) -> bool:
+        if cfg_key in cfg:
+            return parse_bool(cfg[cfg_key], default)
+        if env_key in env:
+            return parse_bool(env.get(env_key), default)
+        return default
+
+    raw_fail_policy = cfg.get("jev_fail_policy")
+    if raw_fail_policy is None:
+        raw_fail_policy = env.get("JEV_FAIL_POLICY", "allow")
+    fail_policy = str(raw_fail_policy).strip().lower() or "allow"
+
+    raw_lev = cfg.get("default_leverage")
+    if raw_lev is None:
+        raw_lev = env.get("DEFAULT_LEVERAGE")
+    default_leverage = parse_float(raw_lev, 10.0, min_value=1.0, max_value=125.0)
+
+    raw_counter_scale = cfg.get("counter_1d_stake_scale")
+    if raw_counter_scale is None:
+        raw_counter_scale = env.get("COUNTER_1D_STAKE_SCALE")
+    counter_scale: float | None = None
+    if raw_counter_scale is not None and str(raw_counter_scale).strip() != "":
+        parsed_scale = parse_float(raw_counter_scale, -1.0, min_value=0.0, max_value=1.0)
+        if parsed_scale > 0.0:
+            counter_scale = parsed_scale
+
+    raw_sync_secs = cfg.get("exchange_sync_interval_secs")
+    if raw_sync_secs is None:
+        raw_sync_secs = env.get("EXCHANGE_SYNC_INTERVAL_SECS")
+    sync_secs = parse_float(raw_sync_secs, 15.0, min_value=0.0, max_value=3600.0)
+
+    return StrategySwitchConfig(
+        block_macro_bull_shorts=_bool_switch(
+            "block_macro_bull_shorts", "BLOCK_MACRO_BULL_SHORTS", False
+        ),
+        enable_waterfall=_bool_switch("enable_waterfall", "ENABLE_WATERFALL", True),
+        enable_dynamic_sizing=_bool_switch(
+            "enable_dynamic_sizing", "ENABLE_DYNAMIC_SIZING", False
+        ),
+        jev_fail_policy=fail_policy,
+        enable_telemetry=_bool_switch("enable_telemetry", "ENABLE_TELEMETRY", True),
+        default_leverage=default_leverage,
+        counter_1d_stake_scale=counter_scale,
+        tag_multipliers=_parse_tag_multipliers(cfg.get("tag_multipliers")),
+        exchange_sync_interval_secs=sync_secs,
+    )
+
+
+def merge_pair_overrides(
+    base_pair_params: Mapping[str, Mapping[str, Any]] | None,
+    strat_cfg: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Copy base pair overrides and merge optional ``strategy_params.pair_overrides``."""
+    merged: dict[str, dict[str, Any]] = {
+        pair: dict(params) for pair, params in (base_pair_params or {}).items()
+    }
+    raw_overrides = (strat_cfg or {}).get("pair_overrides")
+    if not isinstance(raw_overrides, Mapping):
+        return merged
+    for pair, ov in raw_overrides.items():
+        if isinstance(ov, Mapping):
+            pair_key = str(pair)
+            merged.setdefault(pair_key, {}).update(dict(ov))
+    return merged
 
 
 @dataclass(frozen=True)
@@ -25,11 +161,14 @@ class EffectiveConfig:
     block_macro_bull_shorts: bool
     enable_dynamic_sizing: bool
     jev_fail_policy: str
-    # Long effective (strategy Parameter defaults after JSON load)
     long_params: dict[str, Any] = field(default_factory=dict)
     short_params: dict[str, Any] = field(default_factory=dict)
     pair_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
     source: str = ""
+    enable_waterfall: bool = True
+    filter_params: dict[str, Any] = field(default_factory=dict)
+    sizing_params: dict[str, Any] = field(default_factory=dict)
+    exchange_sync_interval_secs: float = 15.0
 
     def fingerprint(self) -> str:
         payload = asdict(self)
@@ -80,7 +219,31 @@ def build_effective_config(
         "short_min_rsi_entry": _pval("short_min_rsi_entry"),
         "short_cooldown_candles": _pval("short_cooldown_candles"),
     }
-    pair_overrides = dict(getattr(strategy, "custom_pair_params", {}) or {})
+    filter_params = {
+        "block_4h_counter_wave": _pval("block_4h_counter_wave"),
+        "block_1d_counter_wave": _pval("block_1d_counter_wave"),
+        "min_adx_4h": _pval("min_adx_4h"),
+        "block_high_vol": _pval("block_high_vol"),
+        "high_vol_pct": _pval("high_vol_pct"),
+        "filter_wick_rejection": _pval("filter_wick_rejection"),
+        "max_rejection_wick_ratio": _pval("max_rejection_wick_ratio"),
+        "min_close_pos_ratio_long": _pval("min_close_pos_ratio_long"),
+        "max_close_pos_ratio_short": _pval("max_close_pos_ratio_short"),
+        "filter_pdh_ceiling": _pval("filter_pdh_ceiling"),
+    }
+    counter_scale_override = getattr(strategy, "_counter_1d_scale_override", None)
+    sizing_params = {
+        "counter_1d_stake_scale": (
+            counter_scale_override
+            if counter_scale_override is not None
+            else _pval("counter_1d_stake_scale")
+        ),
+        "default_leverage": _pval("default_leverage", 10.0),
+        "tag_multipliers": _pval("_tag_multipliers"),
+    }
+    pair_overrides = {
+        str(k): dict(v) for k, v in (getattr(strategy, "custom_pair_params", {}) or {}).items()
+    }
 
     return EffectiveConfig(
         strategy_version=str(getattr(strategy, "strategy_version", STRATEGY_VERSION)),
@@ -97,6 +260,12 @@ def build_effective_config(
         short_params=short_params,
         pair_overrides=pair_overrides,
         source=profile.source,
+        enable_waterfall=bool(getattr(strategy, "enable_waterfall", True)),
+        filter_params=filter_params,
+        sizing_params=sizing_params,
+        exchange_sync_interval_secs=float(
+            getattr(strategy, "exchange_sync_interval_secs", 15.0)
+        ),
     )
 
 

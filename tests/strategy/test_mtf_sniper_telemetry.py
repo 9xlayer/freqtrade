@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import patch
 
 from freqtrade.persistence import Order, Trade
 from strategies.mtf_sniper.core.contracts import (
@@ -270,6 +271,131 @@ class TestRiskEngineDecisionLedger(unittest.TestCase):
         self.assertTrue(auth.is_approved)
         self.assertEqual(len(ledger.entered()), 1)
         self.assertEqual(ledger.entered()[0].final_action, "ENTER")
+
+    def test_authorize_records_jev_detail_and_dedups_reject_burst(self):
+        ledger = DecisionLedger(enabled=True)
+        engine = RiskEngine(decision_ledger=ledger)
+        t0 = datetime(2024, 1, 10, 0, 1, tzinfo=UTC)
+        t1 = datetime(2024, 1, 10, 0, 2, tzinfo=UTC)
+        t_next_bar = datetime(2024, 1, 10, 0, 16, tzinfo=UTC)
+
+        # Repeated identical reject in same 15m candle should log once.
+        for ts in (t0, t1):
+            engine.authorize_entry(
+                strategy_name="StrategyMTFSniper",
+                pair="BTC/USDT:USDT",
+                side="long",
+                current_time=ts,
+                closed_trades=[],
+                open_trades=[_trade(is_short=True)],
+                get_price=lambda p, t: 100.0,
+                candidate_id="cid_1",
+                entry_tag="long_A80_plus",
+            )
+        self.assertEqual(len(ledger.rejected()), 1)
+
+        # Next 15m candle logs again.
+        engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="long",
+            current_time=t_next_bar,
+            closed_trades=[],
+            open_trades=[_trade(is_short=True)],
+            get_price=lambda p, t: 100.0,
+            candidate_id="cid_1",
+            entry_tag="long_A80_plus",
+        )
+        self.assertEqual(len(ledger.rejected()), 2)
+
+        # Dict verdict populates AI telemetry fields accurately.
+        auth = engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="short",
+            current_time=t_next_bar,
+            closed_trades=[],
+            open_trades=[],
+            get_price=lambda p, t: 100.0,
+            jev_confirm=lambda: {
+                "approved": True,
+                "ai_verdict": "CONFIRM",
+                "ai_confidence": 0.88,
+                "ai_model_version": "native-system1-v2.7.2",
+                "market_regime": "TREND_EXPANSION",
+            },
+            policy_score=0.9,
+            entry_tag="short_A80_plus",
+            candidate_id="cid_2",
+        )
+        self.assertTrue(auth.is_approved)
+        row = ledger.entered()[0]
+        self.assertEqual(row.ai_verdict, "CONFIRM")
+        self.assertAlmostEqual(row.ai_confidence, 0.88)
+        self.assertEqual(row.ai_model_version, "native-system1-v2.7.2")
+        self.assertEqual(row.market_regime, "TREND_EXPANSION")
+        self.assertAlmostEqual(row.policy_score, 0.9)
+
+    def test_bounded_buffer_and_size_rotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "decision_ledger.jsonl"
+            ledger = DecisionLedger(path, enabled=True, max_buffer=2, max_file_bytes=200)
+            for idx in range(3):
+                ledger.record_dict(
+                    candidate_id=f"c{idx}",
+                    timestamp="2024-01-10T00:00:00+00:00",
+                    pair="BTC/USDT:USDT",
+                    side="long",
+                    sensors_triggered=["long_A80_plus"],
+                    confluence_count=1,
+                    market_regime="",
+                    policy_score=0.0,
+                    quality_grade="ACCEPT",
+                    policy_verdict="ACCEPT",
+                    ai_verdict="CONFIRM",
+                    ai_confidence=0.8,
+                    ai_model_version=None,
+                    risk_approved=True,
+                    final_action="ENTER",
+                    final_reasons=[],
+                )
+            self.assertEqual([r.candidate_id for r in ledger.all()], ["c1", "c2"])
+            self.assertTrue(path.with_name("decision_ledger.jsonl.1").exists())
+
+    def test_confirm_trade_entry_passes_stake_and_equity(self):
+        from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
+
+        strat = StrategyMTFSniper(config={"stake_currency": "USDT", "strategy_params": {}})
+        strat.enable_jev_decision = False
+        strat.enable_telemetry = False
+        strat.dp = SimpleNamespace(get_analyzed_dataframe=lambda pair, tf: (None, None))
+        strat.wallets = SimpleNamespace(get_total=lambda ccy: 2000.0 if ccy == "USDT" else 0.0)
+        captured: dict = {}
+        orig_auth = strat._get_risk_engine().authorize_entry
+
+        def _spy(**kwargs):
+            captured.update(kwargs)
+            return orig_auth(**kwargs)
+
+        with (
+            patch.object(strat._get_risk_engine(), "authorize_entry", side_effect=_spy),
+            patch("freqtrade.persistence.Trade.get_trades_proxy", return_value=[]),
+        ):
+            ok = strat.confirm_trade_entry(
+                "BTC/USDT:USDT",
+                "limit",
+                amount=0.5,
+                rate=1000.0,
+                time_in_force="GTC",
+                current_time=datetime(2024, 1, 10, tzinfo=UTC),
+                entry_tag="long_A80_plus",
+                side="long",
+            )
+        self.assertTrue(ok)
+        # 0.5 * 1000 / 10x leverage = 50.0 USDT stake; wallet_equity = 2000.0
+        self.assertAlmostEqual(captured["proposed_stake"], 50.0)
+        self.assertAlmostEqual(captured["wallet_equity"], 2000.0)
+        self.assertFalse(captured["enable_dynamic_sizing"])
 
 
 if __name__ == "__main__":

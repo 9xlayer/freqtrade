@@ -268,6 +268,84 @@ class TestRuntimeModeStartupFailFast(unittest.TestCase):
         with self.assertRaises(InvalidRuntimeModeError):
             StrategyMTFSniper._load_external_config(strat)
 
+    def test_load_external_config_merges_sizing_and_respects_hyperopt(self):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat.counter_1d_stake_scale = SimpleNamespace(value=0.72)
+        strat.config = {
+            "runmode": "hyperopt",
+            "strategy_params": {
+                "mtf_runtime_mode": "deterministic",
+                "counter_1d_stake_scale": 0.40,
+                "default_leverage": 7.0,
+                "pair_overrides": {"BTC/USDT:USDT": {"stoploss": -0.22}},
+            },
+        }
+        StrategyMTFSniper._load_external_config(strat)
+        self.assertEqual(strat.counter_1d_stake_scale.value, 0.72)
+        self.assertEqual(strat.default_leverage, 7.0)
+        self.assertEqual(strat.custom_pair_params["BTC/USDT:USDT"]["stoploss"], -0.22)
+        self.assertEqual(StrategyMTFSniper.custom_pair_params["BTC/USDT:USDT"]["stoploss"], -0.25)
+
+        strat.config["runmode"] = "backtest"
+        StrategyMTFSniper._load_external_config(strat)
+        self.assertEqual(strat.counter_1d_stake_scale.value, 0.40)
+
+
+class TestLiveExchangePositionSync(unittest.TestCase):
+    def _make_strat(self, *, runmode="live", dry_run=False, interval=15.0):
+        strat = StrategyMTFSniper.__new__(StrategyMTFSniper)
+        strat.config = {"runmode": runmode, "dry_run": dry_run}
+        strat.exchange_sync_interval_secs = interval
+        strat._last_exchange_sync_ts = None
+        strat.wallets = MagicMock()
+        return strat
+
+    def test_syncs_only_in_live_with_open_filled_position_and_respects_throttle(self):
+        import strategies.mtf_sniper.strategy_mtf_sniper as mod
+
+        filled_trade = SimpleNamespace(
+            has_open_orders=False,
+            has_open_sl_orders=False,
+            fee_open_currency="USDT",
+        )
+        orig = mod.Trade
+        mod.Trade = cast(Any, SimpleNamespace(get_trades_proxy=lambda **kw: [filled_trade]))
+        try:
+            # dry_run or backtest -> never calls exchange wallet update
+            dry = self._make_strat(runmode="live", dry_run=True)
+            t0 = datetime(2026, 11, 25, 10, 0, 0, tzinfo=UTC)
+            dry.bot_loop_start(current_time=t0)
+            dry.wallets.update.assert_not_called()
+
+            bt = self._make_strat(runmode="backtest", dry_run=False)
+            bt.bot_loop_start(current_time=t0)
+            bt.wallets.update.assert_not_called()
+
+            # live + filled position -> refreshes at 0s, throttles at +10s, refreshes at +16s
+            live = self._make_strat(runmode="live", dry_run=False, interval=15.0)
+            live.bot_loop_start(current_time=t0)
+            self.assertEqual(live.wallets.update.call_count, 1)
+            live.wallets.update.assert_called_with(require_update=True)
+
+            live.bot_loop_start(current_time=t0 + timedelta(seconds=10))
+            self.assertEqual(live.wallets.update.call_count, 1)
+
+            live.bot_loop_start(current_time=t0 + timedelta(seconds=16))
+            self.assertEqual(live.wallets.update.call_count, 2)
+
+            # Transient wallet error does not raise out of bot_loop_start
+            live.wallets.update.side_effect = RuntimeError("binance timeout")
+            live.bot_loop_start(current_time=t0 + timedelta(seconds=35))
+            self.assertEqual(live.wallets.update.call_count, 3)
+
+            # Zero open filled trades -> skips update completely
+            mod.Trade = cast(Any, SimpleNamespace(get_trades_proxy=lambda **kw: []))
+            live.wallets.update.side_effect = None
+            live.bot_loop_start(current_time=t0 + timedelta(seconds=60))
+            self.assertEqual(live.wallets.update.call_count, 3)
+        finally:
+            mod.Trade = orig
+
 
 class TestRiskAuthPairStoploss(unittest.TestCase):
     def test_pair_stoploss_passed_on_confirm(self):

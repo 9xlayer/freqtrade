@@ -24,9 +24,6 @@ from typing import Any
 import pandas as pd
 from pandas import DataFrame
 
-
-logger = logging.getLogger(__name__)
-
 # Version hub: strategies.mtf_sniper.__init__ (single bump site).
 from strategies.mtf_sniper import (
     DECISION_ENGINE_VERSION as ENGINE_VERSION,
@@ -49,6 +46,9 @@ from strategies.mtf_sniper.directional.short.policy import (
     is_vacuum_breakdown,
 )
 from strategies.mtf_sniper.directional.short.setups import ShortSetup
+
+
+logger = logging.getLogger(__name__)
 
 
 MODEL_VERSION_EXTERNAL = os.environ.get(
@@ -455,11 +455,14 @@ class CandleTrajectoryExtractor:
         adx_4h = float(last.get("adx_4h", 20.0)) if not pd.isna(last.get("adx_4h")) else 20.0
 
         # 1D context
-        floor_20d = (
-            float(last.get("swing_low_20d_1d", c))
-            if not pd.isna(last.get("swing_low_20d_1d"))
-            else c
-        )
+        raw_floor = last.get("swing_low_20d_1d")
+        floor_valid = False
+        floor_20d = c
+        if raw_floor is not None and not pd.isna(raw_floor):
+            parsed_floor = float(raw_floor)
+            if math.isfinite(parsed_floor) and parsed_floor > 0.0:
+                floor_20d = parsed_floor
+                floor_valid = True
         floor_dist = round(((c - floor_20d) / floor_20d) * 100, 2) if floor_20d > 0 else 0.0
 
         # AI Agent Lens scores
@@ -482,6 +485,7 @@ class CandleTrajectoryExtractor:
             "trend_4h": "BULL" if is_bull_4h else ("BEAR" if is_bear_4h else "NEUTRAL"),
             "adx_4h": adx_4h,
             "floor_20d_dist_pct": floor_dist,
+            "floor_20d_valid": floor_valid,
             "long_score": long_score,
             "short_score": short_score,
             "atr_percentile": atr_pct,
@@ -618,7 +622,7 @@ class JevDecisionEngine:
             if not env_path.exists():
                 continue
             try:
-                with open(env_path, encoding="utf-8") as f:
+                with env_path.open(encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
@@ -626,15 +630,16 @@ class JevDecisionEngine:
                             k, v = k.strip(), v.strip().strip('"').strip("'")
                             if k and k not in out:
                                 out[k] = v
-            except Exception:
+            except Exception as err:
+                logger.debug(f"[JevDecision] Env load error ({env_path}): {err}")
                 continue
         return out
 
     def _init_cache(self):
         try:
-            db_dir = os.path.dirname(self.cache_db)
-            if db_dir and db_dir not in (".", ""):
-                os.makedirs(db_dir, exist_ok=True)
+            db_dir = Path(self.cache_db).parent
+            if db_dir != Path():
+                db_dir.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(self.cache_db) as conn:
                 conn.execute("PRAGMA journal_mode = WAL;")
                 conn.execute("PRAGMA busy_timeout = 5000;")
@@ -896,10 +901,12 @@ class JevDecisionEngine:
                         )
                         verdict = native_verdict
                         verdict["source"] = "native_fallback"
-                    elif self.fail_policy in ("allow", "safe"):
+                    elif self.fail_policy == "allow":
                         logger.info("External API unavailable, fail policy allows pass-through.")
                     else:
-                        logger.warning("External API failed and fail policy is reject -> VETO.")
+                        logger.warning(
+                            f"External API failed and fail policy is {self.fail_policy!r} -> VETO."
+                        )
                         verdict["decision"] = JevDecision.VETO.value
         else:
             verdict = self._evaluate_native_sequence(payload)
@@ -1244,18 +1251,24 @@ class JevDecisionEngine:
         )
 
         pair = str(payload.get("pair") or "")
-        wf_cfg = DEFAULT_ETH_WATERFALL_FILTER if "ETH" in pair else DEFAULT_WATERFALL_FILTER
+        base_asset = pair.split("/", 1)[0].split(":", 1)[0].strip().upper()
+        wf_cfg = DEFAULT_ETH_WATERFALL_FILTER if base_asset == "ETH" else DEFAULT_WATERFALL_FILTER
 
         # E. Market structure & headroom
+        floor_valid = bool(macro.get("floor_20d_valid", True))
         floor_dist = macro.get("floor_20d_dist_pct", 0.0)
         dist_ema50_1h = macro.get("ema_50_1h_dist_pct", 0.0)
         rsi_1h = macro.get("rsi_1h", 50.0)
         rel_vol = macro.get("rel_vol", 1.0)
-        is_vacuum = is_waterfall_setup and is_vacuum_breakdown(
-            floor_dist,
-            rel_vol,
-            vacuum_floor_dist_max=wf_cfg.vacuum_floor_dist_max,
-            min_surge_vol=wf_cfg.vacuum_min_vol_ratio,
+        is_vacuum = (
+            floor_valid
+            and is_waterfall_setup
+            and is_vacuum_breakdown(
+                floor_dist,
+                rel_vol,
+                vacuum_floor_dist_max=wf_cfg.vacuum_floor_dist_max,
+                min_surge_vol=wf_cfg.vacuum_min_vol_ratio,
+            )
         )
 
         # Heavy penalty if ATR in extreme volatility zone (>90%)
@@ -1270,12 +1283,12 @@ class JevDecisionEngine:
                 reasons.append(f"Extreme ATR volatility risk ({atr_pct:.1f}%)")
 
         if side == "SHORT":
-            if is_waterfall_setup and floor_dist <= 0.0:
+            if is_waterfall_setup and floor_valid and floor_dist <= 0.0:
                 confidence += 0.10
                 reasons.append(
                     f"Waterfall clean floor breakdown confirmed (floor_dist <= {floor_dist:.1f}%)"
                 )
-            elif floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
+            elif floor_valid and floor_dist >= 15.0 and dist_ema50_1h < 0.0 and rsi_1h < 50.0:
                 confidence += 0.10
                 reasons.append(
                     f"High-runway short momentum alignment (floor_dist >= {floor_dist:.1f}%, 1H momentum bear)"

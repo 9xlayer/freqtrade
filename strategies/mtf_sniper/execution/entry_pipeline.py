@@ -29,7 +29,11 @@ from strategies.mtf_sniper.core.contracts import (
     TriggerEvent,
 )
 from strategies.mtf_sniper.core.enums import TradeSide
-from strategies.mtf_sniper.directional.common_gates import missing_informative_columns
+from strategies.mtf_sniper.directional.common_gates import (
+    data_ready_mask,
+    finite_series_mask,
+    missing_informative_columns,
+)
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
 from strategies.mtf_sniper.directional.long.policy import LongPolicyConfig
 from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
@@ -107,6 +111,13 @@ class EntryPipeline:
         cls, strategy: Any, hunter_escalation: HunterEscalationGateway | None = None
     ) -> EntryPipeline:
         _ = hunter_escalation
+
+        def _pval(name: str, default: Any) -> Any:
+            raw = getattr(strategy, name, None)
+            if raw is None:
+                return default
+            return getattr(raw, "value", raw)
+
         enable_waterfall = bool(getattr(strategy, "enable_waterfall", False))
         pair_overrides = dict(getattr(strategy, "custom_pair_params", {}) or {})
         wf_pair_configs = {
@@ -117,17 +128,32 @@ class EntryPipeline:
             base_cfg = wf_pair_configs.get(pair_name, DEFAULT_WATERFALL_FILTER)
             wf_pair_configs[pair_name] = build_waterfall_config_from_params(base_cfg, params)
 
+        filter_wick = bool(_pval("filter_wick_rejection", True))
+        max_wick = float(_pval("max_rejection_wick_ratio", 0.25))
+
         return cls(
             sensor_suite=SensorSuite.live(strategy),
             hunter_escalation=None,
             long_config=LongPolicyConfig(
                 enable_hunter_long=False,
                 allow_anomaly_entries=False,
+                filter_wick_rejection=filter_wick,
+                max_rejection_wick_ratio=max_wick,
+                min_close_pos_ratio=float(_pval("min_close_pos_ratio_long", 0.70)),
+                max_rsi_entry=float(_pval("long_max_rsi_entry", 68.1)),
+                max_dist_ema21_pct=float(_pval("long_max_dist_ema21", 3.3)),
+                overextended_dist_max=float(_pval("long_overextended_dist_max", 0.53)),
+                filter_pdh_ceiling=bool(_pval("filter_pdh_ceiling", True)),
             ),
             short_config=ShortPolicyConfig(
                 block_macro_bull_shorts=bool(getattr(strategy, "block_macro_bull_shorts", False)),
                 allow_anomaly_entries=enable_waterfall,
                 waterfall_pair_configs=wf_pair_configs,
+                filter_wick_rejection=filter_wick,
+                max_rejection_wick_ratio=max_wick,
+                max_close_pos_ratio=float(_pval("max_close_pos_ratio_short", 0.30)),
+                min_rsi_entry=float(_pval("short_min_rsi_entry", 27.8)),
+                max_dist_ema21_pct=float(_pval("short_max_dist_ema21", 1.0)),
             ),
         )
 
@@ -210,17 +236,18 @@ class EntryPipeline:
             if final is None or not final.is_valid:
                 continue
 
-            accepted.append((candidate, final))
             pos = candidate.candle_index
             tag = str(final.metadata.get("entry_tag") or final.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
                 if not enter_long.iloc[pos]:
                     enter_long.iloc[pos] = True
                     enter_tag.iloc[pos] = tag
+                    accepted.append((candidate, final))
             else:
                 if not enter_short.iloc[pos]:
                     enter_short.iloc[pos] = True
                     enter_tag.iloc[pos] = tag
+                    accepted.append((candidate, final))
 
         # Element-wise via numpy so duplicate index labels cannot realign/explode.
         long_arr = enter_long.to_numpy(dtype=bool, copy=True)
@@ -322,14 +349,31 @@ class EntryPipeline:
             )
         )
         if getattr(self.engine.short_policy.config, "allow_anomaly_entries", False):
-            from strategies.mtf_sniper.intelligence.jev_entry_hunter import MomentumRadar
+            from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
 
             radar_cands = MomentumRadar.find_candidates(
                 dataframe, cooldown_bars=12, directional_cooldown=True
             )
+            waterfall_ready = (
+                data_ready_mask(dataframe)
+                & finite_series_mask(
+                    dataframe,
+                    (
+                        "swing_low_20d_1d",
+                        "ema_50_4h",
+                        "bb_width_4h",
+                        "ema_200_1d",
+                        "rsi",
+                        "ema_21",
+                        "lower_wick_ratio",
+                        "close_pos_ratio",
+                        "rel_vol",
+                    ),
+                )
+            ).to_numpy(dtype=bool, na_value=False)
             has_date = "date" in dataframe.columns
             for pos, event_type in radar_cands:
-                if "SHORT" not in event_type:
+                if "SHORT" not in event_type or not waterfall_ready[pos]:
                     continue
                 i = pos
                 row = dataframe.iloc[i]
@@ -474,8 +518,18 @@ def apply_entry_pipeline(
     dataframe["enter_long"] = enter_long_out
     dataframe["enter_tag"] = tag_out
 
-    # Correlate Candidate → confirm_trade_entry / Risk telemetry
-    _remember_accepted_candidates(strategy, result)
+    # Correlate only surviving post-cooldown / post-conflict candidates so suppressed
+    # bars never overwrite active signal IDs in CandidateRegistry.
+    surviving_accepted = [
+        (c, pol)
+        for c, pol in result.accepted
+        if 0 <= c.candle_index < n
+        and (
+            (c.side == TradeSide.LONG and bool(long_arr[c.candle_index]))
+            or (c.side == TradeSide.SHORT and bool(short_arr[c.candle_index]))
+        )
+    ]
+    _remember_accepted_candidates(strategy, surviving_accepted)
 
     dataframe.attrs["mtf_sniper_live_entries"] = _summarize_live_entries(dataframe)
     dataframe.attrs["mtf_sniper_trigger_events"] = result.trigger_events
@@ -487,15 +541,19 @@ def apply_entry_pipeline(
             "candle_index": c.candle_index,
             "side": c.side.value,
             "entry_tag": str(pol.metadata.get("entry_tag") or ""),
+            "policy_score": float(pol.score),
             "quality_grade": pol.quality_grade,
             "signal_source": str((c.raw_features or {}).get("signal_source") or ""),
         }
-        for c, pol in result.accepted
+        for c, pol in surviving_accepted
     ]
     return dataframe
 
 
-def _remember_accepted_candidates(strategy: Any, result: EntryPipelineResult) -> None:
+def _remember_accepted_candidates(
+    strategy: Any,
+    accepted: Sequence[tuple[TradeCandidate, PolicyEvaluationResult]] | EntryPipelineResult,
+) -> None:
     from strategies.mtf_sniper.core.candidate_registry import CandidateRegistry
 
     reg = getattr(strategy, "_candidate_registry", None)
@@ -505,7 +563,8 @@ def _remember_accepted_candidates(strategy: Any, result: EntryPipelineResult) ->
             strategy._candidate_registry = reg
         except Exception:
             return
-    for candidate, policy in result.accepted:
+    pairs = accepted.accepted if isinstance(accepted, EntryPipelineResult) else accepted
+    for candidate, policy in pairs:
         tag = str(policy.metadata.get("entry_tag") or policy.metadata.get("setup") or "")
         reg.remember(candidate, tag)
 

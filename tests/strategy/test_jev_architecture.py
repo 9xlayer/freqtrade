@@ -54,12 +54,12 @@ from strategies.mtf_sniper.intelligence.jev_entry_hunter import (
     JevHunterEngine,
     JevHunterStatus,
     JevSetupType,
-    MomentumRadar,
     build_canonical_payload,
     compute_payload_hash,
     is_mutable_model_id,
     is_setup_valid_for_side,
 )
+from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
 
 
@@ -1070,6 +1070,24 @@ class TestJevDecisionEngine(unittest.TestCase):
         }
         v_atr_90_1 = native_engine.evaluate(payload_atr_90_1)
         self.assertTrue(any("Extreme ATR volatility risk" in r for r in v_atr_90_1["reasons"]))
+
+        # Scenario 6: Missing/NaN swing_low_20d_1d must NOT synthesize fake floor breakdown vacuum
+        df_missing_floor = df_short.copy()
+        df_missing_floor["swing_low_20d_1d"] = float("nan")
+        payload_missing_floor = CandleTrajectoryExtractor.build_payload(
+            df_missing_floor,
+            "BTC/USDT:USDT",
+            "short",
+            setup="jev_hunter_waterfall_collapse",
+        )
+        self.assertFalse(payload_missing_floor["macro_context"]["floor_20d_valid"])
+        v_missing_floor = native_engine.evaluate(payload_missing_floor)
+        self.assertFalse(
+            any("Waterfall clean floor breakdown confirmed" in r for r in v_missing_floor["reasons"])
+        )
+        self.assertFalse(
+            any("High ATR volatility aligned with waterfall vacuum breakdown" in r for r in v_missing_floor["reasons"])
+        )
 
 
 class TestHunterExternalModelIdentity(unittest.TestCase):

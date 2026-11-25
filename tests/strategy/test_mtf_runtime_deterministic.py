@@ -152,6 +152,41 @@ class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
             os.environ.clear()
             os.environ.update(prev)
 
+    def test_adapter_propagates_fail_policy_and_eth_base_pair_match(self):
+        adapter = JevDecisionAdapter(force_native=True, mode="native", fail_policy="allow")
+        self.assertEqual(adapter.fail_policy, "allow")
+        adapter.fail_policy = "reject"
+        self.assertEqual(adapter._engine.fail_policy, "reject")
+
+        # ETHFI must not trigger ETH-only require_below_ema50_4h checks.
+        engine = JevDecisionEngine(mode="native")
+        payload = {
+            "pair": "ETHFI/USDT:USDT",
+            "side": "SHORT",
+            "setup": "jev_hunter_waterfall_collapse",
+            "trajectory_sequence": [
+                {
+                    "body_ratio": 0.7,
+                    "vol_ratio": 1.0,
+                    "lower_wick": 0.1,
+                    "range_pct": 0.5,
+                    "close_pos": 0.2,
+                }
+                for _ in range(6)
+            ],
+            "macro_context": {
+                "trend_4h": "BEAR",
+                "atr_percentile": 95.0,
+                "short_score": 85.0,
+                "floor_20d_dist_pct": -1.0,
+                "ema_50_1h_dist_pct": -1.0,
+                "rsi_1h": 40.0,
+                "rel_vol": 3.5,
+            },
+        }
+        verdict = engine._evaluate_native_sequence(payload)
+        self.assertEqual(verdict["decision"], "CONFIRM")
+
 
 if __name__ == "__main__":
     unittest.main()

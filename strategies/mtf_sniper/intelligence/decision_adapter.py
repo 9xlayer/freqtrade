@@ -25,7 +25,13 @@ class JevDecisionAdapter:
     explicitly into the engine — this adapter does **not** mutate ``os.environ``.
     """
 
-    def __init__(self, *, force_native: bool = False, mode: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        force_native: bool = False,
+        mode: str | None = None,
+        fail_policy: str | None = None,
+    ) -> None:
         self._extractor = CandleTrajectoryExtractor
         self._force_native = force_native
         if self._force_native:
@@ -33,11 +39,19 @@ class JevDecisionAdapter:
         else:
             resolved_mode = (mode or "native").lower()
         # Explicit constructor arg — do not write JEV_MODE into process env.
-        self._engine = JevDecisionEngine(mode=resolved_mode)
+        self._engine = JevDecisionEngine(mode=resolved_mode, fail_policy=fail_policy)
         if self._force_native and getattr(self._engine, "mode", "") == "external":
             self._engine.mode = "native"
         self._status = JevStatus
         self.external_calls = 0  # spy counter for deterministic-mode tests
+
+    @property
+    def fail_policy(self) -> str:
+        return getattr(self._engine, "fail_policy", "reject")
+
+    @fail_policy.setter
+    def fail_policy(self, value: str) -> None:
+        self._engine.fail_policy = value.lower()
 
     @property
     def status(self):

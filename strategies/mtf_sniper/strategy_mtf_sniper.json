@@ -21,6 +21,7 @@
       "block_1d_counter_wave": true,
       "block_4h_counter_wave": true,
       "block_high_vol": true,
+      "counter_1d_stake_scale": 0.5,
       "filter_pdh_ceiling": true,
       "filter_wick_rejection": true,
       "min_adx_4h": 18.0,

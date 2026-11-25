@@ -21,15 +21,16 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-
-logger = logging.getLogger(__name__)
-
 # Version hub: strategies.mtf_sniper.__init__ (single bump site).
 from strategies.mtf_sniper import (
     HUNTER_ENGINE_VERSION,
     HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT,
     HUNTER_MODEL_VERSION_NATIVE,
 )
+from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar  # noqa: F401
+
+
+logger = logging.getLogger(__name__)
 
 
 # Typesafe only exposes aliases like jev-latest (resolves e.g. jev-1.14.0).
@@ -179,85 +180,6 @@ def compute_payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()[:16]
 
 
-class MomentumRadar:
-    """
-    Stage 1: High-Recall Momentum Candidate Radar
-    Runs locally (<1ms), triggers only on real market expansion.
-    """
-
-    @classmethod
-    def find_candidates(
-        cls, df: DataFrame, cooldown_bars: int = 12, directional_cooldown: bool = False
-    ) -> list[tuple[int, str]]:
-        """
-        Scan dataframe for significant momentum impulses:
-        - 12 bars cooldown (3 hours) between candidate triggers.
-        - Volume surge (>= 4.0x) with wide range (>= 2.2x ATR)
-        - Or 24h range breakout (96 bars) with volume >= 2.5x
-        - Zero-division protection, NaN/Inf checks.
-        """
-        if df is None or len(df) < 100:
-            return []
-
-        # Safe division against zero and NaN
-        vol_sma = df["volume"].rolling(20, min_periods=1).mean().replace(0, np.nan)
-        vol_ratio = (df["volume"] / vol_sma).fillna(0.0)
-
-        atr_safe = (
-            df["atr"].replace(0, np.nan) if "atr" in df else pd.Series(np.nan, index=df.index)
-        )
-        range_raw = df["high"] - df["low"]
-        range_ratio = (range_raw / atr_safe).fillna(0.0)
-
-        is_surge_short = (df["close"] < df["open"]) & (vol_ratio >= 4.0) & (range_ratio >= 2.2)
-        is_surge_long = (df["close"] > df["open"]) & (vol_ratio >= 4.0) & (range_ratio >= 2.2)
-
-        l96 = df["low"].rolling(96).min().shift(1)
-        h96 = df["high"].rolling(96).max().shift(1)
-        is_breakout_short = (df["close"] < l96) & (vol_ratio >= 2.5)
-        is_breakout_long = (df["close"] > h96) & (vol_ratio >= 2.5)
-
-        candidates = []
-        if directional_cooldown:
-            last_short_idx = -100
-            last_long_idx = -100
-            for i in range(100, len(df)):
-                if (i - last_short_idx) >= cooldown_bars:
-                    if is_surge_short.iloc[i]:
-                        candidates.append((i, "MEGA_SURGE_SHORT"))
-                        last_short_idx = i
-                    elif is_breakout_short.iloc[i]:
-                        candidates.append((i, "BREAKOUT_24H_SHORT"))
-                        last_short_idx = i
-
-                if (i - last_long_idx) >= cooldown_bars:
-                    if is_surge_long.iloc[i]:
-                        candidates.append((i, "MEGA_SURGE_LONG"))
-                        last_long_idx = i
-                    elif is_breakout_long.iloc[i]:
-                        candidates.append((i, "BREAKOUT_24H_LONG"))
-                        last_long_idx = i
-        else:
-            last_idx = -100
-            for i in range(100, len(df)):
-                if (i - last_idx) < cooldown_bars:
-                    continue
-                if is_surge_short.iloc[i]:
-                    candidates.append((i, "MEGA_SURGE_SHORT"))
-                    last_idx = i
-                elif is_surge_long.iloc[i]:
-                    candidates.append((i, "MEGA_SURGE_LONG"))
-                    last_idx = i
-                elif is_breakout_short.iloc[i]:
-                    candidates.append((i, "BREAKOUT_24H_SHORT"))
-                    last_idx = i
-                elif is_breakout_long.iloc[i]:
-                    candidates.append((i, "BREAKOUT_24H_LONG"))
-                    last_idx = i
-
-        return candidates
-
-
 class JevHunterCache:
     """
     Local SQLite cache for Jev Hunter verdicts.
@@ -269,9 +191,9 @@ class JevHunterCache:
         self._init_db()
 
     def _init_db(self):
-        db_dir = os.path.dirname(self.db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
+        db_dir = Path(self.db_path).parent
+        if db_dir != Path():
+            db_dir.mkdir(parents=True, exist_ok=True)
         try:
             with sqlite3.connect(self.db_path, timeout=30.0, isolation_level="IMMEDIATE") as conn:
                 conn.execute("PRAGMA journal_mode = WAL;")
@@ -534,7 +456,7 @@ class JevHunterEngine:
             for env_path in [Path(".env"), Path(__file__).resolve().parents[2] / ".env"]:
                 if env_path.exists():
                     try:
-                        with open(env_path, encoding="utf-8") as f:
+                        with env_path.open(encoding="utf-8") as f:
                             for line in f:
                                 line = line.strip()
                                 if line and not line.startswith("#") and "=" in line:
@@ -570,8 +492,6 @@ class JevHunterEngine:
             }
 
         macro_dict = macro_info or {}
-        last_candle = df_32.iloc[-1]
-        current_price = float(last_candle["close"])
 
         # Model identity for the cache PK column (prefer immutable / resolved actual).
         configured_model = (

@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
@@ -229,14 +230,15 @@ def build_raw_sniper_short_mask(
 
 
 def tag_short_sniper(dataframe: DataFrame, raw_mask: pd.Series) -> pd.Series:
-    tags = pd.Series("", index=dataframe.index)
-    for idx in dataframe.index[raw_mask]:
-        sc = dataframe.loc[idx, "short_score"]
+    arr = np.full(len(dataframe), "", dtype=object)
+    positions = np.flatnonzero(raw_mask.to_numpy(dtype=bool, na_value=False))
+    scores = dataframe["short_score"].to_numpy() if "short_score" in dataframe.columns else None
+    for pos in positions:
+        sc = float(scores[pos]) if scores is not None else 0.0
         if sc >= 80:
-            tier = ShortSetup.A80_PLUS.value
+            arr[pos] = ShortSetup.A80_PLUS.value
         elif sc >= 65:
-            tier = ShortSetup.B65_PLUS.value
+            arr[pos] = ShortSetup.B65_PLUS.value
         else:
-            tier = ShortSetup.C_SUB65.value
-        tags.loc[idx] = tier
-    return tags
+            arr[pos] = ShortSetup.C_SUB65.value
+    return pd.Series(arr, index=dataframe.index)
