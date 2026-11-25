@@ -1,9 +1,12 @@
 # Progress
 
 ## What works
-- Part sensors + SetupComposer recipes (`setup:sniper_short/long`)
-- Vectorized AND fast path in `EntryPipeline` (BT-safe)
-- Policy setup-only ACCEPT; live Hunter off
+- **Single-Truth Unified Signal Pipeline (Nov 25, 2026)**:
+  - Removed legacy `_candidates_from_sniper_masks` fast path from `execution/entry_pipeline.py`; unified execution through `SensorSuite.live(strat, include_waterfall=...) -> SetupComposer.compose_suite() -> SUBSYSTEM_REGISTRY Engine`.
+  - Added `market/data_guards.py`, vectorized `BaseSensor.scan_mask()` / `scan_mask_features()`, and `WaterfallMomentumSensor` (`waterfall_momentum`, registered in `SETUP_WATERFALL_SHORT` -> `WaterfallShortPolicy`).
+  - Locked architectural boundaries with `LINT020`–`LINT029` + `--verify-all` CLI gate + `Dockerfile.custom` build gate.
+  - Verified **100.00% exact 5Y Backtest parity (`20220101–20261124`, cache=none)**: **334/334 identical trades**, **+184,121.6625 USDT**, **14.42% wallet Max DD**, **PF 2.56**, **Sharpe 1.57**, **Calmar 1365.48**.
+- Directional sub-system registry (`short_sniper`, `long_sniper`, `waterfall`) + dedicated policies; live Hunter off.
 - **System Review Hardening, Counter-1D Sizing & Live Exchange Sync (v4.6.0-counter1d, Nov 25, 2026)**:
   - Fixed `circuit_breaker_blocks` UTC timestamp handling, backtest `LocalTrade` (`strategy=""`) parity, non-overlapping streak reset after pause, and correlated cross-pair entry loss deduplication.
   - Filtered `_remember_accepted_candidates` post-cooldown/conflict, wired `EntryPipeline.live` policy params, fixed `ShortPolicy` waterfall scoring floor, and made `tag_*_sniper` duplicate-index-safe.

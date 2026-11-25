@@ -1,10 +1,11 @@
 # System Patterns
 
 ## Architecture layers
-1. **Market Intelligence** — MTF indicators, macro regime (1D), wave filters (4H), location (1H).
-2. **Signal Engine** — MTF Sniper rules + MomentumRadar + JEV Hunter → candidate pool.
-3. **Risk / Authorization** — cooldown, circuit breaker, directional lock, distress guard, JEV Decision Gate.
-4. **Position Management** — `custom_stoploss` ladder, trend runner (EMA21 1H), timeout, ROI table.
+1. **Market Intelligence** — MTF indicators (`market/indicators.py`), data readiness & finite-numeric guards (`market/data_guards.py`), macro regime (1D), wave filters (4H), location (1H).
+2. **Signal Engine** — Atomic `BaseSensor` triggers & vectorized `scan_mask()` (`signals/sensors/`, `WaterfallMomentumSensor`, `LegacySniperPartSensor`) -> fallback `CandidateBuilder` (strictly isolated via `LINT018`/`LINT020`/`LINT021`).
+3. **Directional Sub-Systems** — Multi-subsystem `SUBSYSTEM_REGISTRY` (`short_sniper` -> `ShortPolicy`, `long_sniper` -> `LongPolicy`, `waterfall` -> `WaterfallShortPolicy`), `SetupRecipe`, Single-Truth `SetupComposer.compose_suite()` (`recipes_grouped_by_side`), and `DirectionalTradingEngine.subsystem_policies` (hard-locked via `LINT003`/`LINT022`–`LINT029` and `.venv/bin/python scripts/lint_guardrails.py --verify-all`).
+4. **Risk / Authorization** — cooldown, circuit breaker, directional lock, distress guard, JEV Decision Gate, counter-1D `0.50x` sizing, 15s live exchange sync.
+5. **Position Management** — `custom_stoploss` ladder, trend runner (EMA21 1H), timeout, ROI table.
 
 ## Key design patterns
 - **Regime ≠ trigger**: 15m beauty is insufficient without HTF support.

@@ -1,6 +1,14 @@
 # Active Context
 
 ## Current focus
+**Single-Truth Architecture Migration + Sub-System Hard-Lock (Nov 25, 2026)**:
+- **Unified Single-Truth Execution (`signals/` -> `directional/setup_composer.py` -> `execution/entry_pipeline.py`)**:
+  - Moved DataFrame readiness & finite-numeric helpers into pure Market layer (`strategies/mtf_sniper/market/data_guards.py`), imported by `directional/common_gates.py` and sensors (`LINT008`/`LINT020` clean).
+  - Added vectorized mask protocol on `BaseSensor` (`scan_mask()`, `scan_mask_features()`), implemented on `LegacySniperPartSensor` and new `WaterfallMomentumSensor` (`waterfall_momentum`, registered in `SETUP_WATERFALL_SHORT`, `SensorSuite.live(strat, include_waterfall=enable_waterfall)`, and `SensorSuite.full()`).
+  - Added `SetupComposer.compose_suite()` for zero-loop NumPy recipe intersection (`SUBSYSTEM_REGISTRY`) with opposite-side Sniper conflict cancellation and automatic `TriggerEvent -> CandidateBuilder -> compose` fallback when any custom sensor returns `scan_mask() is None`.
+  - Removed legacy `_candidates_from_sniper_masks` / `_candidates_for_mask` fast-path bypass from `execution/entry_pipeline.py`; locked cleanly via `LINT029` (plus `LINT020`–`LINT028` + `.venv/bin/python scripts/lint_guardrails.py --verify-all` in pre-commit and `Dockerfile.custom`).
+  - Verified **100.00% exact 5Y Backtest parity** (`20220101–20261124`, `JEV_MODE=native`, `MTF_RUNTIME_MODE=deterministic`, `--cache none`): **334/334 identical trades**, **+184,121.6625 USDT (+18,412.17%)**, **14.42% wallet Max DD**, **PF 2.56**, **Sharpe 1.57**, **Calmar 1365.48**.
+
 **v4.6.0-counter1d** — System Review Hardening, Counter-1D Sizing (`0.50x`), Standardized Config & Live Exchange Sync (Nov 25, 2026):
 - **Portfolio Protection (`risk/portfolio_protection.py`)**:
   - Normalized naive UTC `close_date` vs UTC-aware `current_time` (`_to_utc_timestamp` / `close_date_utc`) so circuit-breaker pause windows never shift by local OS timezone.

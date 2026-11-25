@@ -1,100 +1,101 @@
-# MTF Sniper — Data Contracts
+# MTF Sniper — Hợp Đồng Dữ Liệu (Data Contracts)
 
-**Package:** `strategies/mtf_sniper/` · **Source of truth:** `core/contracts.py`, `core/enums.py`, `core/candidate_id.py`  
-**Version:** matches `STRATEGY_VERSION` in `__init__.py` (currently `4.6.0-counter1d`)
+**Package:** `strategies/mtf_sniper/` · **Nguồn gốc code:** `core/contracts.py`, `core/enums.py`, `core/candidate_id.py`  
+**Version:** khớp `STRATEGY_VERSION` trong `__init__.py` (`4.6.0-counter1d`)
 
-This document mirrors **implemented** schemas. Target / future designs are marked explicitly and are **not** live behavior.
+Tài liệu này mô tả đúng **các schema đã triển khai trong code**. Mọi thiết kế mục tiêu trong tương lai nếu nhắc tới sẽ được đánh dấu rõ là chưa chạy thực tế.
 
-All inter-module dataclasses are `frozen=True` (**shallow** immutability only): the dataclass instance cannot rebind fields, but nested `List` / `Dict` values remain mutable unless callers treat them as read-only.
+Tất cả dataclass liên tầng đều dùng `frozen=True` (**bất biến nông — shallow immutability**): không thể gán lại field trên dataclass, nhưng `List` / `Dict` lồng bên trong vẫn cần các module gọi coi là dữ liệu chỉ đọc.
+
 ---
 
 ## 1. Enumerations (`core/enums.py`)
 
-| Enum | Values |
+| Enum | Giá trị |
 |---|---|
 | `TradeSide` | `long`, `short` |
 | `SensorType` | `anomaly`, `pattern` |
 | `MarketRegime` | `bull_expansion`, `bull_pullback`, `bear_capitulation`, `bear_relief`, `choppy_ranging`, `volatility_squeeze` |
 | `DecisionAction` | `confirm`, `veto`, `hold` |
-| `RejectionReasonCode` | Sensor/Builder, Directional, JEV AI, Risk codes (see source) |
+| `RejectionReasonCode` | Mã từ chối của Sensor/Builder, Directional, JEV AI, Risk (xem trực tiếp `core/enums.py`) |
 
 ---
 
-## 2. Candidate identity (`core/candidate_id.py`)
+## 2. Định Danh Ứng Viên (`core/candidate_id.py`)
 
-Canonical format:
+Định dạng chuẩn duy nhất (canonical format):
 
 ```text
 {pair}_{side}_{utc_epoch}_{candle_index}
 ```
 
-Examples: `BTC/USDT:USDT_short_1717243200_42`
+Ví dụ: `BTC/USDT:USDT_short_1717243200_42`
 
-| Helper | Role |
+| Hàm hỗ trợ | Vai trò |
 |---|---|
-| `make_candidate_id` | Build canonical ID; validates pair (`/`), side exact `long`/`short`, Integral `candle_index >= 0`, `datetime`/`Timestamp` only |
-| `parse_candidate_id` | Parse unique canonical form only |
-| `is_canonical_candidate_id` | Parse + remake equality (round-trip stable) |
-| `candidate_id_matches_fields` | Match ID vs pair/side/timestamp/candle_index |
-| `candidate_id_matches_trade` | Optional pair/side context match |
-| `CANDIDATE_ID_MISSING` | Sentinel when correlation cannot be reconstructed |
-| `CANDIDATE_ID_CUSTOM_DATA_KEY` | `"mtf_candidate_id"` on Trade custom data |
+| `make_candidate_id` | Tạo ID chuẩn; kiểm tra hợp lệ `pair` (chứa `/`), `side` chuẩn `long`/`short`, `candle_index` kiểu nguyên $\ge 0$, thời gian `datetime`/`Timestamp` |
+| `parse_candidate_id` | Tách và kiểm tra đúng định dạng chuẩn duy nhất |
+| `is_canonical_candidate_id` | Parse + tạo lại ID xem có khớp vòng lặp (round-trip) hay không |
+| `candidate_id_matches_fields` | Đối chiếu ID với `pair` / `side` / `timestamp` / `candle_index` |
+| `candidate_id_matches_trade` | Đối chiếu ID với ngữ cảnh `pair` / `side` của `Trade` |
+| `CANDIDATE_ID_MISSING` | Giá trị đánh dấu khi không thể tái tạo lại liên kết |
+| `CANDIDATE_ID_CUSTOM_DATA_KEY` | Khóa `"mtf_candidate_id"` lưu bền vững trong custom data của `Trade` |
 
-`CandidateRegistry.remember` rebuilds/replaces any provided `candidate_id` that does not match the candidate’s pair/side/timestamp/index. `lookup` requires `current_time` for age-bounded results (default max-age 6h); `allow_unbounded=True` is diagnostics-only.
+`CandidateRegistry.remember` tự dựng lại/thay thế mọi `candidate_id` truyền vào nếu không khớp `pair`/`side`/`timestamp`/`candle_index`. Hàm `lookup` bắt buộc phải có `current_time` để giới hạn độ tuổi tín hiệu (mặc định tối đa 6 giờ); `allow_unbounded=True` chỉ dùng để chẩn đoán.
 
-**Not valid:** missing candle index; uppercase side (`LONG`); leading-zero epoch/index (`01`); negative index; bad pair; ad-hoc tag IDs.
-Correlation window: `DEFAULT_LOOKUP_MAX_AGE` = **6 hours** (shared by `CandidateRegistry.lookup` and DataFrame reconstruct fallback).
+**Các dạng không hợp lệ:** thiếu `candle_index`; `side` viết hoa (`LONG`); epoch hoặc index có số `0` đứng đầu (`01`); index âm; sai cặp tiền; tự chế ID theo tên tag.  
+Cửa sổ đối chiếu tối đa: `DEFAULT_LOOKUP_MAX_AGE` = **6 giờ** (dùng chung cho cả `CandidateRegistry.lookup` lẫn đường fallback tái tạo từ DataFrame).
 
 ---
 
-## 3. Contracts (`core/contracts.py`)
+## 3. Các Hợp Đồng Dữ Liệu (`core/contracts.py`)
 
 ### 3.1 `TriggerEvent` (frozen)
 
-| Field | Type | Notes |
+| Trường | Kiểu | Ghi chú |
 |---|---|---|
-| `sensor_name` | `str` | e.g. `short_structure` |
+| `sensor_name` | `str` | Ví dụ: `short_structure` |
 | `sensor_type` | `SensorType` | |
 | `side` | `TradeSide` | |
 | `pair` | `str` | |
-| `timestamp` | `datetime` | Candle time |
-| `candle_index` | `int` | Absolute row in analyzed DF |
-| `raw_metrics` | `Dict[str, Any]` | Snapshot metrics |
+| `timestamp` | `datetime` | Thời điểm đóng/mở nến |
+| `candle_index` | `int` | Vị trí hàng tuyệt đối (`iloc`) trong DataFrame đã phân tích |
+| `raw_metrics` | `Dict[str, Any]` | Chỉ số nhanh tại cây nến đó |
 
 ### 3.2 `TradeCandidate` (frozen)
 
-| Field | Type | Notes |
+| Trường | Kiểu | Ghi chú |
 |---|---|---|
-| `candidate_id` | `str` | Canonical — see §2 |
+| `candidate_id` | `str` | ID chuẩn — xem mục 2 |
 | `pair` | `str` | |
 | `side` | `TradeSide` | |
-| `primary_sensor` | `str` | e.g. `setup:sniper_short` after composer / fast path |
+| `primary_sensor` | `str` | Ví dụ: `setup:sniper_short` sau composer / fast path |
 | `secondary_sensors` | `List[str]` | |
 | `confluence_count` | `int` | |
 | `timestamp` | `datetime` | |
 | `candle_index` | `int` | |
 | `raw_features` | `Dict[str, Any]` | |
-| `cooldown_bars` | `int` | default `12` |
+| `cooldown_bars` | `int` | Mặc định `12` |
 
-Produced by **either** the vectorized fast path **or** SensorSuite → Builder → SetupComposer (same contract; see `ARCHITECTURE.md`).
+Được tạo bởi **Fast Path (vector hóa)** hoặc **Event Path (`SensorSuite -> Builder -> SetupComposer`)** với cùng một cấu trúc hợp đồng (xem `ARCHITECTURE.md`).
 
 ### 3.3 `PolicyEvaluationResult` (frozen)
 
-| Field | Type | Semantics |
+| Trường | Kiểu | Ý nghĩa |
 |---|---|---|
-| `is_valid` | `bool` | **Setup eligibility** — may continue toward `enter_*` |
-| `score` | `float` | Quality score |
-| `quality_grade` | `str` | Quality label (`A+`/`A`/`B`/`C`/`REJECT`) — **informational** at Policy |
-| `reasons` | `List[str]` | e.g. `ACCEPT` |
+| `is_valid` | `bool` | **Quyền hợp lệ của setup** — được phép đi tiếp ra `enter_*` |
+| `score` | `float` | Điểm đánh giá chất lượng |
+| `quality_grade` | `str` | Nhãn xếp hạng (`A+`/`A`/`B`/`C`/`REJECT`) — chỉ mang tính thông tin tại tầng Policy |
+| `reasons` | `List[str]` | Ví dụ: `ACCEPT` |
 | `suggested_stop_distance_pct` | `float` | |
 | `target_rr` | `float` | |
-| `metadata` | `Dict[str, Any]` | Includes `entry_tag` when accepted |
+| `metadata` | `Dict[str, Any]` | Chứa `entry_tag` khi được chấp nhận |
 
-**Invariant:** `is_valid=True` with `quality_grade=REJECT` can still reach `confirm_trade_entry`. Decision Gate does **not** read `quality_grade`.
+**Bất biến:** Một setup có `is_valid=True` và `quality_grade=REJECT` vẫn đi tới `confirm_trade_entry` bình thường. Decision Gate **không** đọc `quality_grade`.
 
 ### 3.4 `DecisionVerdict` (frozen)
 
-| Field | Type |
+| Trường | Kiểu |
 |---|---|
 | `action` | `DecisionAction` |
 | `score` | `float` |
@@ -104,61 +105,59 @@ Produced by **either** the vectorized fast path **or** SensorSuite → Builder �
 | `payload_hash` | `str` |
 | `timestamp` | `datetime` |
 
-### 3.5 Risk: two separate mechanisms (do not conflate)
+### 3.5 Rủi Ro: Hai Cơ Chế Tách Biệt (Không Được Nhầm Lẫn)
 
-#### A. `RiskAuthorization` — confirm-path **authorization gate** only
+#### A. `RiskAuthorization` — chỉ là **cổng duyệt lệnh** ở `confirm_trade_entry()`
 
-Returned by `RiskEngine.authorize_entry()` and consumed in `confirm_trade_entry()` as:
+Do `RiskEngine.authorize_entry()` trả về và được dùng tại `confirm_trade_entry()` đúng bằng:
 
 ```text
 return bool(auth.is_approved)
 ```
 
-| Field | Live meaning on confirm path |
+| Trường | Ý nghĩa thực tế ở bước confirm |
 |---|---|
-| `is_approved` | **Only field Strategy uses** to allow/deny entry |
-| `stake_amount` | Diagnostic echo of estimated stake (`amount * rate / lev`, `enable_dynamic_sizing=False` in `authorize_entry` so `custom_stake_amount` is never double-multiplied); `0.0` if `amount`/`rate` unavailable |
-| `leverage` | Target leverage (`get_leverage(None)` -> `10.0`) passed for exposure telemetry, **not** applied to order directly |
-| `stoploss_rate` | Pair/default SL passed into authorize (context only) |
-| `risk_budget_used_pct` / `risk_per_trade_pct` | **`None`** — stop-distance risk sizing **not** implemented |
-| `wallet_equity` / `total_exposure_pct` | Populated from `self.wallets.get_total(stake_currency)` when available; **`None`** when unavailable |
-| `sizing_method` | Label `"freqtrade_proposed"`; not proof that authorize sized the order |
-| other fields | Portfolio / fingerprint / exposure metadata — see `core/contracts.py` |
+| `is_approved` | **Trường duy nhất Strategy dùng** để cho phép hay từ chối mở lệnh |
+| `stake_amount` | Giá trị ước tính để ghi log (`amount * rate / lev`, luôn truyền `enable_dynamic_sizing=False` vào `authorize_entry` để tránh nhân đôi với `custom_stake_amount`); bằng `0.0` nếu thiếu `amount`/`rate` |
+| `leverage` | Đòn bẩy mục tiêu (`get_leverage(None)` -> `10.0`) dùng ghi nhận exposure, **không** trực tiếp đặt vào lệnh sàn |
+| `stoploss_rate` | Stoploss cặp/mặc định truyền vào để ghi ngữ cảnh |
+| `risk_budget_used_pct` / `risk_per_trade_pct` | **`None`** — **chưa** triển khai tính ngân sách rủi ro theo khoảng cách stoploss |
+| `wallet_equity` / `total_exposure_pct` | Lấy từ `self.wallets.get_total(stake_currency)` khi có sẵn; bằng **`None`** nếu không có |
+| `sizing_method` | Nhãn `"freqtrade_proposed"`; không phải bằng chứng authorize tự phân bổ vốn |
+| các trường khác | Thông tin portfolio / fingerprint / exposure — xem `core/contracts.py` |
 
-**Do not describe `RiskAuthorization` as the capital allocator for the order.**
+**Tuyệt đối không mô tả `RiskAuthorization` là bộ phân bổ vốn thật cho lệnh.**
 
-#### B. Freqtrade sizing callbacks — values that actually size the order
+#### B. Các callback Sizing của Freqtrade — nơi thực sự quyết định khối lượng đặt lệnh
 
-| Callback | Strategy → RiskEngine | Behavior (`risk/position_sizing.py`) |
+| Callback | Strategy → RiskEngine | Hành vi (`risk/position_sizing.py`) |
 |---|---|---|
-| `leverage()` | `RiskEngine.get_leverage(max_leverage)` | `min(target_leverage, max_leverage)`; target default **10x** |
-| `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Keeps Freqtrade `proposed_stake`, capped by `max_stake` |
-| | | `enable_dynamic_sizing=False` (Python default) → multiplier **1.0** |
-| | | If dynamic sizing **on** (Docker/config overlay: `true`) → tag multipliers from `_TAG_MULTIPLIERS`, then `min(proposed * mult, max_stake)` |
+| `leverage()` | `RiskEngine.get_leverage(max_leverage)` | `min(default_leverage, max_leverage)`; mặc định **`10x`** |
+| `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Nhận `proposed_stake` từ Freqtrade, chặn trần `max_stake` |
+| | | `enable_dynamic_sizing=False` (mặc định Python) → hệ số **1.0** |
+| | | Khi `enable_dynamic_sizing=True` (mặc định config Docker/local) → nhân hệ số tag (`_TAG_MULTIPLIERS` / `tag_multipliers`) $\times$ `resolve_counter_1d_scale(..., counter_1d_stake_scale)` (mặc định **`0.50x`** khi ngược 1D), rồi chặn `min(..., max_stake)` |
 
-Stoploss ladder remains `custom_stoploss` → `RiskEngine.get_stoploss()` (separate from authorize metadata).
+Thang stoploss vẫn đi riêng qua `custom_stoploss()` → `RiskEngine.get_stoploss()` (`risk/stoploss_ladder.py`).
 
-**Stabilization scope:** do not expand dynamic sizing; do not implement stop-distance risk budgeting.
+### 3.6 Nhật Ký Telemetry
 
-### 3.6 Telemetry
-
-**`TelemetryDecisionRecord`** (frozen) — base decision fields (`ai_verdict`, `ai_confidence`, `ai_model_version`, `market_regime`, `policy_score`) plus:
+**`TelemetryDecisionRecord`** (frozen) — các trường quyết định cơ bản (`ai_verdict`, `ai_confidence`, `ai_model_version`, `market_regime`, `policy_score`) cộng thêm:
 
 - `setup_type`, `signal_source`, `policy_version`
 - `config_fingerprint`
-- `feature_snapshot` (small dict — never full DataFrames)
+- `feature_snapshot` (dict gọn nhẹ — không bao giờ lưu cả DataFrame)
 
-`RiskEngine` deduplicates identical reject bursts within the same 15m candle (`_seen_reject_bursts`) so 5s throttle loops do not flood the ledger.
+`RiskEngine` khử trùng các lần từ chối giống hệt nhau trong cùng 1 cây nến 15m (`_seen_reject_bursts`) để vòng lặp 5 giây không làm tràn file ledger.
 
-**`TelemetryTradeRecord`** (frozen) — trade outcome + MFE/MAE; `candidate_id` must be canonical or `candidate_id_missing`.
+**`TelemetryTradeRecord`** (frozen) — kết quả lệnh + MFE/MAE; `candidate_id` phải là định dạng chuẩn hoặc `candidate_id_missing`.
 
-Both `DecisionLedger` and `TradeLedger` use a bounded in-memory `deque(maxlen=2000)` and rotate JSONL files to `<path>.1` at `10 MiB` (`telemetry/jsonl_io.py`).
+Cả `DecisionLedger` và `TradeLedger` đều dùng bộ đệm RAM giới hạn `deque(maxlen=2000)` và tự xoay file JSONL sang `<path>.1` khi đạt `10 MiB` (`telemetry/jsonl_io.py`).
 
 ---
 
-## 4. Contract tests
+## 4. Bộ Test Kiểm Tra Hợp Đồng
 
-Structural field / ID checks live in:
+Các kiểm tra cấu trúc trường dữ liệu và ID chuẩn nằm tại:
 
 - `tests/strategy/test_mtf_data_contracts.py`
 - `tests/strategy/test_mtf_candidate_id_hardening.py`

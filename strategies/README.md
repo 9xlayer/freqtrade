@@ -1,218 +1,145 @@
 # MTF SNIPER QUANTITATIVE TRADING SUITE
+
 > **Hệ thống Giao dịch Định lượng Đa Khung Thời Gian (Multi-Timeframe Sniper Suite)**  
-> Thiết kế chuyên biệt cho thị trường Crypto Futures (Đòn bẩy 10x, Cặp BTC/USDT:USDT & ETH/USDT:USDT)  
-> Khung thời gian cơ sở: **15M** | Khung phân tích xu hướng: **1H – 4H – 1D**
+> **Version hiện hành:** `4.6.0-counter1d` ([`strategies/mtf_sniper/__init__.py`](mtf_sniper/__init__.py))  
+> Thiết kế chuyên biệt cho Crypto Futures (**10x Isolated**, cặp `BTC/USDT:USDT` & `ETH/USDT:USDT`)  
+> Khung cơ sở: **15m** | Khung phân tích xu hướng: **1H – 4H – 1D**
 
 ---
 
 ## 📑 MỤC LỤC
-1. [Tổng Quan Hệ Thống & Bản Chất Lợi Nhuận](#1-tổng-quan-hệ-thống--bản-chất-lợi-nhuận)
-2. [Cấu Trúc Thư Mục](#2-cấu-trúc-thư-mục)
-3. [Triết Lý & Kiến Trúc Đa Khung Thời Gian (MTF Architecture)](#3-triết-lý--kiến-trúc-đa-khung-thời-gian-mtf-architecture)
-4. [Quy Tắc Kỹ Thuật Vào Lệnh (Entry Rules)](#4-quy-tắc-kỹ-thuật-vào-lệnh-entry-rules)
-5. [Quy Trình Quản Trị Vị Thế & Thoát Lệnh (Exits & Stoploss)](#5-quy-trình-quản-trị-vị-thế--thoát-lệnh-exits--stoploss)
-6. [Hệ Thống Phòng Thủ Rủi Ro Cấp Tổ Chức (Risk Controls)](#6-hệ-thống-phòng-thủ-rủi-ro-cấp-tổ-chức-risk-controls)
-7. [Bảng Cấu Hình Tham Số Thực Tế (Parameters)](#7-bảng-cấu-hình-tham-số-thực-tế-parameters)
-8. [Báo Cáo Kiểm Toán Hiệu Năng Thực Tế (2022 – 2026)](#8-báo-cáo-kiểm-toán-hiệu-năng-thực-tế-2022--2026)
-9. [Hướng Dẫn Vận Hành & Khuyến Nghị Vốn Thật](#9-hướng-dẫn-vận-hành--khuyến-nghị-vốn-thật)
+
+1. [Tổng Quan & Triết Lý Định Hình Hệ Thống](#1-tổng-quan--triết-lý-định-hình-hệ-thống)
+2. [Cấu Trúc Thư Mục Hiện Hành](#2-cấu-trúc-thư-mục-hiện-hành)
+3. [Phễu Lọc Đa Khung Thời Gian (1D → 4H → 1H → 15m)](#3-phễu-lọc-đa-khung-thời-gian-1d--4h--1h--15m)
+4. [Hai Cơ Chế Vào Lệnh: Sniper Setup & Waterfall Collapse](#4-hai-cơ-chế-vào-lệnh-sniper-setup--waterfall-collapse)
+5. [Triết Lý Thoát Lệnh & Ratchet Stoploss](#5-triết-lý-thoát-lệnh--ratchet-stoploss)
+6. [Quản Trị Rủi Ro Danh Mục & Counter-1D Sizing](#6-quản-trị-rủi-ro-danh-mục--counter-1d-sizing)
+7. [Chuẩn Hoá Cấu Hình 3 Tầng](#7-chuẩn-hoá-cấu-hình-3-tầng)
+8. [Kiểm Toán Hiệu Năng 5 Năm (2022 – 2026)](#8-kiểm-toán-hiệu-năng-5-năm-2022--2026)
+9. [Vận Hành & Lệnh CLI](#9-vận-hành--lệnh-cli)
 
 ---
 
-## 1. TỔNG QUAN HỆ THỐNG & BẢN CHẤT LỢI NHUẬN
+## 1. TỔNG QUAN & TRIẾT LÝ ĐỊNH HÌNH HỆ THỐNG
 
-Bộ chiến lược **MTF Sniper** là hệ thống giao dịch thuật toán theo trường phái **Convex Trend-Following Breakout (Bắt Sóng Lệch Chuẩn)**:
+Bộ chiến lược **MTF Sniper** được xây dựng theo triết lý **Convex Asymmetric Trend-Following Breakout** *(xem bản kỹ thuật đầy đủ bằng tiếng Anh tại [`mtf_sniper/docs/PHILOSOPHY.md`](mtf_sniper/docs/PHILOSOPHY.md))*:
 
-* **Không phải Scalping thắng đều hàng ngày:** Hệ thống không tìm kiếm các khoản lãi nhỏ li ti mỗi ngày với tỷ lệ thắng 80%.
-* **Cơ chế sinh lời:** Chấp nhận tỷ lệ thắng quanh **$50\%$**, hòa vốn hoặc lỗ nhỏ có kiểm soát ở đa số các lệnh. Toàn bộ lợi nhuận ròng được tạo ra bởi **các lệnh ăn trọn sóng lớn $+7\%$ đến $+10\%$ chart (tức $+70\%$ đến $+100\%$ ROE với đòn bẩy 10x)**.
-* **Live strategy:** [`strategies/mtf_sniper/`](mtf_sniper/) → class `StrategyMTFSniper` (LONG + SHORT, SensorSuite + optional JEV Decision). Short-only facade removed; use directional short package inside `mtf_sniper`.
-
-> [!WARNING]
-> **Đặc tính chu kỳ vốn (Drawdown Profile):**
-> Hệ thống sinh lời cực mạnh trong các giai đoạn thị trường có sóng biến động lớn (như 2025–2026). Trong các chu kỳ thị trường đi ngang kéo dài (như 2022–2023), hệ thống sẽ trải qua giai đoạn sụt giảm tài khoản khoảng **$29.7\%$** kéo dài hơn 1 năm. Nhà đầu tư cần hiểu rõ bản chất này trước khi cấp vốn.
+- **Không đánh scalping lặt vặt mỗi ngày:** Hệ thống chấp nhận Win Rate thực tế quanh **`55%`** và bỏ qua thị trường đi ngang nhiễu loạn. Nguồn lợi nhuận chính đến từ **phần đuôi lệch phải (right-tail convex payoff)**: cắt lỗ/hòa vốn nhanh khi sai kịch bản, và giữ trọn các con sóng lớn `+50%` tới `+120%+ ROE` (đòn bẩy 10x).
+- **Khung nhỏ không đứng một mình (*Regime != Trigger*):** Một cây nến breakout 15m đẹp không có giá trị nếu đi ngược pha 1D/4H hoặc đâm đầu vào vùng kiệt sức 1H. Lệnh phải đi qua đủ **4 tầng lọc từ vĩ mô xuống vi mô**.
+- **Quy tắc tất định làm lõi, AI là lớp phụ trợ tuỳ chọn:** Lõi tín hiệu, policy và phòng thủ danh mục chạy hoàn toàn tất định (`JEV_MODE=native` trong backtest). Ở production Docker (`decision_external`), JEV Decision chỉ đóng vai trò chấm điểm bổ trợ (`w_ai=0.10`, fallback về `native` khi timeout); đường JEV Hunter đang tắt mặc định ở pipeline live.
 
 ---
 
-## 2. CẤU TRÚC THƯ MỤC
+## 2. CẤU TRÚC THƯ MỤC HIỆN HÀNH
 
 ```text
 strategies/
-├── active/
-│   ├── StrategyMTFSniper.py          # Chiến lược 2 chiều chính (LONG + SHORT)
-│   ├── StrategyMTFSniper.json        # Tham số tối ưu cho StrategyMTFSniper
-│   ├── StrategyMTFShortSniper.py     # Chiến lược chuyên Short độc lập
-│   ├── StrategyMTFShortSniper.json   # Tham số cho StrategyMTFShortSniper
-│   └── MTF_Short_Sniper.pine         # Script TradingView Pine v5 hiển thị biểu đồ
-├── drafts/                           # Các bản nháp thử nghiệm ý tưởng
-└── README.md                         # Tài liệu hướng dẫn kỹ thuật toàn diện
+├── mtf_sniper/                         # Package chiến lược chính (StrategyMTFSniper)
+│   ├── __init__.py                     # STRATEGY_VERSION = "4.6.0-counter1d"
+│   ├── strategy_mtf_sniper.py          # Facade mỏng nối Freqtrade callbacks + auto-sync 15s
+│   ├── strategy_mtf_sniper.json        # Tham số hyperopt / entry mặc định
+│   ├── core/                           # Config 3 tầng, RuntimeMode, Contracts, CandidateID
+│   ├── market/                         # Tính chỉ báo 1D / 4H / 1H / 15m (anti-lookahead)
+│   ├── signals/                        # Sniper parts, SensorSuite, MomentumRadar (Waterfall)
+│   ├── directional/                    # LongPolicy & Dual-Regime ShortPolicy (tách biệt)
+│   ├── execution/                      # EntryPipeline & ExitPolicy (trend-runner deferral)
+│   ├── risk/                           # RiskEngine, PositionSizing (0.50x), StoplossLadder, CB
+│   ├── intelligence/                   # JEV Decision adapter/engine (native / hybrid external)
+│   ├── telemetry/                      # DecisionLedger & TradeLedger (JSONL xoay vòng 10 MiB)
+│   └── docs/                           # PHILOSOPHY.md, ARCHITECTURE.md, DATA_CONTRACTS.md
+├── archive/                            # Chiến lược cũ (StrategyMTFShortSniper, v1/v2...)
+├── drafts/                             # Bản nháp thử nghiệm ý tưởng
+└── README.md                           # Tài liệu tổng quan chiến lược
 ```
 
 ---
 
-## 3. TRIẾT LÝ & KIẾN TRÚC ĐA KHUNG THỜI GIAN (MTF ARCHITECTURE)
+## 3. PHỄU LỌC ĐA KHUNG THỜI GIAN (`1D -> 4H -> 1H -> 15m`)
 
 ```mermaid
 flowchart TD
-    D1["1D MACRO REGIME
-    - Long: Bắt buộc Close > EMA 200 ngày (Không bắt dao rơi gấu)
-    - Short: Bắt buộc không trong Siêu Bull Run"] --> H4["4H WAVE CONFIRMATION
-    - MACD Histogram xác nhận hướng sóng
-    - Bộ lọc Bollinger Bands Squeeze tránh bẫy sideway"]
-    H4 --> H1["1H LOCATION & EXHAUSTION
-    - Giá neo quanh EMA 50 khung 1H
-    - Phe đối nghịch bị kiệt sức (RSI Rolling 24h)"]
-    H1 --> M15["15M EXECUTION TRIGGER
-    - Nến Breakout nén đặc (Body >= 60-70%)
-    - Đâm thủng Swing High / Swing Low
-    - Khoảng cách an toàn với EMA 21 (Tránh mua/bán đuổi)"]
+    D1["1D MACRO REGIME & SIZING<br/>Xác định xu hướng chính, chặn dãn đỉnh (>53% EMA200), giữ đáy 20D,<br/>giảm stake còn 0.50x khi vào lệnh ngược pha 1D"] --> H4["4H WAVE & VOLATILITY<br/>Xác nhận hướng sóng MACD 4H, ADX >= 18, DI (ETH),<br/>lọc nhiễu sideways / ATR bất thường"]
+    H4 --> H1["1H LOCATION & EXHAUSTION<br/>Giá neo quanh EMA 50 1H (không mua/bán đuổi quá xa)<br/>RSI rolling 24h chứng minh phe đối nghịch vừa kiệt sức"]
+    H1 --> M15["15m COMPRESSED TRIGGER<br/>4-part Sniper breakout HOẶC Dual-Regime Waterfall MomentumRadar"]
 ```
 
 ---
 
-## 4. QUY TẮC KỸ THUẬT VÀO LỆNH (ENTRY RULES)
+## 4. HAI CƠ CHẾ VÀO LỆNH: SNIPER SETUP & WATERFALL COLLAPSE
 
-### A. Nhánh SHORT Sniper (Bán Khống)
-1. **Khung 1D (Vĩ mô):** Không nằm trong sóng Siêu Bull Run (`close > ema_50 > ema_200 & rsi > 60`).
-2. **Khung 4H (Xác nhận):** Không có sóng hồi tăng ngược chiều (`is_bull_wave_4h == 0`).
-3. **Khung 1H (Vị thế):** Giá thỏa mãn `close_1h >= ema_50_1h * 0.991` (chỉ cấm Short khi giá đã thủng sâu hơn 0.9% dưới EMA 50 1H để tránh short đuổi đáy; giá tiệm cận hoặc nằm cao hơn EMA 50 1H vẫn được Short nếu nến 15M gãy hỗ trợ), RSI 1H trong 24h qua từng chạm vùng kiệt sức Bò ($\ge 55.1$).
-4. **Khung 15M (Kích hoạt):** Nến đỏ thân đặc ($\ge 62\%$ thân), đâm thủng Swing Low 17 nến, đóng dưới EMA 10 & EMA 21, cách EMA 21 không quá $1.0\%$.
+### A. Complete Sniper 4-Part Setup (`long_A80_plus`, `short_A80_plus` / `B65_plus` / `C_sub65`)
+Chỉ kích hoạt khi cả **4 nhóm điều kiện** (`*_structure`, `*_mtf`, `*_macro*`, `*_safety`) cùng thoả mãn đồng thời:
+- **Nến trigger 15m nén đặc:** thân nến chiếm $\ge 60\% - 63\%$ biên độ, hạn chế râu từ chối (`max_rejection_wick_ratio`), phá vỡ Swing High (15 nến) / Swing Low (17 nến), nằm đúng phía EMA10 & EMA21, không quá xa EMA21.
+- **Vị thế 1H chuẩn xác:** SHORT nằm trong dải `[0.991x, 1.025x]` của `ema_50_1h` (chờ nhịp hồi kiệt sức Bò `rsi_max_24_1h >= 55.1` rồi mới đánh xuống); LONG bám `>= 0.988x` của `ema_50_1h` sau nhịp rũ (`rsi_min_24_1h <= 57.1`).
+- **Bảo vệ vĩ mô 1D:** LONG đòi hỏi không rơi vào bear market 1D (`close > ema_50_1d` & `ema_200_1d`) và không dãn quá `+53%` trên EMA200 1D; SHORT đứng cách đáy 20 ngày ít nhất `3.5%` và tránh cao điểm capitulation.
 
-### B. Nhánh LONG Sniper (Mua Bứt Phá)
-1. **Khung 1D (Vĩ mô):** Cấm Long khi khung Ngày rơi vào Death Cross hoặc dưới EMA 200 (`close < ema_200`). Giá không dãn quá $50\%$ so với EMA 200 ngày (`overextended <= 0.50`).
-2. **Khung 4H (Xác nhận):** MACD Histogram 4H $> 0$.
-3. **Khung 1H (Vị thế):** Giá trên EMA 50 1H, RSI 1H trong 24h từng có nhịp rũ kiệt sức ($\le 48.9$).
-4. **Khung 15M (Kích hoạt):** Nến xanh thân đặc ($\ge 70\%$ thân), vượt Swing High 15 nến, đóng trên EMA 10 & EMA 21, RSI 15M $\le 70.4$, cách EMA 21 không quá $1.0\%$.
-
----
-
-## 5. QUY TRÌNH QUẢN TRỊ VỊ THẾ & THOÁT LỆNH (EXITS & STOPLOSS)
-
-> [!IMPORTANT]
-> **Quy định kiến trúc về Exit Signals:**
-> Cờ `use_exit_signal` được khóa cố định ở trạng thái **`False`**. 
-> Kiểm toán thực nghiệm đã chứng minh: các cơ chế cắt non sau 2 tiếng (`exit_trend_invalidated`) trên khung 15m phá hủy **$-2,400\text{ USDT}$** và bóp chết $16/18$ lệnh ăn sóng lớn. Do đó, việc quản trị vị thế được giao hoàn toàn cho **`custom_stoploss`** và bảng **`minimal_roi`**.
-
-1. **Cắt lỗ ban đầu (Hard Stoploss):**
-   * BTC: $-2.5\%$ chart (tương đương $-25\%$ ROE với đòn bẩy 10x).
-   * ETH: $-2.8\%$ chart (tương đương $-28\%$ ROE với đòn bẩy 10x).
-2. **Khóa hòa vốn sớm (Breakeven Lock):**
-   * Khi lãi chưa thực hiện đạt **$+2.0\%$ chart** ($+20\%$ ROE), hệ thống tự động kích hoạt dời Stoploss về khóa hòa vốn bảo toàn vốn gốc theo từng chiều:
-     * **Nhánh SHORT:** Kéo Stoploss về **$+1.0\%$ chart (+10% ROE)** (`be_target = 0.10`).
-     * **Nhánh LONG:** Kéo Stoploss về **$+0.2\%$ chart (+2% ROE)** (`be_target = 0.02`).
-3. **Trailing Stop bám sát đỉnh/đáy:**
-   * Khi lãi đạt **$+3.5\%$ chart** ($+35\%$ ROE), hệ thống kích hoạt Trailing Stop bám sát khoảng cách **$2.0\%$ chart** từ mức giá cao nhất/thấp nhất (`return -0.20`).
-4. **Thắt chặt sau 24 giờ:**
-   * Nếu sau 24 giờ vị thế vẫn đang âm vốn (`current_profit < 0`), Stoploss được tự động siết về $-0.5\%$ chart ($-5\%$ ROE) để giảm thiểu thiệt hại kẹt vốn.
-5. **Chốt lời mục tiêu cố định (Minimal ROI):**
-   * Bảng ROI thực tế trong code gồm 2 mức:
-     * **$0$ phút (từ đầu):** Chốt lời mục tiêu **$+10.0\%$ chart (+100% ROE)** (`"0": 1.0`).
-     * **$720$ phút (sau 12 giờ):** Hạ mục tiêu chốt lời xuống **$+7.0\%$ chart (+70% ROE)** (`"720": 0.7`).
+### B. Dual-Regime Waterfall Momentum (`jev_hunter_waterfall_collapse`)
+Sinh ra để bắt các cú sập tháo chạy nhanh (như `12/11/2026` và `20/11/2026` trên BTC) mà bộ lọc Sniper chuẩn bỏ qua vì giá đã đi xa `ema_50_1h` hoặc xuyên thẳng đáy 20D:
+- **Regime A — Vacuum Breakdown (`floor_dist <= 0` hoặc `<= 0.5%` kèm `rel_vol >= 3.0x`):** Khi giá thủng hỗ trợ 20 ngày, cho phép Short theo động lượng vùng chân không (bỏ qua trần ATR thông thường), vẫn giữ trần quá bán climax (`dist_ema50_4h >= -10%`, `dist_ema50_1d >= -20%`).
+- **Regime B — In-Range Collapse (`floor_dist > 0`):** Đánh gãy trước đáy khi biến động 4H mở rộng (`bb_width_4h >= 0.035`), chưa dãn sâu (`dist_ema50_4h >= -3.5%`, `dist_ema50_1d >= -12%`); riêng ETH bắt buộc dưới `ema_50_4h`.
 
 ---
 
-## 6. HỆ THỐNG PHÒNG THỦ RỦI RO CẤP TỔ CHỨC (RISK CONTROLS)
+## 5. TRIẾT LÝ THOÁT LỆNH & RATCHET STOPLOSS
 
-1. **Streak Circuit Breaker (Cắt cầu dao chuỗi thua):**
-   * Tự động theo dõi các lệnh đã đóng trong lịch sử qua hook `confirm_trade_entry`.
-   * Nếu phát hiện **3 lệnh thua lỗ thực tế liên tiếp** (mỗi lệnh lỗ $\ge 10\%$ ROE), hệ thống **tự động đóng băng mở lệnh mới trong 72 giờ**.
-2. **Portfolio Correlation Guard (Chặn tích tụ rủi ro đồng pha):**
-   * BTC và ETH có tương quan giá cao ($> 0.85$). Nếu lệnh thứ nhất đang mở và bị âm vốn **$> 0.8\%$ chart** ($-8\%$ ROE), hệ thống **tuyệt đối từ chối mở thêm lệnh thứ 2 cùng pha**, triệt tiêu nguy cơ sụt giảm kép (Double Drawdown).
+`use_exit_signal` được giữ **`False`** có chủ đích — toàn bộ vòng đời thoát lệnh do [`stoploss_ladder.py`](mtf_sniper/risk/stoploss_ladder.py) và [`exit_policy.py`](mtf_sniper/execution/exit_policy.py) quản lý:
 
----
-
-## 7. BẢNG CẤU HÌNH THAM SỐ THỰC TẾ (PARAMETERS)
-
-Được lưu trữ đồng bộ trong [`StrategyMTFSniper.json`](file:///Users/nathan/Documents/WORK/freqtrade/strategies/active/StrategyMTFSniper.json):
-
-```json
-{
-  "strategy_name": "StrategyMTFSniper",
-  "params": {
-    "roi": {
-      "0": 1.0,
-      "720": 0.7
-    },
-    "stoploss": {
-      "stoploss": -0.28
-    },
-    "max_open_trades": {
-      "max_open_trades": 2
-    },
-    "buy": {
-      "block_1d_counter_wave": true,
-      "block_4h_counter_wave": true,
-      "short_candle_body_ratio_min": 0.62,
-      "short_cooldown_candles": 96,
-      "short_loc_tolerance_1h": 0.991,
-      "short_lookback_support": 17,
-      "short_max_dist_ema21": 1.0,
-      "short_min_1h_rsi_exhaustion": 55.1,
-      "short_min_rsi_entry": 27.8,
-      "min_adx_4h": 18.0,
-      "long_candle_body_ratio_min": 0.7,
-      "long_cooldown_candles": 42,
-      "long_loc_tolerance_1h": 0.989,
-      "long_lookback_resistance": 15,
-      "long_max_1h_rsi_exhaustion": 48.9,
-      "long_max_dist_ema21": 1.0,
-      "long_max_rsi_entry": 70.4,
-      "long_overextended_dist_max": 0.5,
-      "long_block_1d_macd": true
-    }
-  }
-}
-```
+1. **Cắt lỗ gốc:** `-25%` ROE (BTC) / `-28%` ROE (ETH) ở đòn bẩy `10x`.
+2. **Thang khoá lãi một chiều (Ratchet Ladder):**
+   - Lãi `>= +18%` ROE -> dời SL lên khoá **`+1%` ROE** (hoà vốn dương).
+   - Lãi `>= +30%` ROE -> khoá **`+10%` ROE**.
+   - Lãi `>= +50%` ROE -> khoá **`+25%` ROE**, đồng thời **hoãn chốt ROI** nếu cấu trúc 1H vẫn thuận xu hướng (`close_1h > ema_21_1h` với Long, `<` với Short).
+   - Lãi `>= +80%` ROE -> trailing mềm **`-25%`**.
+   - Lãi `>= +120%` ROE -> trailing **`-20%`** (`minimal_roi`: `100%` tại `0m`, `70%` sau `720m`).
+3. **Siết lệnh kẹt sau 24 giờ:** nếu giữ quá 24h mà vẫn âm (`< 0%` ROE), siết SL lên **`-5%` ROE** để thu hồi vốn nhanh.
 
 ---
 
-## 8. BÁO CÁO KIỂM TOÁN HIỆU NĂNG THỰC TẾ (2022 – 2026)
+## 6. QUẢN TRỊ RỦI RO DANH MỤC & COUNTER-1D SIZING
 
-* **Dữ liệu:** Toàn diện 5 năm lịch sử (01/01/2022 – 09/11/2026 = 1,773 ngày)
-* **Dữ liệu làm ấm:** Dữ liệu Binance Futures được tải bù từ 01/01/2020. Cấu hình `startup_candle_count = 400` lùi 400 nến cho từng khung thời gian (khung 1D lùi 400 ngày đủ để làm ấm EMA 200 ngày, khung 15M lùi 400 nến ~ 4.16 ngày).
-* **Thiết lập:** Vốn 1,000 USDT | Kích thước lệnh 150 USDT | Đòn bẩy 10x
-
-### Bảng Chỉ Số Thực Tế
-| Chỉ Số Đo Lường | Kết Quả Thực Nghiệm | Nhận Xét Kỹ Thuật |
-| :--- | :---: | :--- |
-| **Tổng lợi nhuận ròng** | **+1,599.84 USDT (+159.98% ROI)** | Vốn tăng từ 1,000$ lên 2,599.84$ |
-| **Lợi nhuận gộp / Lỗ gộp** | 5,887.89$ / 4,288.05$ | **Profit Factor = 1.37** |
-| **Tỷ lệ thắng (Win Rate)** | **49.68%** (154 Thắng / 156 Thua) | Gần cân bằng 1 thắng / 1 thua |
-| **Payoff Ratio Thực Tế** | **1.39 lần** | Lãi TB: 38.2$ / Lỗ TB: 27.5$ |
-| **Đáy rút vốn tối đa (Max Drawdown)** | **29.73% (342.90 USDT)** | Diễn ra trong giai đoạn 06/2022 – 06/2023 |
-| **Thời gian Drawdown lâu nhất** | **368 ngày 12 giờ** | Giai đoạn đi ngang sau cú sập LUNA/FTX |
-| **Tỷ số Calmar chuẩn quỹ (CAGR / DD)** | **0.73** | Chuẩn quỹ định lượng (~0.73) |
-| **Tỷ số Sharpe (Daily)** | **0.89** | Độ biến động của số dư tài khoản |
-
-### Phân Bổ Từng Năm
-| Năm | Tổng Lệnh (WR) | Nhánh SHORT | Nhánh LONG | **TỔNG LÃI NĂM** | Đánh Giá |
-| :---: | :---: | :---: | :---: | :---: | :--- |
-| **2022** | 50 lệnh (58.0%) | **+94.03$** (49) | -21.06$ (1) | **+72.97$** | Nhánh Short gánh toàn bộ danh mục |
-| **2023** | 32 lệnh (34.4%) | -81.35$ (13) | **+16.80$** (19) | **-64.55$** | **Năm duy nhất bị âm:** Thị trường sideway sau FTX |
-| **2024** | 57 lệnh (43.9%) | +31.83$ (28) | **+89.54$** (29) | **+121.36$** | Sóng ETF: Nhánh Long dẫn đầu lợi nhuận |
-| **2025** | 78 lệnh (53.8%) | **+290.93$** (60) | **+296.40$** (18) | **+587.33$** | **Cả 2 nhánh cùng thắng lớn** |
-| **2026** | 60 lệnh (61.7%) | **+963.09$** (56) | +2.04$ (4) | **+965.13$** | Sóng sập mạnh: Nhánh Short áp đảo |
-| **TỔNG** | **310 lệnh (49.7%)** | **+1,298.53$** | **+301.31$** | **+1,599.84$** | **4/5 năm có lãi dương** |
+1. **Counter-1D Stake Scaling (`0.50x`):** Trong [`position_sizing.py`](mtf_sniper/risk/position_sizing.py), khi `enable_dynamic_sizing=True`, mọi lệnh **LONG ngược sóng 1D** (`macdhist_1d <= 0` hoặc `ema_50_1d <= ema_200_1d`) và lệnh **SHORT đi ngược Macro Bull Run 1D** (`is_macro_bull_run_1d == 1.0`) bị tự động hạ khối lượng xuống **`0.50x`** (`counter_1d_stake_scale`), giúp các cú hồi nhỏ gãy giữa chừng không phá tài khoản.
+2. **Directional Lock:** Cấm mở Long và Short đối nghịch cùng lúc giữa BTC & ETH.
+3. **Distress Guard (`-8%` ROE):** Đang có lệnh âm sâu $\le -8\%$ ROE -> cấm mở thêm vị thế mới.
+4. **Streak Circuit Breaker:** `3` chuỗi thua liên tiếp độc lập (`<= -10%` ROE, gộp trùng BTC+ETH vào trong 1 giờ) -> tạm dừng bot **72 giờ** rồi reset bộ đếm.
+5. **Live Exchange Position Auto-Sync (`15s`):** Ở live mode, [`bot_loop_start`](mtf_sniper/strategy_mtf_sniper.py#L298) làm mới `wallets` mỗi `15 giây` khi có vị thế mở để đồng bộ tức thì nếu người dùng đóng lệnh tay trên Binance.
 
 ---
 
-## 9. HƯỚNG DẪN VẬN HÀNH & KHUYẾN NGHỊ VỐN THẬT
+## 7. CHUẨN HOÁ CẤU HÌNH 3 TẦNG
 
-### Khuyến Nghị Vận Hành
-1. **Chưa nên cấp vốn lớn ngay lập tức:** Cần chạy Dry-Run (Paper Trading) tối thiểu 3 đến 6 tháng trên Binance Futures để kiểm chứng độ trượt giá thực tế và khớp lệnh.
-2. **Quy mô vốn an toàn:**
-   * Với vốn $1,000\text{ USDT}$, nên đặt kích thước lệnh từ **$50 - 75\text{ USDT}$** (thay vì $150\text{ USDT}$) để nén Max Drawdown thực tế xuống dưới ngưỡng an toàn $10\% - 12\%$.
+1. **Hyperopt / Strategy Parameters:** [`mtf_sniper/strategy_mtf_sniper.json`](mtf_sniper/strategy_mtf_sniper.json) + `Parameter` trên `StrategyMTFSniper` (gồm cả `counter_1d_stake_scale` `0.25..1.00`).
+2. **Runtime / Deploy Overlay:** `strategy_params` trong [`user_data/config.json`](../user_data/config.json) & [`docker/config.mtf_sniper.json`](../docker/config.mtf_sniper.json) (`mtf_runtime_mode`, `enable_waterfall`, `enable_dynamic_sizing`, `exchange_sync_interval_secs`, `default_leverage`, `tag_multipliers`, `pair_overrides`).
+3. **Environment Variables:** `MTF_RUNTIME_MODE`, `JEV_MODE`, `JEV_FAIL_POLICY`, `COUNTER_1D_STAKE_SCALE`, `EXCHANGE_SYNC_INTERVAL_SECS`... được gom về [`config_resolve.py`](mtf_sniper/core/config_resolve.py) kèm `EffectiveConfig.fingerprint()`.
 
-### Các Lệnh CLI Chuẩn
-> [!NOTE]
-> Live path: `strategies/mtf_sniper` (SensorSuite v4). Cần `PYTHONPATH=.` khi chạy local.
-> Coolify/Docker: image bake + overlay `docker/config.mtf_sniper.json` — see `docker/README.md`.
+---
+
+## 8. KIỂM TOÁN HIỆU NĂNG 5 NĂM (`2022 – 2026`)
+
+* **Khoảng thời gian:** `20220101–20261124` · **Cấu hình:** `1,000 USDT` gốc, `stake_amount=unlimited`, `tradable_balance_ratio=0.70`, `10x`, `enable_dynamic_sizing=true`, `counter_1d_stake_scale=0.50`, `JEV_MODE=native`, `--cache none`.
+
+| Chỉ số | Trước `0.50x` (`1.0x` phẳng) | Bản `v4.6.0-counter1d` (`0.50x`) | Ghi chú |
+|---|---:|---:|---|
+| Tổng lệnh / Win Rate | `334` (`55.1%`) | `334` (`55.1%`) | `184W / 150L` |
+| Lợi nhuận ròng | `+199,233.55 USDT` | **`+184,121.66 USDT`** (`+18,412.17%`) | Lãi kép cuối chu kỳ thấp hơn 7.6% |
+| **Max Drawdown (wallet)** | `19.20%` (`31,728.48 USDT`) | **`14.42%` (`18,286.48 USDT`)** | **Giảm 42.4% theo USDT** |
+| **Profit Factor / SQN** | `2.26` / `2.40` | **`2.56`** / **`2.67`** | Chất lượng kèo tăng rõ rệt |
+| **Sharpe / Sortino / Calmar** | `1.49` / `1.88` / `1,109.39` | **`1.57`** / **`1.96`** / **`1,365.48`** | Tối ưu lợi nhuận trên rủi ro |
+
+---
+
+## 9. VẬN HÀNH & LỆNH CLI
 
 ```bash
-# 1. Backtest:
-PYTHONPATH=. .venv/bin/freqtrade backtesting --config user_data/config.json --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper --timerange 20220101-20261116
+# 1. Backtest local tất định (native):
+PYTHONPATH=. JEV_MODE=native MTF_RUNTIME_MODE=deterministic \
+  .venv/bin/freqtrade backtesting --config user_data/config.json \
+  --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper \
+  --timerange 20220101-20261124 --cache none
 
-# 2. Dry-Run / trade:
-PYTHONPATH=. .venv/bin/freqtrade trade --config user_data/config.json --strategy-path strategies/mtf_sniper --strategy StrategyMTFSniper
+# 2. Chạy unit tests & guardrails:
+.venv/bin/python scripts/lint_guardrails.py && .venv/bin/pytest -q tests/strategy/
 
-# 3. Coolify / compose (strategies baked in image):
+# 3. Deploy Docker trên Pi / Coolify:
 docker compose up -d --build
 ```

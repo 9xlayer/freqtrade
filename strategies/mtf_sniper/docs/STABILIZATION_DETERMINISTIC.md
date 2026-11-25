@@ -1,142 +1,85 @@
-# Stabilization — Deterministic MTF Sniper
+# Ổn Định Hoá — MTF Sniper Tất Định (Deterministic Stabilization)
 
-**Branch:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone:** `4.4.1-deterministic` (current package in `__init__.py`: `4.6.0-counter1d`) · **Phase:** Hunter OFF by design
+**Nhánh:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone ổn định hoá:** `4.4.1-deterministic` (package hiện tại: `4.6.0-counter1d`) · **Chế độ:** Hunter TẮT theo thiết kế
 
-## Runtime modes
+## Các Chế Độ Vận Hành (Runtime Modes)
 
-| Mode | Hunter | Decision | External AI |
+| Chế độ | Hunter | Decision | AI Ngoài (External) |
 |---|---|---|---|
-| `pure_deterministic` (alias `pure`) | forced OFF | **forced OFF** | blocked |
-| `deterministic` (alias `deterministic_native`) | forced OFF | optional native | blocked |
-| `decision_native` | forced OFF | optional native | blocked |
-| `decision_external` | still default OFF this phase | optional | allowed |
+| `pure_deterministic` (alias `pure`) | ép TẮT | **ép TẮT** | chặn |
+| `deterministic` (alias `deterministic_native`) | ép TẮT | tuỳ chọn `native` | chặn |
+| `decision_native` | ép TẮT | tuỳ chọn `native` | chặn |
+| `decision_external` | mặc định vẫn TẮT ở pha này | tuỳ chọn | cho phép |
 
-Set via `strategy_params.mtf_runtime_mode` or env `MTF_RUNTIME_MODE`.
+Cấu hình qua `strategy_params.mtf_runtime_mode` hoặc biến môi trường `MTF_RUNTIME_MODE`.
 
-- **Docker production overlay (`docker/config.mtf_sniper.json` + `docker-compose.yml`):** `"mtf_runtime_mode": "decision_external"` + `"enable_jev_decision": true` + `JEV_FAIL_POLICY=fallback_native` + `enable_waterfall=true` + `enable_dynamic_sizing=true` (Hybrid AI score with native fallback).
-- **Local deterministic BT:** `"mtf_runtime_mode": "deterministic"` + `JEV_MODE=native`.
-- **Sniper-only measurement:** `"mtf_runtime_mode": "pure_deterministic"` (Decision cannot affect BT/live confirm).
+- **Production Docker (`docker/config.mtf_sniper.json` + `docker-compose.yml`):** `"mtf_runtime_mode": "decision_external"` + `"enable_jev_decision": true` + `JEV_FAIL_POLICY=fallback_native` + `enable_waterfall=true` + `enable_dynamic_sizing=true` + `"exchange_sync_interval_secs": 15`.
+- **Backtest Local tất định:** `"mtf_runtime_mode": "deterministic"` + `JEV_MODE=native`.
+- **Đo riêng Sniper thuần:** `"mtf_runtime_mode": "pure_deterministic"` (Decision không can thiệp vào kết quả xác nhận).
 
-## Call graph (deterministic)
+## Sơ Đồ Gọi Hàm (Deterministic Call Graph)
 
-Two **implementation** paths share one Policy contract (see `ARCHITECTURE.md`):
+Hai đường **cài đặt** dùng chung một hợp đồng Policy (chi tiết trong `ARCHITECTURE.md`):
 
-```
+```text
 populate_entry_trend
-  → EntryPipeline.live (always hunter_escalation=None — hard-disabled on live)
+  → EntryPipeline.live (luôn ép hunter_escalation=None trên live)
       Fast:  cached Sniper Parts → vectorized AND → TradeCandidate
       Event: SensorSuite → CandidateBuilder → SetupComposer → TradeCandidate
-      → Long/Short Policy (setup eligibility ≠ quality grade)
+      → Long/Short Policy (hợp lệ setup ≠ nhãn chất lượng quality_grade)
       → strategy cooldown → enter_*
       → CandidateRegistry.remember(canonical candidate_id)
 confirm_trade_entry
-  → resolve candidate_id:
-       registry.lookup (max-age 6h, no future)
-       → else DataFrame enter_* reconstruct (same max-age 6h)
-       → else candidate_id_missing
+  → truy xuất candidate_id:
+       registry.lookup (tối đa 6h, không đọc nến tương lai)
+       → nếu thiếu: tái tạo từ cột enter_* (cùng giới hạn 6h)
+       → nếu vẫn thiếu: gắn candidate_id_missing
   → RiskEngine.authorize_entry
-      → portfolio guards (circuit / directional / distress / max open)
-      → JevDecisionAdapter(force_native=True) if enable_jev_decision
-      → RiskAuthorization (gate only; stake/leverage echoes not applied to order)
+      → portfolio guards (circuit breaker / directional lock / distress / max open)
+      → JevDecisionAdapter(force_native=True) nếu bật enable_jev_decision
+      → RiskAuthorization (chỉ cổng duyệt lệnh; stake/leverage thật nằm ở callback riêng)
 ```
 
-### Hunter config vs execution
+### Ý Định Config vs Thực Thi Của Hunter
 
-`RuntimeProfile.enable_jev_hunter` may be `True` under `decision_external` if config requests it.
-**Live entry still forces `hunter_escalation=None`.** Treat startup `Hunter=True` as config intent only — pipeline does not escalate. Prefer keeping Hunter flags false until an explicit re-enable project.
+`RuntimeProfile.enable_jev_hunter` có thể nhận `True` nếu config dưới `decision_external` yêu cầu.  
+**Tuy nhiên đường vào lệnh live vẫn ép cứng `hunter_escalation=None`.** Nên giữ các cờ Hunter là `false` để tránh hiểu nhầm lúc khởi động cho tới khi có dự án riêng đánh giá mở lại Hunter.
 
-## Defects fixed in this pass
+## Các Lỗi Đã Khắc Phục Trong Chuỗi Ổn Định Hoá
 
-1. **Parallel hyperopt pickle** — ledger locks (prior) + telemetry off in HO.
-2. **Short/Long grade remap** — setup ACCEPT no longer remaps `REJECT` grade → fake `B`/`A`.
-3. **Candidate ID drift** — shared `make_candidate_id` + UTC normalize for fast path + builder.
-4. **No explicit runtime mode** — added `RuntimeMode` + startup fingerprint log.
-5. **External Decision under “deterministic” intent** — forced native; spy-tested.
-6. **RiskAuthorization incomplete surface** — explicit sizing/exposure fields; documents that stake is **not** stop-distance-based (`sizing_method=freqtrade_proposed`).
-7. **Config divergence** — `EffectiveConfig` + warnings when pair overrides mask Parameters.
-8. **Fast vs event candidate semantics** — SetupComposer normalizes part order / confluence to match vectorized AND; integration test compares contract + Policy.
-9. **`pure_deterministic`** — Decision forced OFF for Sniper isolation measurement.
-10. **Decision adapter env side-effect** — no longer writes `os.environ["JEV_MODE"]`; mode passed to engine ctor.
-11. **Candidate ID through confirm** — `CandidateRegistry` + `_resolve_candidate_id` (no ad-hoc confirm-time ID).
-12. **Candidate ID through trade ledger** — entry `order_filled` binds `trade_id→candidate_id`; exit ledger reuses it (unbind on record).
-13. **Strategy startup** — no longer mutates global `JEV_MODE` either (adapter-only).
-14. **RiskAuthorization honesty** — `risk_budget_used_pct` / `risk_per_trade_pct` / `total_exposure_pct` are `None` when unavailable; `total_exposure_notional` always computed; pct only with `wallet_equity`.
-15. **Restart-safe Candidate ID** — entry fill persists `mtf_candidate_id` on Trade custom data; exit prefers custom data over RAM registry.
-16. **No non-canonical ID invent** — missing correlation → `candidate_id_missing` (never `{pair}_{side}_{tag}_{ts}`).
-17. **Invalid runtime mode** — misspellings raise `InvalidRuntimeModeError` (no silent privilege escalation).
-18. **Decision Engine dotenv** — parsed to local dict; does not write `os.environ`.
-19. **Pair stoploss in RiskAuth** — `confirm_trade_entry` passes effective pair `stoploss` into `authorize_entry`.
-20. **Registry time window** — `CandidateRegistry.lookup` never returns a future candidate; no newest-fallback when none match; optional max-age window (default 6h).
-21. **Candle index reconstruction** — `_dataframe_position` uses absolute DF index (`get_indexer` / `get_loc`); never `len(hits)-1`.
-22. **Persist verify** — `_persist_candidate_id` returns `bool`, re-reads custom data, logs `candidate_id_persistence_failed`; read path validates canonical format.
-23. **Startup fail-fast proof** — `_load_external_config` re-raises `InvalidRuntimeModeError` (tested via strategy load path).
-24. **DataFrame fallback max-age** — reconstruct path uses the same `DEFAULT_LOOKUP_MAX_AGE` as registry (no arbitrarily old signal).
-25. **Persisted ID context check** — `parse_candidate_id` / `candidate_id_matches_trade` validate side + pair; read/persist reject mismatches.
-26. **`_dataframe_position`** — `get_loc` first (last duplicate), absolute row only; covered for Range/Datetime/sparse/duplicate indexes.
-27. **Canonical ID hardening** — reject negative `candle_index`; `remember()` validates / replaces mismatched provided IDs.
-28. **RiskAuth docs honesty** — confirm path does not pass `proposed_stake`; `stake_amount`/`leverage` are not live order echoes.
-29. **Canonical uniqueness** — reject uppercase side / leading-zero epoch-index; `make→parse→make` round-trip; registry `lookup` fail-closed without `current_time`.
-30. **Strict typed identity** — `candle_index` Integral only (no float/bool/str truncate); timestamp must be `datetime`/`Timestamp`.
-31. **Risk docs split** — `RiskAuthorization` ≠ Freqtrade `leverage()` / `custom_stake_amount()` sizing path.
+1. **Lỗi pickle khi chạy Hyperopt đa luồng:** khoá ledger & tự tắt ghi đĩa ledger khi `runmode=hyperopt`.
+2. **Nhảy nhầm quality grade thành accept:** tách bạch hoàn toàn nhãn `REJECT` với quyền hợp lệ `is_valid=True` ở setup Sniper chuẩn.
+3. **Trôi lệch `candidate_id`:** dùng chung `make_candidate_id` + chuẩn hoá UTC cho cả Fast Path và Builder.
+4. **Thiếu chế độ vận hành tường minh:** bổ sung `RuntimeMode` fail-fast + log fingerprint khi startup.
+5. **Rò rỉ External AI khi đang chạy intent deterministic:** ép chế độ `native`, có spy-test bảo vệ.
+6. **Thiếu minh bạch ở `RiskAuthorization`:** tách rõ đây là cổng kiểm duyệt, không phải nơi tính size lệnh (`sizing_method=freqtrade_proposed`).
+7. **Lệch tham số config:** tạo `EffectiveConfig` + cảnh báo khi `custom_pair_params` che giá trị `Parameter` (ví dụ BTC/ETH giữ body `0.63` / dist `3.3` của Ep46).
+8. **Đồng nhất ngữ nghĩa Fast vs Event Path:** chuẩn hoá thứ tự parts và confluence trong `SetupComposer`.
+9. **Chế độ `pure_deterministic`:** cô lập Sniper để đo lường riêng không có Decision Gate.
+10. **Tác dụng phụ sửa `os.environ`:** adapter & Strategy truyền `JEV_MODE` trực tiếp, không ghi đè biến môi trường toàn cục.
+11. **Liên kết `candidate_id` xuyên suốt vòng đời lệnh:** từ `populate` -> `confirm` -> `order_filled` (lưu vào custom data của `Trade` để sống sót qua restart) -> `TradeLedger`.
+12. **Không tự chế ID sai quy chuẩn:** mất liên kết thì ghi `candidate_id_missing`, không tự bịa chuỗi `{pair}_{side}_{tag}_{ts}`.
+13. **Sai tên runtime mode sẽ dừng ngay (fail-fast):** ném `InvalidRuntimeModeError`, không âm thầm hạ/nâng quyền mode.
+14. **Gia cố fail-closed `NaN`/`Inf` & `floor_20d_valid` (Nov 25, 2026):** chặn bypass `NaN`/`close <= 0` ở Policy/Pipeline, không gán nhầm vacuum breakdown khi thiếu `swing_low_20d_1d`, gộp trùng `accepted` trên cùng cây nến, và cứng hoá `CircuitBreaker`/`DistressGuard` trước `None`/`NaN` và lệch UTC.
+15. **Giảm size `0.50x` ngược pha 1D & chuẩn hoá config + Auto-Sync sàn live (Nov 25, 2026):** thêm `counter_1d_stake_scale`, gom công tắc vào `config_resolve.py`, và làm mới vị thế live mỗi `15s` trong `bot_loop_start`.
 
-## Semantics: Policy vs Decision
+## Ý Nghĩa: Policy vs Decision Gate
 
-| Field | Meaning |
+| Trường | Ý nghĩa |
 |---|---|
-| `PolicyEvaluationResult.is_valid` | Setup **eligibility** (may enter pipeline) |
-| `quality_grade` | Setup **quality** (A/B/C/REJECT) — informational at Policy layer |
-| Decision native | Uses candle/macro **scores** in payload — does **not** read `quality_grade` |
+| `PolicyEvaluationResult.is_valid` | Điều kiện **đủ chuẩn** của setup (có được đi tiếp hay không) |
+| `quality_grade` | Xếp hạng chất lượng (`A`/`B`/`C`/`REJECT`) — chỉ tham khảo ở tầng Policy |
+| Decision `native` | Tự tính điểm từ trajectory 32 nến + vĩ mô — **không** đọc `quality_grade` |
 
-A setup with `is_valid=True` and `quality_grade=REJECT` can still reach `confirm_trade_entry`; Decision then applies its own score heuristics (when enabled).
+## Cấu Hình Hiệu Lực (`config_resolve.py`)
 
-## Effective configuration
+- Khi khởi động, Strategy in `[EffectiveConfig] {…, fingerprint}` và các cảnh báo `[ConfigResolve]` nếu override theo cặp che mất tham số Hyperopt.
+- `custom_pair_params` mặc định cố tình giữ body/dist dài/ngắn cho BTC & ETH theo kết quả Ep46; có thể mở rộng qua `strategy_params.pair_overrides`.
 
-Authoritative resolver: `strategies/mtf_sniper/core/config_resolve.py`.
+## Rủi Ro / Giới Hạn Còn Tồn Tại
 
-Startup logs `[EffectiveConfig] {…, fingerprint}` and pair-override warnings.
-
-Known intentional mask: `custom_pair_params` long/short body & dist override Parameter values (HO Ep46 kept body/dist at 0.63/3.3).
-
-## Telemetry schema (Decision ledger)
-
-`TelemetryDecisionRecord` now includes optional:
-
-- `setup_type`, `signal_source`, `policy_version`
-- `config_fingerprint`
-- `feature_snapshot` (small dict — never full DataFrames)
-
-Canonical `candidate_id` should match populate → confirm when registry is warm.
-
-## Remaining risks / limitations
-
-- Stop-distance-based risk budget **not** implemented (honest `sizing_method`).
-- Margin/liquidation buffer check enum exists but not fully wired to exchange margin.
-- **DB-backed custom-data tests** (ORM expire/reload) ≠ **full live bot restart** (process/Docker recycle with open trades) — the latter remains an ops verification gap.
-- Full Freqtrade order lifecycle (partial fill / stoploss fill) still thinner than production.
-- Informative merge/alignment beyond unit prefix tests still needs expansion.
-- JEV Hunter / Momentum Radar expansion remain **out of scope**.
-
-## Tests executed
-
-```bash
-# Unit (Candidate ID / parity / contracts)
-PYTHONPATH=. .venv/bin/python -m unittest \
-  tests.strategy.test_mtf_data_contracts \
-  tests.strategy.test_mtf_candidate_id_hardening \
-  tests.strategy.test_mtf_candidate_registry \
-  tests.strategy.test_mtf_candidate_parity \
-  tests.strategy.test_mtf_callback_integration \
-  tests.strategy.test_mtf_runtime_deterministic \
-  tests.strategy.test_mtf_policy_grade_semantics \
-  tests.strategy.test_mtf_policy_decision_semantics \
-  tests.strategy.test_mtf_sniper_directional \
-  tests.strategy.test_mtf_sniper_mask_parity \
-  tests.strategy.test_mtf_sniper_risk \
-  tests.strategy.test_mtf_sniper_exit_policy \
-  tests.strategy.test_telemetry_pickle \
-  tests.strategy.test_mtf_lookahead_indicators
-
-# DB-backed persistence (pytest + init_persistence) — not a live bot restart
-PYTHONPATH=. .venv/bin/pytest \
-  tests/strategy/test_mtf_candidate_id_db_persist.py -q
-```
+- **Chưa tính size theo khoảng cách Stoploss (Stop-distance risk budgeting):** hiện sizing mới theo tỷ lệ vốn đề xuất $\times$ tag $\times$ hệ số ngược 1D `0.50x`.
+- **Kiểm tra ngưỡng thanh lý / margin trực tiếp:** mới có enum, chưa đấu nối trực tiếp với margin real-time của sàn.
+- **Test restart container Docker thực tế khi đang có lệnh mở:** đã test bền vững dữ liệu qua SQLite ORM nhưng vẫn nên test thao tác restart container thật trên Pi.
+- **Telegram / `stoploss_on_exchange`:** hiện đang tắt trong `user_data/config.json` và cấu hình mặc định (cắt lỗ dựa vào `custom_stoploss` phần mềm).
+- **Mở rộng JEV Hunter / Momentum Radar ngoài Waterfall:** vẫn nằm ngoài phạm vi chạy live.

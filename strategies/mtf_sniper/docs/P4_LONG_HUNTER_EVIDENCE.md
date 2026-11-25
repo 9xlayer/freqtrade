@@ -1,61 +1,55 @@
-# P4 Long Hunter — Evidence & Gate Outcome (2026-11-18)
+# P4 Long Hunter — Hồ Sơ Thực Nghiệm & Lý Do Đóng Cổng (2026-11-18)
 
-> **Version context (read first):** This evidence was produced against strategy tag
-> **`v3.2.0-p4-hunter-gates`**. The live package is now **`4.4.1-deterministic`**
-> (see `__init__.py`). Hunter remains **off** the live `EntryPipeline` in the
-> current release — this file is an optimization experiment record, not a
-> description of present entry behavior. See `ARCHITECTURE.md` / `MIGRATION_PLAN.md`.
+> **Lưu ý ngữ cảnh phiên bản:** Thí nghiệm này được thực hiện trên tag chiến lược cũ **`v3.2.0-p4-hunter-gates`**. Package hiện hành đã là **`4.6.0-counter1d`** (xem `__init__.py`), trong đó đường Hunter vẫn **TẮT** khỏi `EntryPipeline.live`. Đây là tài liệu lưu trữ kết quả thử nghiệm tối ưu, **không** mô tả hành vi vào lệnh hiện tại.
 
-## Setup
-- Strategy **at experiment time:** `strategies/mtf_sniper` `v3.2.0-p4-hunter-gates`
-- Current package (for orientation only): `4.4.1-deterministic`
-- Timerange: `20220101-20261116`
-- `JEV_MODE=native`
-- Gate module: `directional/long/hunter_gates.py` → wired in `execution/hunter_merge.py`
+## Thiết Lập Thí Nghiệm
+- Phiên bản lúc thử nghiệm: `strategies/mtf_sniper` `v3.2.0-p4-hunter-gates` (module gộp cũ `execution/hunter_merge.py`)
+- Khung thời gian test: `20220101–20261116` (`JEV_MODE=native`)
+- Module bộ lọc: `directional/long/hunter_gates.py`
 
-## Baseline (pre-filter diagnostic, hunter long ON)
-| Profile | Trades | Absolute profit | Notes |
-|---|---|---|---|
-| Parity (`hunter_long=false`) | 273 | **+24,282.26** | Freeze target |
-| Unfiltered (`hunter_long=true`) | 348 | **+5,964.72** | −18.3k vs baseline |
+## Baseline Trước Khi Lọc (Bật Thả Cửa Long Hunter)
 
-### Unfiltered `jev_hunter_breakout_expansion`
-| Metric | Value |
+| Cấu hình | Số lệnh | Lợi nhuận ròng | Ghi chú |
+|---|---:|---:|---|
+| Parity (`hunter_long=false`) | 273 | **+24,282.26** | Mốc chuẩn đối chiếu |
+| Chưa lọc (`hunter_long=true`) | 348 | **+5,964.72** | Tụt −18.3k so với baseline |
+
+### Chi Tiết Nhóm `jev_hunter_breakout_expansion` Chưa Lọc
+
+| Chỉ số | Giá trị |
 |---|---|
-| Trades | 91 |
+| Số lệnh | 91 |
 | PnL | **−702.05 USDT** |
 | Win rate | 54.9% |
-| Losers with MFE &lt; 1% | 28 trades / **−2,241 USDT** (chase / no follow-through) |
-| Train 70% | 63 / −792.73 |
-| OOS 30% | 28 / +90.67 (small-n) |
+| Lệnh thua có MFE < 1% | 28 lệnh / **−2,241 USDT** (mua đuổi / gãy ngay không có lực theo) |
+| In-sample (70%) | 63 lệnh / −792.73 USDT |
+| Out-of-sample (30%) | 28 lệnh / +90.67 USDT (mẫu quá nhỏ) |
 
-## P4 gates (implemented)
-`evaluate_long_hunter_breakout` requires (defaults):
-- confidence ≥ **0.90** (was 0.85)
-- upper wick ≤ **0.20** (was 0.285)
-- close position ≥ **0.72** (was 0.65)
-- EMA21 distance ≤ **0.8%** (was 1.5%)
-- RSI ≤ **65** (was 72)
-- bullish body ratio ≥ **0.55**
-- HTF momentum: `macdhist_4h > 0` **or** `is_bull_wave_4h`
-- `dist_from_ema_200_1d` ≤ **0.45**
-- soft `long_score` floor ≥ **50** when present
-- plus existing vol / sideway / PDH / macro bull checks
+## Bộ Cổng Lọc P4 Đã Cài Đặt (`hunter_gates.py`)
 
-## Post-filter diagnostic (`hunter_long=true` + gates)
-| Profile | Trades | Absolute profit | Long hunter trades |
-|---|---|---|---|
+`evaluate_long_hunter_breakout` siết chặt các ngưỡng mặc định:
+- `confidence >= 0.90` (trước đây 0.85)
+- `upper_wick_ratio <= 0.20` (trước đây 0.285)
+- `close_pos_ratio >= 0.72` (trước đây 0.65)
+- Khoảng cách `EMA21 <= 0.8%` (trước đây 1.5%)
+- `RSI <= 65` (trước đây 72)
+- Tỷ lệ thân nến tăng `>= 0.55`
+- Động lượng đa khung: `macdhist_4h > 0` **hoặc** `is_bull_wave_4h`
+- `dist_from_ema_200_1d <= 0.45`, kèm `long_score >= 50` và các kiểm tra PDH/macro/sideway/vol hiện có.
+
+## Kết Quả Sau Khi Áp Bộ Lọc P4
+
+| Cấu hình | Số lệnh | Lợi nhuận ròng | Lệnh Long Hunter lọt qua |
+|---|---:|---:|---:|
 | `hunter_long=false` | 273 | **+24,282.26** | 0 |
 | `hunter_long=true` + P4 gates | 273 | **+24,282.26** | **0** |
 
-Gates reject the entire historical breakout-expansion set under these quality bars → enabling the flag is a **no-op** vs parity (no portfolio damage).
+Bộ lọc P4 đã loại sạch 100% các tín hiệu breakout-expansion lịch sử dưới chuẩn chất lượng trên → bật cờ hay tắt cờ cho kết quả y hệt baseline (vô hại với danh mục).
 
-## Decision
-- Keep production `enable_hunter_long=false`.
-- If an operator enables it, P4 gates prevent the prior −702 / −18k regression.
-- Revisit only with a new detector or relaxed config that proves **OOS expectancy &gt; 0** on ledger replay without cutting into A80+/waterfall edge.
+## Kết Luận
+- Giữ mặc định production `enable_hunter_long=false` (và ở bản hiện tại `EntryPipeline.live` đã tắt cứng nhánh Hunter escalation).
+- Chỉ mở lại khi có bộ phát hiện tín hiệu mới hoặc thiết kế khác chứng minh được kỳ vọng OOS dương rõ rệt mà không ăn vào edge của `long_A80_plus` / `waterfall`.
 
-## Files
+## File Liên Quan Còn Lưu
 - `strategies/mtf_sniper/directional/long/hunter_gates.py`
-- `strategies/mtf_sniper/execution/hunter_merge.py`
 - `tests/strategy/test_mtf_sniper_long_hunter_gates.py`
