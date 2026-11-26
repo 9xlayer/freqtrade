@@ -1,4 +1,4 @@
-FROM ghcr.io/freqtrade/freqtrade:latest
+FROM freqtradeorg/freqtrade:stable
 
 # SOCKS5 support for httpx (optional proxy on Pi / Coolify)
 RUN pip install --no-cache-dir socksio

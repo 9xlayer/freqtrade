@@ -15,7 +15,7 @@ Overlay `/freqtrade/config.mtf_sniper.json` **overrides** a stale `strategy_path
 ## Coolify checklist
 
 1. Build from repo root with `docker-compose.yml` (or Dockerfile `docker/Dockerfile.custom`).
-   Base image: `ghcr.io/freqtrade/freqtrade:latest` (avoid broken `:stable` digests on GHCR).
+   Base image: `freqtradeorg/freqtrade:stable` on DockerHub (GHCR `:latest` / `:develop` digests occasionally go missing during rotation).
 2. Keep volume mount: `/data/freqtrade/user_data` → `/freqtrade/user_data`.
 3. Do **not** replace the compose `command` unless you keep:
    - `--config /freqtrade/config.mtf_sniper.json`
