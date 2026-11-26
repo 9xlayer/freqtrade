@@ -1,7 +1,7 @@
 # MTF Sniper — Hợp Đồng Dữ Liệu (Data Contracts)
 
 **Package:** `strategies/mtf_sniper/` · **Nguồn gốc code:** `core/contracts.py`, `core/enums.py`, `core/candidate_id.py`  
-**Version:** khớp `STRATEGY_VERSION` trong `__init__.py` (`4.6.0-counter1d`)
+**Version:** khớp `STRATEGY_VERSION` trong `__init__.py` (`4.7.0-1w-regime`)
 
 Tài liệu này mô tả đúng **các schema đã triển khai trong code**. Mọi thiết kế mục tiêu trong tương lai nếu nhắc tới sẽ được đánh dấu rõ là chưa chạy thực tế.
 

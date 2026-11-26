@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 class StrategyMTFSniper(IStrategy):
     """
-    MTF Sniper — deterministic layered entry (v4.6.0-counter1d).
+    MTF Sniper — deterministic layered entry (v4.7.0-1w-regime).
 
-    Entry: part sensors → SetupComposer (AND recipes) → Policy → cooldown.
+    Entry: part sensors + MarketRegimeSensor (1W) → SetupComposer → Policy → cooldown.
     Confirm: optional JEV Decision Gate + Risk. Hunter escalation is off by default.
     """
 

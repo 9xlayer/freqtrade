@@ -9,6 +9,7 @@
     "enable_waterfall": true,
     "block_macro_bull_shorts": false,
     "enable_dynamic_sizing": true,
+    "jev_1w_bear_penalty": 0.35,
     "exchange_sync_interval_secs": 15
   }
 }

@@ -1,6 +1,6 @@
 # MTF Sniper — Kiến Trúc Hệ Thống
 
-**Package:** `strategies/mtf_sniper/` · **Version:** `STRATEGY_VERSION` trong `__init__.py` (`4.6.0-counter1d`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
+**Package:** `strategies/mtf_sniper/` · **Version:** `STRATEGY_VERSION` trong `__init__.py` (`4.7.0-1w-regime`) · **Deploy:** Docker → `--strategy-path …/mtf_sniper`
 
 **Bất biến cốt lõi:** Kiến trúc phân lớp chặt chẽ. Toàn bộ luật từ bản chiến lược cũ được đưa vào các tầng chuyên biệt; đường vào lệnh live luôn đi qua `EntryPipeline` (không bao giờ đánh tắt qua Policy ngay ở lớp chiến lược).
 

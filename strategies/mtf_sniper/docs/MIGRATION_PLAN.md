@@ -1,14 +1,14 @@
 # MTF Sniper — Lộ Trình Chuyển Đổi Kiến Trúc (Lịch Sử & Hiện Tại)
 
 **Đường dẫn:** `strategies/mtf_sniper/docs/MIGRATION_PLAN.md`  
-**Package hiện hành:** `STRATEGY_VERSION` trong `__init__.py` (`4.6.0-counter1d`)  
+**Package hiện hành:** `STRATEGY_VERSION` trong `__init__.py` (`4.7.0-1w-regime`)  
 **Tài liệu kiến trúc chuẩn hiện nay:** `PHILOSOPHY.md` + `ARCHITECTURE.md` + `STABILIZATION_DETERMINISTIC.md` + `DATA_CONTRACTS.md`
 
 > **Cách đọc tài liệu này:** P0–P4 là **hồ sơ lịch sử chuyển đổi**. Mô tả "luồng live" bên trong các giai đoạn đó phản ánh code **tại thời điểm đó**, không phải hiện tại. **P5+ / Stabilization** mới là kiến trúc đang chạy.
 
 ```text
 P0 Kiểm toán → P1 Sensors → P2 Parity Engine → P3 Risk/Telemetry → P4 Long Hunter Gates
-        → P5 SensorSuite Cutover → Stabilization Deterministic → v4.6.0-counter1d (Hiện tại)
+        → P5 SensorSuite Cutover → Stabilization Deterministic → v4.7.0-1w-regime (Hiện tại)
 ```
 
 ---

@@ -1,6 +1,6 @@
 # Ổn Định Hoá — MTF Sniper Tất Định (Deterministic Stabilization)
 
-**Nhánh:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone ổn định hoá:** `4.4.1-deterministic` (package hiện tại: `4.6.0-counter1d`) · **Chế độ:** Hunter TẮT theo thiết kế
+**Nhánh:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone ổn định hoá:** `4.4.1-deterministic` (package hiện tại: `4.7.0-1w-regime`) · **Chế độ:** Hunter TẮT theo thiết kế
 
 ## Các Chế Độ Vận Hành (Runtime Modes)
 

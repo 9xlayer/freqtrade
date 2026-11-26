@@ -1,14 +1,14 @@
 # Active Context
 
 ## Current focus
-**Opt-in #2: 1W Macro Regime Context Sensor & Continuous JEV Regime Scoring (Nov 26, 2026)**:
+**v4.7.0-1w-regime — Opt-in #2 Activated on Dry-Run (`jev_1w_bear_penalty=0.35`, Nov 26, 2026)**:
 - **Weekly MTF & Context Sensor (`market/indicators.py`, `signals/sensors/market_regime.py`)**:
   - Added `@informative("1w")` (`populate_indicators_1w`) computing core EMA/MACD/RSI/ADX/BB-width suite + weekly `market_regime` (`unknown`, `bull_trending`, `chop`, `bear_relief`, `cycle_top`, `bear_trending`).
   - Added `SensorType.CONTEXT`, `TriggerEvent.side: TradeSide | None`, and `MarketRegimeSensor` (`BaseSensor`) emitting bilateral `1W` macro facts (`regime_1w`, `is_bear_wave_1w`, `macdhist_1w`, `adx_1w`, `rsi_1w`) in both `SensorSuite.live()` and `SensorSuite.full()`.
   - Unified enrichment along the single pipeline path: `SetupComposer.compose_suite()` (`_attach_suite_context` fast path) and `CandidateBuilder.process()` (`_attach_context_features` event fallback) attach identical context onto `TradeCandidate.raw_features` and `attrs["mtf_sniper_accepted_candidates"]` without triggering standalone candidates or altering `confluence_count`.
 - **JEV Continuous Scoring & Counter-1W Sizing (`intelligence/jev_decision.py`, `risk/position_sizing.py`, `core/config_resolve.py`)**:
   - `CandleTrajectoryExtractor.extract_macro_context()` feeds `1W` context into `JevDecisionEngine._evaluate_native_sequence()` (which also drives `external` hybrid `native_conf`) and isolates SQLite cache tokens (`_cache_threshold_token()`).
-  - Added opt-in knobs in `StrategySwitchConfig`: `jev_1w_bear_penalty` (default `0.0`) and `counter_1w_stake_scale` (default `None`), plus `resolve_counter_1w_scale()`. Live defaults stay 100% parity-identical until explicitly activated.
+  - Added opt-in knobs in `StrategySwitchConfig`: `jev_1w_bear_penalty` (default `0.0`, enabled at **`0.35`** in `docker/config.mtf_sniper.json` & `docker-compose.yml` for Pi dry-run) and `counter_1w_stake_scale` (default `None`). Code/config defaults stay parity-safe when unset.
   - Added opt-in #1 previously in `61b36b2b6`: `risk_per_trade_pct` (default `None`) strict budget ceiling & `min_stake` rejection guard, plus Docker base image fix `23bb98502` (`freqtradeorg/freqtrade:stable`).
 - **Walk-Forward A/B Evidence (`20200101–20261124`, `JEV_MODE=native`, `1w` futures downloaded)**:
   - Parity (`jev_1w_bear_penalty=0.0`, `counter_1w_stake_scale=None`): 5Y `334/334` exact (`+184,121.66 USDT`, `14.42% Abs DD`), 7Y Fixed-100 `456/456` exact (`+2,151.14 USDT`, PF `1.71`).
