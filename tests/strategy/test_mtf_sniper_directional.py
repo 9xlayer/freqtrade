@@ -46,7 +46,7 @@ def _setup_features(side: str, score: float = 85.0) -> dict:
 
 class TestLongPolicy(unittest.TestCase):
     def test_accept_complete_setup(self):
-        policy = LongPolicy(LongPolicyConfig(enable_hunter_long=False))
+        policy = LongPolicy()
         cand = _candidate(
             TradeSide.LONG,
             "setup:sniper_long",
@@ -86,8 +86,8 @@ class TestLongPolicy(unittest.TestCase):
         result = policy.evaluate(cand, row)
         self.assertFalse(result.is_valid)
 
-    def test_hunter_long_disabled_by_default(self):
-        policy = LongPolicy(LongPolicyConfig(enable_hunter_long=False))
+    def test_anomaly_long_disabled_by_default(self):
+        policy = LongPolicy()
         cand = _candidate(TradeSide.LONG, "volume_surge", features={})
         row = {
             "close": 100.0,
@@ -415,17 +415,15 @@ class TestDirectionalEngine(unittest.TestCase):
 
 
 class TestEntryPipeline(unittest.TestCase):
-    def test_live_factory_disables_hunter(self):
+    def test_live_factory_disables_anomalies_by_default(self):
         strat = type("S", (), {"block_macro_bull_shorts": False})()
         pipe = EntryPipeline.live(strat)
-        self.assertIsNone(pipe.hunter_escalation)
         self.assertFalse(pipe.engine.long_policy.config.allow_anomaly_entries)
         self.assertFalse(pipe.engine.short_policy.config.allow_anomaly_entries)
 
     def test_live_factory_enables_waterfall_when_requested(self):
         strat = type("S", (), {"block_macro_bull_shorts": False, "enable_waterfall": True})()
         pipe = EntryPipeline.live(strat)
-        self.assertIsNone(pipe.hunter_escalation)
         self.assertFalse(pipe.engine.long_policy.config.allow_anomaly_entries)
         self.assertTrue(pipe.engine.short_policy.config.allow_anomaly_entries)
 
@@ -507,7 +505,7 @@ class TestEntryPipeline(unittest.TestCase):
 
     def test_long_policy_fails_closed_on_nan_and_non_positive_close(self):
         cand = _candidate(TradeSide.LONG, "volume_surge", features={"long_score": 85.0})
-        policy = LongPolicy(LongPolicyConfig(allow_anomaly_entries=True, enable_hunter_long=True))
+        policy = LongPolicy(LongPolicyConfig(allow_anomaly_entries=True))
         nan_row = {
             "close": 100.0,
             "upper_wick_ratio": float("nan"),

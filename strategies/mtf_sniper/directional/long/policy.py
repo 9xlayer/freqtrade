@@ -18,7 +18,6 @@ from strategies.mtf_sniper.directional.common_gates import (
     has_invalid_numeric,
     read_finite_float,
 )
-from strategies.mtf_sniper.directional.long.hunter_gates import DEFAULT_LONG_HUNTER_GATES
 from strategies.mtf_sniper.directional.long.setups import (
     LongSetup,
     quality_grade_from_score,
@@ -43,7 +42,6 @@ class LongPolicyConfig:
     confluence_bonus: float = 0.10
     base_stop_distance_pct: float = 0.018
     target_rr: float = 2.0
-    enable_hunter_long: bool = False
     allow_anomaly_entries: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -114,7 +112,6 @@ class LongPolicy:
         self,
         row: Mapping[str, Any],
         close: float,
-        is_hunterish: bool,
     ) -> list[str]:
         if (
             not math.isfinite(close)
@@ -124,34 +121,28 @@ class LongPolicy:
             return [RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value]
 
         cfg = self.config
-        hg = DEFAULT_LONG_HUNTER_GATES
         reasons = self._check_macro_and_ceiling(row, close)
 
         if cfg.filter_wick_rejection:
             upper_wick = read_finite_float(row, "upper_wick_ratio", 0.0)
             close_pos = read_finite_float(row, "close_pos_ratio", 0.5)
-            wick_limit = hg.max_upper_wick_ratio if is_hunterish else cfg.max_rejection_wick_ratio
-            close_floor = hg.min_close_pos_ratio if is_hunterish else cfg.min_close_pos_ratio
-            if upper_wick > wick_limit:
+            if upper_wick > cfg.max_rejection_wick_ratio:
                 reasons.append(RejectionReasonCode.REJECT_UPPER_WICK_REJECTION.value)
-            if close_pos < close_floor:
+            if close_pos < cfg.min_close_pos_ratio:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
         rsi = read_finite_float(row, "rsi", 50.0)
-        rsi_cap = hg.max_rsi if is_hunterish else cfg.max_rsi_entry
-        if rsi > rsi_cap:
+        if rsi > cfg.max_rsi_entry:
             reasons.append(RejectionReasonCode.REJECT_RSI_OVEREXTENDED.value)
 
         ema_21 = row.get("ema_21")
         if ema_21 is not None and float(ema_21) > 0:
             dist_pct = (close - float(ema_21)) / float(ema_21) * 100.0
-            max_dist = (hg.max_dist_ema21 * 100.0) if is_hunterish else cfg.max_dist_ema21_pct
-            if dist_pct > max_dist:
+            if dist_pct > cfg.max_dist_ema21_pct:
                 reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
-        overext_cap = hg.max_dist_ema200_1d if is_hunterish else cfg.overextended_dist_max
         dist_200 = row.get("dist_from_ema_200_1d")
-        if dist_200 is not None and float(dist_200) > overext_cap:
+        if dist_200 is not None and float(dist_200) > cfg.overextended_dist_max:
             reasons.append(RejectionReasonCode.REJECT_EMA_DISTANCE_TOO_FAR.value)
 
         return reasons
@@ -169,7 +160,6 @@ class LongPolicy:
 
         cfg = self.config
         setup = resolve_long_setup(candidate.primary_sensor, candidate.raw_features)
-        is_hunterish = setup in (LongSetup.BREAKOUT_EXPANSION, LongSetup.SWING_BREAKOUT)
         from strategies.mtf_sniper.signals.composite_sensor import is_legacy_sniper_pass
 
         is_setup_pass = is_legacy_sniper_pass(
@@ -190,7 +180,7 @@ class LongPolicy:
             )
 
         close = float(row.get("close", 0.0) or 0.0)
-        reasons = self._check_anomaly_filters(row, close, is_hunterish)
+        reasons = self._check_anomaly_filters(row, close)
 
         long_score = float(
             candidate.raw_features.get("long_score", row.get("long_score", 0.0)) or 0.0
@@ -201,12 +191,8 @@ class LongPolicy:
             and long_score < cfg.score_threshold
         ):
             reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
-        if is_hunterish and not cfg.enable_hunter_long:
-            reasons.append(RejectionReasonCode.REJECT_SCORE_BELOW_THRESHOLD.value)
 
         base = min(1.0, max(0.0, long_score / 100.0)) if long_score > 0 else 0.70
-        if is_hunterish:
-            base = 0.85
         score = min(1.0, base + max(0, candidate.confluence_count - 1) * cfg.confluence_bonus)
         grade = quality_grade_from_score(score)
 

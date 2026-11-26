@@ -16,20 +16,16 @@ from strategies.mtf_sniper.intelligence.jev_decision import JevDecisionEngine
 
 
 class TestRuntimeMode(unittest.TestCase):
-    def test_deterministic_forces_hunter_off_and_native_decision(self):
+    def test_deterministic_forces_native_decision_and_ignores_stale_keys(self):
         profile = build_runtime_profile(
             {
                 "mtf_runtime_mode": "deterministic",
                 "enable_jev_hunter": True,
                 "enable_jev_decision": True,
             },
-            enable_jev_hunter_cfg=True,
-            enable_hunter_long_cfg=True,
             enable_jev_decision_cfg=True,
         )
         self.assertEqual(profile.mode, RuntimeMode.DETERMINISTIC)
-        self.assertFalse(profile.enable_jev_hunter)
-        self.assertFalse(profile.enable_hunter_long)
         self.assertTrue(profile.enable_jev_decision)
         self.assertFalse(profile.allow_external_ai)
         self.assertEqual(profile.decision_jev_mode, "native")
@@ -39,15 +35,11 @@ class TestRuntimeMode(unittest.TestCase):
             {
                 "mtf_runtime_mode": "pure_deterministic",
                 "enable_jev_decision": True,
-                "enable_jev_hunter": True,
             },
             enable_jev_decision_cfg=True,
-            enable_jev_hunter_cfg=True,
-            enable_hunter_long_cfg=True,
         )
         self.assertEqual(profile.mode, RuntimeMode.PURE_DETERMINISTIC)
         self.assertFalse(profile.enable_jev_decision)
-        self.assertFalse(profile.enable_jev_hunter)
         self.assertFalse(profile.allow_external_ai)
 
     def test_pure_alias(self):
@@ -64,22 +56,18 @@ class TestRuntimeMode(unittest.TestCase):
         self.assertTrue(profile.enable_jev_decision)
         self.assertEqual(profile.decision_jev_mode, "native")
         self.assertFalse(profile.allow_external_ai)
-        self.assertFalse(profile.enable_jev_hunter)
 
-    def test_decision_external_allows_ai_keeps_hunter_off_by_default(self):
+    def test_decision_external_allows_ai(self):
         profile = build_runtime_profile(
             {
                 "mtf_runtime_mode": "decision_external",
                 "enable_jev_decision": True,
-                "enable_jev_hunter": False,
             },
             enable_jev_decision_cfg=True,
-            enable_jev_hunter_cfg=False,
         )
         self.assertEqual(profile.mode, RuntimeMode.DECISION_EXTERNAL)
         self.assertTrue(profile.allow_external_ai)
         self.assertEqual(profile.decision_jev_mode, "external")
-        self.assertFalse(profile.enable_jev_hunter)
 
     def test_deterministic_native_alias(self):
         profile = build_runtime_profile({"mtf_runtime_mode": "deterministic_native"})

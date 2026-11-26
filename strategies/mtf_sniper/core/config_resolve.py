@@ -185,8 +185,6 @@ class EffectiveConfig:
     strategy_version: str
     runtime_mode: str
     enable_jev_decision: bool
-    enable_jev_hunter: bool
-    enable_hunter_long: bool
     decision_jev_mode: str
     allow_external_ai: bool
     block_macro_bull_shorts: bool
@@ -283,8 +281,6 @@ def build_effective_config(
         strategy_version=str(getattr(strategy, "strategy_version", STRATEGY_VERSION)),
         runtime_mode=profile.mode.value,
         enable_jev_decision=profile.enable_jev_decision,
-        enable_jev_hunter=profile.enable_jev_hunter,
-        enable_hunter_long=profile.enable_hunter_long,
         decision_jev_mode=profile.decision_jev_mode,
         allow_external_ai=profile.allow_external_ai,
         block_macro_bull_shorts=bool(getattr(strategy, "block_macro_bull_shorts", False)),

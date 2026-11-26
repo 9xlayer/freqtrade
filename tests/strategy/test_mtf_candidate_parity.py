@@ -48,8 +48,6 @@ def _make_strategy(**overrides):
         "min_close_pos_ratio_long": _param(0.65),
         "max_close_pos_ratio_short": _param(0.35),
         "filter_pdh_ceiling": _param(True),
-        "enable_hunter_long": False,
-        "enable_jev_hunter": False,
         "block_macro_bull_shorts": False,
         "_get_pair_params": lambda pair: {},
     }

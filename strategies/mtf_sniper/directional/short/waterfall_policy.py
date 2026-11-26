@@ -18,7 +18,6 @@ from strategies.mtf_sniper.directional.common_gates import (
     has_invalid_numeric,
     read_finite_float,
 )
-from strategies.mtf_sniper.directional.short.hunter_gates import DEFAULT_SHORT_HUNTER_GATES
 from strategies.mtf_sniper.directional.short.setups import (
     ShortSetup,
     quality_grade_from_score,
@@ -64,6 +63,9 @@ class WaterfallFilterConfig:
     ema21_expansion_min_body: float = 0.70
     ema21_expansion_max_wick: float = 0.15
     min_rsi: float = 24.0
+    max_lower_wick_ratio: float = 0.285
+    max_close_pos_ratio: float = 0.35
+    floor_dist_min: float = 0.035
     vacuum_floor_dist_max: float = 0.5
     vacuum_min_vol_ratio: float = 3.0
 
@@ -295,15 +297,14 @@ class WaterfallShortPolicy:
             return [RejectionReasonCode.REJECT_REGIME_INCOMPATIBLE.value]
 
         reasons: list[str] = []
-        hg = DEFAULT_SHORT_HUNTER_GATES
         wf_cfg = self.config.get_waterfall_config(pair)
         lower_wick = read_finite_float(row, "lower_wick_ratio", 0.0)
         close_pos = read_finite_float(row, "close_pos_ratio", 0.5)
 
         if self.config.filter_wick_rejection:
-            if lower_wick > hg.max_lower_wick_ratio:
+            if lower_wick > wf_cfg.max_lower_wick_ratio:
                 reasons.append(RejectionReasonCode.REJECT_LOWER_WICK_REJECTION.value)
-            if close_pos > hg.max_close_pos_ratio:
+            if close_pos > wf_cfg.max_close_pos_ratio:
                 reasons.append(RejectionReasonCode.REJECT_CLOSE_POSITION_WEAK.value)
 
         if read_finite_float(row, "rsi", 50.0) < wf_cfg.min_rsi:
@@ -330,7 +331,7 @@ class WaterfallShortPolicy:
                 row,
                 close,
                 is_waterfall=True,
-                floor_min=hg.floor_dist_min,
+                floor_min=wf_cfg.floor_dist_min,
                 wf_cfg=wf_cfg,
             )
         )

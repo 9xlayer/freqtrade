@@ -25,7 +25,6 @@ from strategies.mtf_sniper.core.enums import TradeSide
 from strategies.mtf_sniper.directional.common_gates import missing_informative_columns
 from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine
 from strategies.mtf_sniper.directional.long.policy import LongPolicyConfig
-from strategies.mtf_sniper.directional.policy_escalation import is_soft_policy_reject
 from strategies.mtf_sniper.directional.setup_composer import SetupComposer
 from strategies.mtf_sniper.directional.setup_recipes import all_live_recipes
 from strategies.mtf_sniper.directional.short.policy import (
@@ -34,7 +33,6 @@ from strategies.mtf_sniper.directional.short.policy import (
     ShortPolicyConfig,
     build_waterfall_config_from_params,
 )
-from strategies.mtf_sniper.intelligence.hunter_escalation import HunterEscalationGateway
 from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
 from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
 
@@ -50,9 +48,6 @@ class EntryPipelineResult:
     candidates: list[TradeCandidate] = field(default_factory=list)
     accepted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)
-    hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = field(
-        default_factory=list
-    )
     trigger_events: list[TriggerEvent] = field(default_factory=list)
 
 
@@ -66,7 +61,6 @@ class EntryPipeline:
         candidate_builder: CandidateBuilder | None = None,
         engine: DirectionalTradingEngine | None = None,
         setup_composer: SetupComposer | None = None,
-        hunter_escalation: HunterEscalationGateway | None = None,
         builder_cooldown_bars: int = 0,
         long_config: LongPolicyConfig | None = None,
         short_config: ShortPolicyConfig | None = None,
@@ -77,24 +71,15 @@ class EntryPipeline:
         self.candidate_builder = candidate_builder or CandidateBuilder(
             cooldown_bars=builder_cooldown_bars
         )
-        if setup_composer is not None:
-            self.setup_composer = setup_composer
-        else:
-            # Keep anomalies only when Hunter gateway is injected (escalation path).
-            self.setup_composer = SetupComposer(drop_anomalies=(hunter_escalation is None))
+        self.setup_composer = setup_composer or SetupComposer(drop_anomalies=True)
         self.engine = engine or DirectionalTradingEngine(
             long_config=long_config,
             short_config=short_config,
             setup_composer=self.setup_composer,
         )
-        self.hunter_escalation = hunter_escalation
 
     @classmethod
-    def live(
-        cls, strategy: Any, hunter_escalation: HunterEscalationGateway | None = None
-    ) -> EntryPipeline:
-        _ = hunter_escalation
-
+    def live(cls, strategy: Any) -> EntryPipeline:
         def _pval(name: str, default: Any) -> Any:
             raw = getattr(strategy, name, None)
             if raw is None:
@@ -120,9 +105,7 @@ class EntryPipeline:
                 recipes=all_live_recipes(include_waterfall=enable_waterfall),
                 drop_anomalies=not enable_waterfall,
             ),
-            hunter_escalation=None,
             long_config=LongPolicyConfig(
-                enable_hunter_long=False,
                 allow_anomaly_entries=False,
                 filter_wick_rejection=filter_wick,
                 max_rejection_wick_ratio=max_wick,
@@ -143,53 +126,6 @@ class EntryPipeline:
                 max_dist_ema21_pct=float(_pval("short_max_dist_ema21", 1.0)),
             ),
         )
-
-    def _resolve_candidate(
-        self,
-        candidate: TradeCandidate,
-        result: PolicyEvaluationResult,
-        rows_by_index: dict[int, dict[str, Any]],
-        dataframe: pd.DataFrame,
-        rejected: list[dict],
-        hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]],
-    ) -> PolicyEvaluationResult | None:
-        if not result.is_valid and self.hunter_escalation is not None:
-            row = rows_by_index.get(candidate.candle_index) or {}
-            attempt = self.hunter_escalation.evaluate(candidate, result, dataframe, row)
-            if attempt.promoted is not None:
-                hunter_promoted.append((candidate, attempt.promoted))
-                return attempt.promoted
-            verdict = attempt.score_verdict
-            rejected.append(
-                {
-                    "pair": candidate.pair,
-                    "candle_index": candidate.candle_index,
-                    "side": candidate.side.value,
-                    "reasons": list(result.reasons),
-                    "setup": result.metadata.get("setup"),
-                    "escalation": attempt.outcome,
-                    "score": None if verdict is None else verdict.score,
-                    "score_passed": None if verdict is None else verdict.passed,
-                    "score_reason": None if verdict is None else verdict.reason,
-                    "gate_reasons": attempt.gate_reasons,
-                }
-            )
-            return None
-        if not result.is_valid:
-            rejected.append(
-                {
-                    "pair": candidate.pair,
-                    "candle_index": candidate.candle_index,
-                    "side": candidate.side.value,
-                    "reasons": list(result.reasons),
-                    "setup": result.metadata.get("setup"),
-                    "escalation": (
-                        "soft_not_promoted" if is_soft_policy_reject(result) else "hard"
-                    ),
-                }
-            )
-            return None
-        return result
 
     def run(self, dataframe: pd.DataFrame, pair: str) -> EntryPipelineResult:
         """Scan sensors, compose setups, evaluate policies."""
@@ -217,27 +153,32 @@ class EntryPipeline:
         enter_short = pd.Series(False, index=dataframe.index)
         enter_tag = pd.Series("", index=dataframe.index)
         accepted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = []
-        hunter_promoted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = []
 
         for candidate, result in evaluated:
-            final = self._resolve_candidate(
-                candidate, result, rows_by_index, dataframe, rejected, hunter_promoted
-            )
-            if final is None or not final.is_valid:
+            if not result.is_valid:
+                rejected.append(
+                    {
+                        "pair": candidate.pair,
+                        "candle_index": candidate.candle_index,
+                        "side": candidate.side.value,
+                        "reasons": list(result.reasons),
+                        "setup": result.metadata.get("setup"),
+                    }
+                )
                 continue
 
             pos = candidate.candle_index
-            tag = str(final.metadata.get("entry_tag") or final.metadata.get("setup") or "")
+            tag = str(result.metadata.get("entry_tag") or result.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
                 if not enter_long.iloc[pos]:
                     enter_long.iloc[pos] = True
                     enter_tag.iloc[pos] = tag
-                    accepted.append((candidate, final))
+                    accepted.append((candidate, result))
             else:
                 if not enter_short.iloc[pos]:
                     enter_short.iloc[pos] = True
                     enter_tag.iloc[pos] = tag
-                    accepted.append((candidate, final))
+                    accepted.append((candidate, result))
 
         # Element-wise via numpy so duplicate index labels cannot realign/explode.
         long_arr = enter_long.to_numpy(dtype=bool, copy=True)
@@ -266,7 +207,6 @@ class EntryPipeline:
             candidates=list(candidates),
             accepted=accepted,
             rejected=rejected,
-            hunter_promoted=hunter_promoted,
             trigger_events=list(events),
         )
 
@@ -280,7 +220,6 @@ def apply_entry_pipeline(
     LIVE strategy-facing entrypoint — thin adapter over EntryPipeline.
 
     Does not short-circuit Sensor / Builder / Composer / Policy layers.
-    Hunter escalation forced off in deterministic phase.
     """
     pair = metadata.get("pair", "")
     dataframe["enter_long"] = 0
@@ -295,7 +234,7 @@ def apply_entry_pipeline(
         )
         return dataframe
 
-    pipeline = EntryPipeline.live(strategy, hunter_escalation=None)
+    pipeline = EntryPipeline.live(strategy)
     result = pipeline.run(dataframe, pair)
 
     cand_long = result.enter_long.fillna(False).astype(bool)
@@ -347,7 +286,6 @@ def apply_entry_pipeline(
     dataframe.attrs["mtf_sniper_live_entries"] = _summarize_live_entries(dataframe)
     dataframe.attrs["mtf_sniper_trigger_events"] = result.trigger_events
     dataframe.attrs["mtf_sniper_entry_rejected"] = result.rejected
-    dataframe.attrs["mtf_sniper_hunter_promoted"] = []
     dataframe.attrs["mtf_sniper_accepted_candidates"] = [
         {
             "candidate_id": c.candidate_id,

@@ -4,9 +4,8 @@ Comprehensive Unit & Integration Test Suite for Jev AI Decision Architecture
 Tests correctness, fail-safe resilience, data contracts, and risk gating across:
 1. CandleTrajectoryExtractor
 2. MomentumRadar
-3. JevHunterEngine & JevHunterCache
-4. JevDecisionEngine & JevDecisionCache
-5. StrategyMTFSniper Integration & Risk Gating
+3. JevDecisionEngine & SQLite Cache
+4. StrategyMTFSniper Integration & Risk Gating
 """
 
 import json
@@ -44,20 +43,6 @@ from strategies.mtf_sniper.intelligence.jev_decision import (
     _parse_unit_interval,
     build_decision_cache_key,
     make_verdict,
-)
-from strategies.mtf_sniper.intelligence.jev_entry_hunter import (
-    HUNTER_ENGINE_VERSION,
-    HUNTER_MODEL_VERSION_EXTERNAL,
-    HUNTER_MODEL_VERSION_NATIVE,
-    JevHunterAction,
-    JevHunterCache,
-    JevHunterEngine,
-    JevHunterStatus,
-    JevSetupType,
-    build_canonical_payload,
-    compute_payload_hash,
-    is_mutable_model_id,
-    is_setup_valid_for_side,
 )
 from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
 from strategies.mtf_sniper.strategy_mtf_sniper import StrategyMTFSniper
@@ -243,245 +228,6 @@ class TestMomentumRadar(unittest.TestCase):
         # Must not crash
         candidates = MomentumRadar.find_candidates(df)
         self.assertEqual(candidates, [])
-
-
-class TestJevHunterCacheAndEngine(unittest.TestCase):
-    """Unit tests for JevHunterCache and JevHunterEngine."""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = str(Path(self.temp_dir) / "test_hunter.sqlite")
-        self.cache = JevHunterCache(self.db_path)
-        self.engine = JevHunterEngine(cache_db=self.db_path, mode="native")
-
-        dates = pd.date_range("2026-01-01", periods=32, freq="15min")
-        self.df_32 = pd.DataFrame({
-            "date": dates,
-            "open": np.linspace(100, 95, 32),
-            "high": np.linspace(100.5, 95.5, 32),
-            "low": np.linspace(99.5, 94.5, 32),
-            "close": np.linspace(99.5, 94.8, 32),
-            "volume": np.full(32, 1000.0),
-            "rel_vol": np.full(32, 3.5),
-            "atr": np.full(32, 1.0)
-        })
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_cache_put_and_get(self):
-        pair = "BTC/USDT:USDT"
-        ts = "2026-01-01 12:00:00"
-        self.cache.put(
-            pair=pair,
-            timestamp=ts,
-            action=JevHunterAction.ENTER_SHORT.value,
-            setup_type=JevSetupType.WATERFALL_COLLAPSE.value,
-            confidence=0.88,
-            status=JevHunterStatus.CONFIRMED.value,
-            raw_response={"test": True}
-        )
-        cached = self.cache.get(pair, ts)
-        self.assertIsNotNone(cached)
-        self.assertEqual(cached["action"], "enter_short")
-        self.assertEqual(cached["setup_type"], "waterfall_collapse")
-        self.assertEqual(cached["confidence"], 0.88)
-        self.assertEqual(cached["status"], "CONFIRMED")
-
-    def test_cache_does_not_store_transient_failures(self):
-        pair = "ETH/USDT:USDT"
-        ts = "2026-01-01 12:00:00"
-        # Try to put INVALID_RESPONSE
-        self.cache.put(
-            pair=pair,
-            timestamp=ts,
-            action=JevHunterAction.NO_TRADE.value,
-            setup_type=JevSetupType.UNKNOWN.value,
-            confidence=0.0,
-            status=JevHunterStatus.INVALID_RESPONSE.value,
-            raw_response={"error": "timeout"}
-        )
-        cached = self.cache.get(pair, ts)
-        self.assertIsNone(cached)
-
-    def test_native_waterfall_collapse_evaluation(self):
-        # Set last candle as strong bear breakdown
-        df = self.df_32.copy()
-        df.loc[31, "open"] = 96.0
-        df.loc[31, "close"] = 94.0
-        df.loc[31, "high"] = 96.1
-        df.loc[31, "low"] = 93.9
-        df.loc[31, "volume"] = 4000.0
-        df.loc[31, "rel_vol"] = 4.0
-
-        macro_info = {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.5}
-        verdict = self.engine.evaluate_candidate(
-            df, "BTC/USDT:USDT", "2026-01-01 12:00:00", "MEGA_SURGE_SHORT", macro_info
-        )
-        self.assertEqual(verdict["action"], "enter_short")
-        self.assertEqual(verdict["setup_type"], "waterfall_collapse")
-        self.assertEqual(verdict["status"], "CONFIRMED")
-        self.assertGreaterEqual(verdict["confidence"], 0.85)
-
-    def test_insufficient_candle_history(self):
-        short_df = self.df_32.iloc[:10]
-        verdict = self.engine.evaluate_candidate(
-            short_df, "BTC/USDT:USDT", "2026-01-01 12:00:00", "MEGA_SURGE_SHORT"
-        )
-        self.assertEqual(verdict["action"], "no_trade")
-        self.assertEqual(verdict["status"], JevHunterStatus.INVALID_RESPONSE.value)
-        self.assertEqual(verdict["confidence"], 0.0)
-
-    def test_setup_valid_for_side_helper(self):
-        self.assertTrue(is_setup_valid_for_side(JevSetupType.WATERFALL_COLLAPSE, "short"))
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.WATERFALL_COLLAPSE, "long"))
-
-        self.assertTrue(is_setup_valid_for_side(JevSetupType.BREAKOUT_EXPANSION, "long"))
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.TREND_PULLBACK, "long"))
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.ABSORPTION_TRAP, "long"))
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.BREAKOUT_EXPANSION, "short"))
-
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.CONSOLIDATION_NOISE, "short"))
-        self.assertFalse(is_setup_valid_for_side(JevSetupType.UNKNOWN, "long"))
-
-    def test_hunter_cache_mode_and_hash_isolation(self):
-        """Verify Hunter cache isolates native vs external models and rejects stale hash mismatches."""
-        pair = "ETH/USDT:USDT"
-        ts = "2026-01-01 15:00:00"
-
-        # 1. Put Native Verdict
-        self.cache.put(
-            pair, ts,
-            "enter_short", "waterfall_collapse", 0.88,
-            JevHunterStatus.CONFIRMED.value, {"foo": "bar"},
-            payload_hash="valid_hash_1",
-            model_version=HUNTER_MODEL_VERSION_NATIVE
-        )
-
-        # 2. Query with matching model and matching hash -> Hit
-        hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="valid_hash_1")
-        self.assertIsNotNone(hit)
-        self.assertEqual(hit["action"], "enter_short")
-
-        # 3. Query with mismatched payload_hash -> None (prevents stale reused cache)
-        mismatch = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="changed_hash_2")
-        self.assertIsNone(mismatch)
-
-        # 4. Query with external model -> None (mode isolation)
-        isolated = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_EXTERNAL, payload_hash="valid_hash_1")
-        self.assertIsNone(isolated)
-
-        # 5. Put External Verdict at same timestamp with different action
-        self.cache.put(
-            pair, ts,
-            "enter_long", "absorption_trap", 0.90,
-            JevHunterStatus.CONFIRMED.value, {"external": True},
-            payload_hash="ext_hash_3",
-            model_version=HUNTER_MODEL_VERSION_EXTERNAL
-        )
-
-        # 6. Both co-exist independently without clobbering each other
-        native_hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash="valid_hash_1")
-        ext_hit = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_EXTERNAL, payload_hash="ext_hash_3")
-        self.assertIsNotNone(native_hit)
-        self.assertEqual(native_hit["action"], "enter_short")
-        self.assertIsNotNone(ext_hit)
-        self.assertEqual(ext_hit["action"], "enter_long")
-
-    def test_hunter_cache_concurrency_multi_payload_same_timestamp(self):
-        """Verify that multiple candidate events at same timestamp with different payload_hash don't overwrite each other."""
-        pair = "BTC/USDT:USDT"
-        ts = "2026-11-12 13:00:00"
-        hash_event_a = "hash_breakdown_123"
-        hash_event_b = "hash_surge_456"
-
-        # Event A: waterfall collapse
-        self.cache.put(
-            pair, ts,
-            "enter_short", "waterfall_collapse", 0.88,
-            JevHunterStatus.CONFIRMED.value, {"trigger": "BREAKOUT_24H"},
-            payload_hash=hash_event_a,
-            model_version=HUNTER_MODEL_VERSION_NATIVE
-        )
-
-        # Event B: surge pullback at same timestamp
-        self.cache.put(
-            pair, ts,
-            "enter_short", "waterfall_collapse", 0.85,
-            JevHunterStatus.CONFIRMED.value, {"trigger": "MEGA_SURGE"},
-            payload_hash=hash_event_b,
-            model_version=HUNTER_MODEL_VERSION_NATIVE
-        )
-
-        # Query A with hash_event_a
-        verdict_a = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=hash_event_a)
-        self.assertIsNotNone(verdict_a)
-        self.assertEqual(verdict_a["confidence"], 0.88)
-        self.assertEqual(verdict_a["raw_response"]["trigger"], "BREAKOUT_24H")
-
-        # Query B with hash_event_b
-        verdict_b = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=hash_event_b)
-        self.assertIsNotNone(verdict_b)
-        self.assertEqual(verdict_b["confidence"], 0.85)
-        self.assertEqual(verdict_b["raw_response"]["trigger"], "MEGA_SURGE")
-
-    def test_hunter_external_strict_schema_validation(self):
-        """Verify strict response schema validation in External Hunter engine."""
-        engine_ext = JevHunterEngine(cache_db=self.db_path, mode="external")
-        engine_ext.api_url = "http://localhost:8000/predict"
-        engine_ext.api_key = "test_key"
-
-        class MockResponse:
-            def __init__(self, data_dict):
-                self.data_dict = data_dict
-            def read(self):
-                return json.dumps(self.data_dict).encode("utf-8")
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                pass
-
-        # 1. Missing suggested_action or setup_type
-        bad_resp_1 = {"answers": {"only_something_else": {}}}
-        with patch("urllib.request.urlopen", return_value=MockResponse(bad_resp_1)):
-            res = engine_ext.evaluate_candidate(self.df_32, "BTC/USDT:USDT", "2026-01-01 12:00:00", "SURGE")
-            self.assertEqual(res["status"], JevHunterStatus.INVALID_RESPONSE.value)
-            self.assertEqual(res["confidence"], 0.0)
-
-        # 2. Probability missing for chosen action
-        bad_resp_2 = {
-            "answers": {
-                "suggested_action": {"choice": "enter_short", "probabilities": {"enter_long": 0.2}},
-                "setup_type": {"choice": "waterfall_collapse"}
-            }
-        }
-        with patch("urllib.request.urlopen", return_value=MockResponse(bad_resp_2)):
-            res = engine_ext.evaluate_candidate(self.df_32, "BTC/USDT:USDT", "2026-01-01 12:00:00", "SURGE")
-            self.assertEqual(res["status"], JevHunterStatus.INVALID_RESPONSE.value)
-
-        # 3. Probability out of bounds (< 0.0 or > 1.0)
-        bad_resp_3 = {
-            "answers": {
-                "suggested_action": {"choice": "enter_short", "probabilities": {"enter_short": 1.5}},
-                "setup_type": {"choice": "waterfall_collapse"}
-            }
-        }
-        with patch("urllib.request.urlopen", return_value=MockResponse(bad_resp_3)):
-            res = engine_ext.evaluate_candidate(self.df_32, "BTC/USDT:USDT", "2026-01-01 12:00:00", "SURGE")
-            self.assertEqual(res["status"], JevHunterStatus.INVALID_RESPONSE.value)
-
-        # 4. Valid response -> CONFIRMED
-        good_resp = {
-            "answers": {
-                "suggested_action": {"choice": "enter_short", "probabilities": {"enter_short": 0.89}},
-                "setup_type": {"choice": "waterfall_collapse"}
-            }
-        }
-        with patch("urllib.request.urlopen", return_value=MockResponse(good_resp)):
-            res = engine_ext.evaluate_candidate(self.df_32, "BTC/USDT:USDT", "2026-01-01 12:00:00", "SURGE")
-            self.assertEqual(res["status"], JevHunterStatus.CONFIRMED.value)
-            self.assertEqual(res["confidence"], 0.89)
-            self.assertEqual(res["action"], "enter_short")
 
 
 class TestJevDecisionEngine(unittest.TestCase):
@@ -1122,165 +868,6 @@ class TestJevDecisionEngine(unittest.TestCase):
         self.assertEqual(v_short_base["confidence"], v_short_pen["confidence"])
 
 
-class TestHunterExternalModelIdentity(unittest.TestCase):
-    """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = str(Path(self.temp_dir) / "hunter_identity.sqlite")
-        idx = pd.date_range("2026-01-01", periods=32, freq="15min", tz="UTC")
-        self.df = pd.DataFrame(
-            {
-                "open": np.linspace(100, 90, 32),
-                "high": np.linspace(101, 91, 32),
-                "low": np.linspace(99, 89, 32),
-                "close": np.linspace(100, 90, 32),
-                "volume": np.full(32, 1000.0),
-                "rel_vol": np.full(32, 2.5),
-            },
-            index=idx,
-        )
-        self.df.loc[self.df.index[-1], "close"] = 88.0
-        self.df.loc[self.df.index[-1], "open"] = 92.0
-        self.df.loc[self.df.index[-1], "high"] = 92.5
-        self.df.loc[self.df.index[-1], "low"] = 87.5
-        self.df.loc[self.df.index[-1], "rel_vol"] = 4.0
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_mutable_alias_helpers(self):
-        self.assertTrue(is_mutable_model_id("jev-latest"))
-        self.assertTrue(is_mutable_model_id("foo-latest"))
-        self.assertFalse(is_mutable_model_id("jev-1.14.0"))
-
-    def test_hunter_cache_hit_with_actual_model_no_second_api(self):
-        engine = JevHunterEngine(
-            cache_db=self.db_path,
-            mode="external",
-            api_url="http://localhost/mock",
-            api_key="k",
-            model_version="jev-latest",
-            missing_model_policy="no_cache",
-        )
-        pair, ts = "BTC/USDT:USDT", "2026-01-01T08:00:00+00:00"
-        api_body = {
-            "model": "jev-1.14.0",
-            "answers": {
-                "suggested_action": {
-                    "type": "choice",
-                    "choice": "enter_short",
-                    "probabilities": {
-                        "enter_short": 0.82,
-                        "enter_long": 0.05,
-                        "no_trade": 0.13,
-                    },
-                },
-                "setup_type": {"type": "choice", "choice": "waterfall_collapse"},
-            },
-        }
-
-        class MockResponse:
-            def __init__(self, data_dict):
-                self.data_dict = data_dict
-
-            def read(self):
-                return json.dumps(self.data_dict).encode("utf-8")
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api:
-            v1 = engine.evaluate_candidate(
-                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
-            )
-        self.assertEqual(v1["model_version"], "jev-1.14.0")
-        self.assertIn(v1["status"], ("CONFIRMED", "REJECTED"))
-        self.assertEqual(mock_api.call_count, 1)
-
-        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api2:
-            v2 = engine.evaluate_candidate(
-                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
-            )
-        self.assertEqual(mock_api2.call_count, 0, "Second call must hit cache under actual model")
-        self.assertEqual(v2["model_version"], "jev-1.14.0")
-
-        # Different actual model must not reuse prior verdict
-        engine_b = JevHunterEngine(
-            cache_db=self.db_path,
-            mode="external",
-            api_url="http://localhost/mock",
-            api_key="k",
-            model_version="jev-latest",
-            missing_model_policy="no_cache",
-        )
-        api_body_b = dict(api_body)
-        api_body_b["model"] = "jev-2.0.0"
-        with patch("urllib.request.urlopen", return_value=MockResponse(api_body_b)) as mock_api3:
-            v3 = engine_b.evaluate_candidate(
-                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR", "ema50_1h_dist_pct": -2.0}
-            )
-        self.assertEqual(mock_api3.call_count, 1)
-        self.assertEqual(v3["model_version"], "jev-2.0.0")
-
-    def test_hunter_no_cache_when_backend_omits_model_and_policy_no_cache(self):
-        engine = JevHunterEngine(
-            cache_db=self.db_path,
-            mode="external",
-            api_url="http://localhost/mock",
-            api_key="k",
-            model_version="jev-latest",
-            missing_model_policy="no_cache",
-        )
-        pair, ts = "ETH/USDT:USDT", "2026-01-01T08:00:00+00:00"
-        api_body = {
-            "answers": {
-                "suggested_action": {
-                    "type": "choice",
-                    "choice": "no_trade",
-                    "probabilities": {
-                        "enter_short": 0.1,
-                        "enter_long": 0.1,
-                        "no_trade": 0.8,
-                    },
-                },
-                "setup_type": {"type": "choice", "choice": "consolidation_noise"},
-            },
-        }
-
-        class MockResponse:
-            def __init__(self, data_dict):
-                self.data_dict = data_dict
-
-            def read(self):
-                return json.dumps(self.data_dict).encode("utf-8")
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)):
-            v1 = engine.evaluate_candidate(
-                self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR"}
-            )
-        self.assertEqual(v1["status"], "REJECTED")
-
-        # Nothing stored under alias or empty model
-        cached_alias = engine.cache.get(
-            pair, ts, engine_version=HUNTER_ENGINE_VERSION, model_version="jev-latest"
-        )
-        self.assertIsNone(cached_alias)
-
-        with patch("urllib.request.urlopen", return_value=MockResponse(api_body)) as mock_api:
-            engine.evaluate_candidate(self.df, pair, ts, "SHORT_BREAKOUT", {"trend_4h": "BEAR"})
-        self.assertEqual(mock_api.call_count, 1, "Must re-call API when nothing was cached")
-
-
 class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
     """Integration tests verifying Risk Gate precedence, conflict resolution, and custom stoploss math."""
 
@@ -1318,21 +905,6 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         sl_rel_short = stoploss_from_open(-0.05, -0.01, is_short=True, leverage=10.0)
         self.assertGreater(sl_rel_short, 0.0)
         self.assertAlmostEqual(sl_rel_short, 0.03996, places=4)
-
-    def test_hunter_setup_side_enforcement(self):
-        """Verify that Strategy strictly matches Hunter setup with side."""
-        # SHORT only accepts waterfall_collapse
-        self.assertTrue(is_setup_valid_for_side("waterfall_collapse", "short"))
-        self.assertFalse(is_setup_valid_for_side("trend_pullback", "short"))
-        self.assertFalse(is_setup_valid_for_side("absorption_trap", "short"))
-        self.assertFalse(is_setup_valid_for_side("breakout_expansion", "short"))
-
-        # LONG only accepts breakout_expansion (trend-follow); mean-reversion labels rejected
-        self.assertTrue(is_setup_valid_for_side("breakout_expansion", "long"))
-        self.assertFalse(is_setup_valid_for_side("trend_pullback", "long"))
-        self.assertFalse(is_setup_valid_for_side("absorption_trap", "long"))
-        self.assertFalse(is_setup_valid_for_side("waterfall_collapse", "long"))
-        self.assertFalse(is_setup_valid_for_side("consolidation_noise", "long"))
 
     def test_jev_fail_policy_allow_and_reject(self):
         """Verify JEV fail policy: 'allow' bypasses AI gate on UNAVAILABLE, 'reject' blocks."""
@@ -1462,10 +1034,6 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         out = short_strat.populate_entry_trend(df, {"pair": "BTC/USDT:USDT"})
         self.assertEqual(out["enter_short"].sum(), 0.0, "Must be fail-closed when macro informative columns are missing")
 
-    def test_hunter_4h_macro_three_state_classification(self):
-        """Legacy hunter_merge populate_entry path removed — SensorSuite live does not call JevHunter."""
-        self.skipTest("Retired with strategies/active hunter_merge; entry is SensorSuite now.")
-
     def test_circuit_breaker_strategy_isolation(self):
         """Verify that Circuit Breaker filters trades by strategy name, preventing cross-strategy contamination."""
         cfg = Configuration.from_files(["user_data/config.json"])
@@ -1513,174 +1081,6 @@ class TestStrategyIntegrationAndRiskGating(unittest.TestCase):
         self.assertEqual(short_strat.leverage("BTC/USDT:USDT", now, 100.0, 1.0, 5.0, "entry", "short"), 5.0)
         self.assertEqual(short_strat.leverage("BTC/USDT:USDT", now, 100.0, 1.0, 10.0, "entry", "short"), 10.0)
         self.assertEqual(short_strat.version(), f"v{short_strat.strategy_version}")
-
-
-class TestHunterPayloadHashCompleteness(unittest.TestCase):
-    """
-    P1 Requirement 2: Verify Hunter payload hash completeness and determinism.
-    - OHLCV same but rel_vol changed -> hash must change.
-    - volume_ratio_20 changed -> hash must change.
-    - macro context changed -> hash must change.
-    - event trigger changed -> hash must change.
-    - same payload -> hash must be identical.
-    - NaN, Inf, None handled consistently.
-    """
-
-    def setUp(self):
-        dates = pd.date_range("2026-01-01", periods=16, freq="15min")
-        self.df = pd.DataFrame({
-            "date": dates,
-            "open": [100.0] * 16,
-            "high": [105.0] * 16,
-            "low": [99.0] * 16,
-            "close": [102.0] * 16,
-            "volume": [1000.0] * 16,
-            "rel_vol": [1.5] * 16,
-            "volume_ratio_20": [1.2] * 16
-        })
-        self.macro = {"trend_4h": "BULL", "ema50_1h_dist_pct": 0.5, "atr_percentile": 60.0}
-
-    def test_hash_determinism_identical_payload(self):
-        h1 = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        h2 = compute_payload_hash(build_canonical_payload(self.df.copy(), "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro.copy()))
-        self.assertEqual(h1, h2)
-
-    def test_hash_sensitivity_rel_vol(self):
-        h_base = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        df_mod = self.df.copy()
-        df_mod.loc[15, "rel_vol"] = 3.5
-        h_mod = compute_payload_hash(build_canonical_payload(df_mod, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        self.assertNotEqual(h_base, h_mod)
-
-    def test_hash_sensitivity_volume_ratio_20(self):
-        h_base = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        df_mod = self.df.copy()
-        df_mod.loc[15, "volume_ratio_20"] = 4.2
-        h_mod = compute_payload_hash(build_canonical_payload(df_mod, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        self.assertNotEqual(h_base, h_mod)
-
-    def test_hash_sensitivity_macro_context(self):
-        h_base = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        macro_mod = self.macro.copy()
-        macro_mod["trend_4h"] = "BEAR"
-        h_mod = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", macro_mod))
-        self.assertNotEqual(h_base, h_mod)
-
-    def test_hash_sensitivity_event_trigger(self):
-        h_base = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro))
-        h_mod = compute_payload_hash(build_canonical_payload(self.df, "BTC/USDT", "2026-01-01 12:00:00", "BREAKDOWN_24H", self.macro))
-        self.assertNotEqual(h_base, h_mod)
-
-    def test_hash_handles_nan_and_inf_cleanly(self):
-        df_nan = self.df.copy()
-        df_nan.loc[0, "rel_vol"] = float("nan")
-        df_nan.loc[1, "volume_ratio_20"] = float("inf")
-        payload = build_canonical_payload(df_nan, "BTC/USDT", "2026-01-01 12:00:00", "SURGE", self.macro)
-        h = compute_payload_hash(payload)
-        self.assertTrue(isinstance(h, str) and len(h) > 0)
-
-
-class TestExternalModelVersionImmutability(unittest.TestCase):
-    """
-    P1 Requirement 3: External Model Version Immutability & Policy.
-    - Two different model versions cannot share cache.
-    - Backend returning new model version creates new cache identity.
-    - Missing model version handled according to configured policy.
-    """
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = str(Path(self.temp_dir) / "test_ext_cache.sqlite")
-        self.cache = JevHunterCache(self.db_path)
-
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_different_model_versions_do_not_share_cache(self):
-        pair = "BTC/USDT:USDT"
-        ts = "2026-01-01 10:00:00"
-        h = "hash_model_iso_1"
-
-        # Save verdict under model-v1.0
-        self.cache.put(
-            pair, ts, "enter_short", "waterfall_collapse", 0.90,
-            JevHunterStatus.CONFIRMED.value, {}, payload_hash=h,
-            model_version="jev-hunter-v1.0"
-        )
-
-        # Lookup with model-v1.0 -> hit
-        self.assertIsNotNone(self.cache.get(pair, ts, model_version="jev-hunter-v1.0", payload_hash=h))
-        # Lookup with model-v2.0 -> miss (isolation enforced)
-        self.assertIsNone(self.cache.get(pair, ts, model_version="jev-hunter-v2.0", payload_hash=h))
-
-    def test_backend_actual_model_version_saved_to_cache(self):
-        """When backend returns model_version in response, that exact version is recorded in verdict and cache."""
-        engine = JevHunterEngine(
-            api_url="http://fake.api", api_key="secret",
-            cache_db=self.db_path, mode="external",
-            model_version="configured-alias-v1"
-        )
-        dates = pd.date_range("2026-01-01", periods=16, freq="15min")
-        df_16 = pd.DataFrame({
-            "date": dates, "open": [100.0]*16, "high": [101.0]*16, "low": [98.0]*16, "close": [98.5]*16,
-            "volume": [1000.0]*16, "rel_vol": [1.0]*16, "volume_ratio_20": [1.0]*16
-        })
-
-        mock_api_response = {
-            "model_version": "concrete-immutable-20261117",
-            "answers": {
-                "suggested_action": {"choice": "enter_short", "probabilities": {"enter_short": 0.89}},
-                "setup_type": {"choice": "waterfall_collapse"}
-            }
-        }
-
-        class MockResponse:
-            def read(self):
-                return json.dumps(mock_api_response).encode("utf-8")
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-
-        with patch("urllib.request.urlopen", return_value=MockResponse()):
-            verdict = engine.evaluate_candidate(df_16, "BTC/USDT:USDT", "2026-01-01 10:00:00", "SURGE")
-            self.assertEqual(verdict["model_version"], "concrete-immutable-20261117")
-
-            # Check cache: must be stored under concrete-immutable-20261117
-            cached = self.cache.get("BTC/USDT:USDT", "2026-01-01 10:00:00", model_version="concrete-immutable-20261117")
-            self.assertIsNotNone(cached)
-            self.assertEqual(cached["model_version"], "concrete-immutable-20261117")
-
-    def test_missing_model_policy_no_cache(self):
-        """When backend does not return model_version and policy='no_cache', result is NOT cached."""
-        engine = JevHunterEngine(
-            api_url="http://fake.api", api_key="secret",
-            cache_db=self.db_path, mode="external",
-            model_version="alias-v1", missing_model_policy="no_cache"
-        )
-        dates = pd.date_range("2026-01-01", periods=16, freq="15min")
-        df_16 = pd.DataFrame({
-            "date": dates, "open": [100.0]*16, "high": [101.0]*16, "low": [98.0]*16, "close": [98.5]*16,
-            "volume": [1000.0]*16
-        })
-
-        mock_api_response = {
-            # No model_version in response
-            "answers": {
-                "suggested_action": {"choice": "enter_short", "probabilities": {"enter_short": 0.89}},
-                "setup_type": {"choice": "waterfall_collapse"}
-            }
-        }
-
-        class MockResponse:
-            def read(self): return json.dumps(mock_api_response).encode("utf-8")
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-
-        with patch("urllib.request.urlopen", return_value=MockResponse()):
-            verdict = engine.evaluate_candidate(df_16, "BTC/USDT:USDT", "2026-01-01 11:00:00", "SURGE")
-            self.assertEqual(verdict["status"], "CONFIRMED")
-            # Verify NOT cached
-            cached = self.cache.get("BTC/USDT:USDT", "2026-01-01 11:00:00", model_version="alias-v1")
-            self.assertIsNone(cached)
 
 
 class TestCircuitBreakerIsolationScenarios(unittest.TestCase):
@@ -1744,7 +1144,7 @@ class TestCircuitBreakerIsolationScenarios(unittest.TestCase):
 
 class TestRealSqliteConcurrency(unittest.TestCase):
     """
-    P1 Requirement 5: Real SQLite Concurrency Tests.
+    P1 Requirement 5: Real SQLite Concurrency Tests for JevDecisionEngine cache.
     - Multiple threads writing different payloads at same pair/timestamp concurrently.
     - Multiple processes opening the same SQLite database.
     - Concurrent reads and writes.
@@ -1755,14 +1155,30 @@ class TestRealSqliteConcurrency(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = str(Path(self.temp_dir) / "test_concurrency.sqlite")
-        self.cache = JevHunterCache(self.db_path)
+        self.engine = JevDecisionEngine(cache_db=self.db_path, mode="native")
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    @staticmethod
+    def _sample_payload(pair: str, ts: str, payload_hash: str) -> dict:
+        seq = [
+            {"body_ratio": 0.7, "vol_ratio": 1.5, "lower_wick": 0.1, "upper_wick": 0.1, "close_pos": 0.1, "range_pct": 0.5}
+            for _ in range(8)
+        ]
+        return {
+            "pair": pair,
+            "timestamp": ts,
+            "side": "short",
+            "payload_hash": payload_hash,
+            "trajectory_sequence": seq,
+            "macro_context": {"trend_4h": "BEAR", "short_score": 85.0},
+        }
+
     def test_multithreaded_concurrent_writes_same_timestamp(self):
         """10 threads concurrently write different payloads to same (pair, timestamp). All 10 must persist without loss."""
         import threading
+
         pair = "BTC/USDT:USDT"
         ts = "2026-11-12 13:00:00"
         num_threads = 10
@@ -1770,13 +1186,10 @@ class TestRealSqliteConcurrency(unittest.TestCase):
 
         def worker(thread_id):
             try:
-                c = JevHunterCache(self.db_path)
-                h = f"thread_payload_hash_{thread_id}"
-                c.put(
-                    pair, ts, "enter_short", "waterfall_collapse", 0.85 + (thread_id * 0.01),
-                    JevHunterStatus.CONFIRMED.value, {"tid": thread_id},
-                    payload_hash=h, model_version=HUNTER_MODEL_VERSION_NATIVE
-                )
+                eng = JevDecisionEngine(cache_db=self.db_path, mode="native")
+                payload = self._sample_payload(pair, ts, f"thread_payload_hash_{thread_id}")
+                v = eng.evaluate(payload)
+                assert v["status"] == JevStatus.SUCCESS.value
             except Exception as e:
                 errors.append(e)
 
@@ -1789,30 +1202,28 @@ class TestRealSqliteConcurrency(unittest.TestCase):
         self.assertEqual(len(errors), 0, f"Thread write errors: {errors}")
 
         for i in range(num_threads):
-            h = f"thread_payload_hash_{i}"
-            res = self.cache.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=h)
-            self.assertIsNotNone(res, f"Lost write for payload hash {h}")
-            self.assertEqual(res["raw_response"]["tid"], i)
+            payload = self._sample_payload(pair, ts, f"thread_payload_hash_{i}")
+            res = self.engine.evaluate(payload)
+            self.assertEqual(res["source"], "cache", f"Lost write for payload hash {i}")
 
     def test_multiprocess_concurrent_reads_writes(self):
         """Multiple OS processes concurrently open the same SQLite cache and perform reads & writes."""
         import multiprocessing as mp
+
         ctx = mp.get_context("fork")
         pair = "ETH/USDT:USDT"
         num_procs = 4
 
         def proc_worker(proc_id, db_path):
-            c = JevHunterCache(db_path)
+            eng = JevDecisionEngine(cache_db=db_path, mode="native")
             for j in range(5):
                 ts = f"2026-01-01 {proc_id:02d}:{j:02d}:00"
                 h = f"proc_{proc_id}_hash_{j}"
-                c.put(
-                    pair, ts, "enter_long", "absorption_trap", 0.88,
-                    JevHunterStatus.CONFIRMED.value, {"p": proc_id, "j": j},
-                    payload_hash=h, model_version=HUNTER_MODEL_VERSION_NATIVE
-                )
-                hit = c.get(pair, ts, model_version=HUNTER_MODEL_VERSION_NATIVE, payload_hash=h)
-                assert hit is not None and hit["raw_response"]["p"] == proc_id
+                payload = TestRealSqliteConcurrency._sample_payload(pair, ts, h)
+                v1 = eng.evaluate(payload)
+                assert v1["status"] == JevStatus.SUCCESS.value
+                v2 = eng.evaluate(payload)
+                assert v2["source"] == "cache"
 
         procs = [ctx.Process(target=proc_worker, args=(i, self.db_path)) for i in range(num_procs)]
         for p in procs:
@@ -1826,20 +1237,21 @@ class TestRealSqliteConcurrency(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             self.assertEqual(integrity, "ok")
-            count = conn.execute("SELECT count(*) FROM jev_hunter_verdicts WHERE pair=?", (pair,)).fetchone()[0]
+            count = conn.execute("SELECT count(*) FROM jev_gatekeeper_verdicts WHERE pair=?", (pair,)).fetchone()[0]
             self.assertEqual(count, num_procs * 5)
 
     def test_concurrent_initialization_migration(self):
-        """Simultaneous instantiation of JevHunterCache from multiple threads on same DB must succeed without lock collision."""
+        """Simultaneous instantiation of JevDecisionEngine cache from multiple threads must succeed without lock collision."""
         import threading
+
         new_db = str(Path(self.temp_dir) / "fresh_concurrent.sqlite")
         errors = []
 
         def init_worker():
             try:
-                c = JevHunterCache(new_db)
-                c.put("BTC/USDT", "2026-01-01", "enter_short", "waterfall_collapse", 0.9,
-                      JevHunterStatus.CONFIRMED.value, {}, payload_hash="init_h", model_version=HUNTER_MODEL_VERSION_NATIVE)
+                eng = JevDecisionEngine(cache_db=new_db, mode="native")
+                payload = self._sample_payload("BTC/USDT:USDT", "2026-01-01", "init_h")
+                eng.evaluate(payload)
             except Exception as e:
                 errors.append(e)
 

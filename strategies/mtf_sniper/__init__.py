@@ -1,6 +1,6 @@
 """MTF Sniper + JEV — single source of version truth.
 
-Bump here only; strategy / Decision / Hunter import these constants.
+Bump here only; strategy and Decision engine import these constants.
 Docs (`ARCHITECTURE.md`) should match ``STRATEGY_VERSION``.
 """
 
@@ -26,14 +26,6 @@ DECISION_PROMPT_VERSION_EXTERNAL = (
 # Override via JEV_DECISION_MODEL_VERSION (default alias jev-latest).
 DECISION_MODEL_VERSION_EXTERNAL_DEFAULT = "jev-latest"
 
-# ---------------------------------------------------------------------------
-# Hunter identity (escalation path + hunter cache keys) — currently live-off
-# ---------------------------------------------------------------------------
-HUNTER_ENGINE_VERSION = "2.7.0"
-HUNTER_MODEL_VERSION_NATIVE = f"hunter-native-v{HUNTER_ENGINE_VERSION}"
-# Override via JEV_HUNTER_MODEL_VERSION (default alias jev-latest).
-HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT = "jev-latest"
-
 __all__ = [
     "__version__",
     "STRATEGY_VERSION",
@@ -42,7 +34,4 @@ __all__ = [
     "DECISION_PROMPT_VERSION_NATIVE",
     "DECISION_PROMPT_VERSION_EXTERNAL",
     "DECISION_MODEL_VERSION_EXTERNAL_DEFAULT",
-    "HUNTER_ENGINE_VERSION",
-    "HUNTER_MODEL_VERSION_NATIVE",
-    "HUNTER_MODEL_VERSION_EXTERNAL_DEFAULT",
 ]

@@ -1,6 +1,10 @@
 # Progress
 
 ## What works
+- **Dormant JevHunter Escalation Stack Removed (`v4.7.0-1w-regime`, Nov 26, 2026)**:
+  - Deleted unused `intelligence/jev_entry_hunter.py`, `intelligence/hunter_escalation.py`, `intelligence/hunter_adapter.py`, `intelligence/post_hunter_gates.py`, `directional/*/hunter_gates.py`, `directional/policy_escalation.py`, `scoring/`, and 4 Hunter test files; cleaned runtime flags in `strategy_mtf_sniper.py`, `core/runtime_mode.py`, `core/config_resolve.py`, `execution/entry_pipeline.py`, `directional/common_gates.py`, `directional/*/policy.py`, `docker-compose.yml`, and `docker/config.mtf_sniper.json`.
+  - Preserved `MomentumRadar` -> `WaterfallMomentumSensor`, `ShortSetup.WATERFALL_COLLAPSE`, and `JevDecisionEngine` SQLite cache concurrency tests (`TestRealSqliteConcurrency`).
+  - Gate passed: **0 violations**, **419 passed, 0 skipped**; 7Y Fixed-100 BT (`--cache none`) confirmed **435/435 exact trade parity** (**+2,336.481 USDT**, **55.9% WR**, **PF 1.84**, **13.13% DD**).
 - **v4.7.0-1w-regime — Opt-in #2 Enabled on Pi Dry-Run (`jev_1w_bear_penalty=0.35`, Nov 26, 2026)**:
   - Enabled `jev_1w_bear_penalty=0.35` in `docker/config.mtf_sniper.json` & `docker-compose.yml` (while keeping `counter_1w_stake_scale=None` and Opt-in #1 `risk_per_trade_pct=None` unchanged) and bumped `STRATEGY_VERSION` to `4.7.0-1w-regime`.
   - Added `populate_indicators_1w` + `@informative("1w")`, `SensorType.CONTEXT`, and `MarketRegimeSensor` (`signals/sensors/market_regime.py`) wired seamlessly into `SensorSuite`, vectorized `SetupComposer.compose_suite()`, and `CandidateBuilder.process()` with 100% fast/event parity.

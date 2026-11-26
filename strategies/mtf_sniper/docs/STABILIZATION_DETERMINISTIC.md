@@ -1,15 +1,15 @@
 # Ổn Định Hoá — MTF Sniper Tất Định (Deterministic Stabilization)
 
-**Nhánh:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone ổn định hoá:** `4.4.1-deterministic` (package hiện tại: `4.7.0-1w-regime`) · **Chế độ:** Hunter TẮT theo thiết kế
+**Nhánh:** `pi-deploy` · **Package:** `strategies/mtf_sniper` · **Milestone ổn định hoá:** `4.4.1-deterministic` (package hiện tại: `4.7.0-1w-regime`) · **Chế độ:** Đã gỡ hoàn toàn JevHunter
 
 ## Các Chế Độ Vận Hành (Runtime Modes)
 
-| Chế độ | Hunter | Decision | AI Ngoài (External) |
-|---|---|---|---|
-| `pure_deterministic` (alias `pure`) | ép TẮT | **ép TẮT** | chặn |
-| `deterministic` (alias `deterministic_native`) | ép TẮT | tuỳ chọn `native` | chặn |
-| `decision_native` | ép TẮT | tuỳ chọn `native` | chặn |
-| `decision_external` | mặc định vẫn TẮT ở pha này | tuỳ chọn | cho phép |
+| Chế độ | Decision | AI Ngoài (External) |
+|---|---|---|
+| `pure_deterministic` (alias `pure`) | **ép TẮT** | chặn |
+| `deterministic` (alias `deterministic_native`) | tuỳ chọn `native` | chặn |
+| `decision_native` | tuỳ chọn `native` | chặn |
+| `decision_external` | tuỳ chọn | cho phép |
 
 Cấu hình qua `strategy_params.mtf_runtime_mode` hoặc biến môi trường `MTF_RUNTIME_MODE`.
 
@@ -23,7 +23,7 @@ Hai đường **cài đặt** dùng chung một hợp đồng Policy (chi tiết
 
 ```text
 populate_entry_trend
-  → EntryPipeline.live (luôn ép hunter_escalation=None trên live)
+  → EntryPipeline.live
       Fast:  cached Sniper Parts → vectorized AND → TradeCandidate
       Event: SensorSuite → CandidateBuilder → SetupComposer → TradeCandidate
       → Long/Short Policy (hợp lệ setup ≠ nhãn chất lượng quality_grade)
@@ -40,10 +40,7 @@ confirm_trade_entry
       → RiskAuthorization (chỉ cổng duyệt lệnh; stake/leverage thật nằm ở callback riêng)
 ```
 
-### Ý Định Config vs Thực Thi Của Hunter
-
-`RuntimeProfile.enable_jev_hunter` có thể nhận `True` nếu config dưới `decision_external` yêu cầu.  
-**Tuy nhiên đường vào lệnh live vẫn ép cứng `hunter_escalation=None`.** Nên giữ các cờ Hunter là `false` để tránh hiểu nhầm lúc khởi động cho tới khi có dự án riêng đánh giá mở lại Hunter.
+*(Các cờ cấu hình cũ như `enable_jev_hunter` nếu còn sót trong JSON cũ trên host sẽ được bỏ qua an toàn khi khởi động.)*
 
 ## Các Lỗi Đã Khắc Phục Trong Chuỗi Ổn Định Hoá
 

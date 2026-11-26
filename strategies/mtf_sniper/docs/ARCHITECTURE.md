@@ -5,8 +5,8 @@
 **Bất biến cốt lõi:** Kiến trúc phân lớp chặt chẽ. Toàn bộ luật từ bản chiến lược cũ được đưa vào các tầng chuyên biệt; đường vào lệnh live luôn đi qua `EntryPipeline` (không bao giờ đánh tắt qua Policy ngay ở lớp chiến lược).
 
 **Hồ sơ vận hành (Runtime profile):**
-- **Local / Backtest (`deterministic`):** Dùng bộ chấm điểm tất định `JEV_MODE=native`, `enable_waterfall=true`, **Hunter TẮT** (`EntryPipeline.live` luôn ép `hunter_escalation=None`).
-- **Docker Production (`decision_external`):** Dùng `JEV_MODE=external` Hybrid AI score (`w_ai=0.10`, `JEV_FAIL_POLICY=fallback_native`, timeout `4s`), `enable_waterfall=true`, `enable_dynamic_sizing=true`, `exchange_sync_interval_secs=15`, **Hunter TẮT**. Xem thêm `STABILIZATION_DETERMINISTIC.md`.
+- **Local / Backtest (`deterministic`):** Dùng bộ chấm điểm tất định `JEV_MODE=native`, `enable_waterfall=true` (JevHunter đã gỡ hoàn toàn).
+- **Docker Production (`decision_external`):** Dùng `JEV_MODE=external` Hybrid AI score (`w_ai=0.10`, `JEV_FAIL_POLICY=fallback_native`, timeout `4s`), `enable_waterfall=true`, `enable_dynamic_sizing=true`, `exchange_sync_interval_secs=15`. Xem thêm `STABILIZATION_DETERMINISTIC.md`.
 
 **Tài liệu gốc chuẩn:** File này + `PHILOSOPHY.md` (triết lý chiến lược & lý do thiết kế) + `DATA_CONTRACTS.md` (hợp đồng dữ liệu) mô tả đúng hành vi đang chạy thực tế. Ghi chú lịch sử chuyển đổi nằm ở `MIGRATION_PLAN.md`.
 
@@ -175,7 +175,6 @@ Tuyệt đối không tự chế ID giả sai định dạng. ID đọc từ DB 
 | Builder | Gom / khử xung đột cho sensor sự kiện thuần (`scan_mask() is None`) | `signals/candidate_builder.py` |
 | Composer | Single-Truth recipe matcher (`compose_suite` mask + event fallback) | `directional/setup_composer.py`, `setup_recipes.py` |
 | Policy | Hợp lệ `short_sniper` / `long_sniper` + tách riêng `WaterfallShortPolicy` | `directional/*/policy.py`, `directional/short/waterfall_policy.py` |
-| Hunter | **Không đấu nối** trên đường live | `intelligence/hunter_escalation.py` |
 | Entry | Điều phối `SetupComposer.compose_suite` → cooldown + registry (`LINT029`) | `execution/entry_pipeline.py` |
 | Decision | Native / External Hybrid (`fail_policy` đồng bộ) | `intelligence/decision_adapter.py`, `jev_decision.py` |
 | Risk | Guards (CB/DirLock/Distress), sizing `0.50x`, thang SL | `risk/portfolio_protection.py`, `position_sizing.py`, `stoploss_ladder.py`, `risk_engine.py` |

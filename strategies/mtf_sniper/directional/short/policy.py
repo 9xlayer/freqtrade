@@ -18,7 +18,6 @@ from strategies.mtf_sniper.directional.common_gates import (
     has_invalid_numeric,
     read_finite_float,
 )
-from strategies.mtf_sniper.directional.short.hunter_gates import DEFAULT_SHORT_HUNTER_GATES
 from strategies.mtf_sniper.directional.short.setups import (
     ShortSetup,
     quality_grade_from_score,
@@ -56,7 +55,7 @@ class ShortPolicyConfig:
     max_dist_ema21_pct: float = 1.0
     filter_wick_rejection: bool = True
     block_macro_bull_shorts: bool = False
-    floor_dist_min: float = DEFAULT_SHORT_HUNTER_GATES.floor_dist_min
+    floor_dist_min: float = 0.035
     confluence_bonus: float = 0.10
     base_stop_distance_pct: float = 0.018
     target_rr: float = 2.0

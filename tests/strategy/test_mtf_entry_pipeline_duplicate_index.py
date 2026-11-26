@@ -72,7 +72,6 @@ class TestEntryPipelineRunDuplicateIndex(unittest.TestCase):
             candidate_builder=MagicMock(),
             engine=MagicMock(),
             setup_composer=MagicMock(),
-            hunter_escalation=None,
         )
         pipe.setup_composer.compose_suite.return_value = [cand]
         pipe.engine.evaluate_many.return_value = [(cand, pol)]

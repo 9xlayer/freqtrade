@@ -28,10 +28,9 @@ P0 Kiểm toán → P1 Sensors → P2 Parity Engine → P3 Risk/Telemetry → P4
 ### Giai đoạn P3 — Risk Engine & Telemetry *(lịch sử, hoàn tất)*
 - Gom các lớp bảo vệ danh mục, ledger ghi nhật ký và tách module thoát lệnh. Risk authorization chỉ đóng vai trò **cổng duyệt lệnh** (không thay thế sizing).
 
-### Giai đoạn P4 — Long Hunter Gates *(lịch sử, đã chặn mặc định)*
+### Giai đoạn P4 — Long Hunter Gates *(lịch sử, đã gỡ bỏ hoàn toàn)*
 - Hồ sơ thực nghiệm nằm tại `P4_LONG_HUNTER_EVIDENCE.md` ở tag **`v3.2.0-p4-hunter-gates`**.
-- Mặc định production giữ nguyên `enable_hunter_long=false`.
-- **Package hiện hành (`4.6.0-counter1d`)** vẫn tắt Hunter khỏi luồng vào lệnh live bất chấp cờ cấu hình cũ còn sót.
+- Toàn bộ nhánh escalation `JevHunter` (`jev_entry_hunter.py`, `hunter_escalation.py`, `hunter_adapter.py`, `post_hunter_gates.py`, `hunter_gates.py`, `scoring/`) đã được gỡ bỏ sạch ở `v4.7.0-1w-regime` (giữ lại `MomentumRadar` cho `WaterfallMomentumSensor`).
 
 ---
 
@@ -46,7 +45,7 @@ P0 Kiểm toán → P1 Sensors → P2 Parity Engine → P3 Risk/Telemetry → P4
 | Hạng mục | Thực tế đang chạy |
 |---|---|
 | Vào lệnh | Hai đường đồng nhất: Fast Path (vector hóa) **hoặc** Event Path (`SensorSuite -> Builder -> Composer`) → dùng chung Policy |
-| Hunter | Tắt cứng trong `EntryPipeline.live` (`hunter_escalation=None`) |
+| Hunter | Đã gỡ bỏ hoàn toàn (`JevHunter*`, `hunter_escalation`, `scoring/`) |
 | Decision Gate | Tuỳ chọn `native` ở `deterministic`; Hybrid `external` ở `decision_external` |
 | Candidate ID | Chuẩn `{pair}_{side}_{epoch}_{candle_index}`; registry + fallback DF (tối đa 6h); lưu bền vững ở custom data của `Trade` |
 | Risk & Sizing | Cổng duyệt + thang SL ROE + giảm `0.50x` ngược 1D (`counter_1d_stake_scale`) + tự làm mới ví sàn live mỗi 15s |

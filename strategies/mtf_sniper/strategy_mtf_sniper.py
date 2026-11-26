@@ -28,7 +28,7 @@ class StrategyMTFSniper(IStrategy):
     MTF Sniper — deterministic layered entry (v4.7.0-1w-regime).
 
     Entry: part sensors + MarketRegimeSensor (1W) → SetupComposer → Policy → cooldown.
-    Confirm: optional JEV Decision Gate + Risk. Hunter escalation is off by default.
+    Confirm: optional JEV Decision Gate + Risk.
     """
 
     INTERFACE_VERSION = 3
@@ -40,8 +40,6 @@ class StrategyMTFSniper(IStrategy):
 
     enable_jev_decision: bool = True
     enable_waterfall: bool = True
-    enable_jev_hunter: bool = False
-    enable_hunter_long: bool = False
     block_macro_bull_shorts: bool = False
     enable_dynamic_sizing: bool = False
     default_leverage: float = 10.0
@@ -56,10 +54,8 @@ class StrategyMTFSniper(IStrategy):
     _runtime_profile: Any = None
     _effective_config: Any = None
     _config_fingerprint: str = ""
-    _hunter: Any = None
     _risk_engine: Any = None
     _decision_adapter: Any = None
-    _hunter_adapter: Any = None
     _decision_ledger: Any = None
     _trade_ledger: Any = None
     _trade_ledger_recorded_ids: set | None = None
@@ -99,7 +95,7 @@ class StrategyMTFSniper(IStrategy):
     def _load_external_config(self) -> None:
         """
         Load external config with safe parsing, priority order:
-        1. Runtime mode profile (authoritative for AI/Hunter/Decision mode)
+        1. Runtime mode profile (authoritative for AI/Decision mode)
         2. `strategy_params` in config.json
         3. Environment variables (.env / Docker Compose / Coolify)
         4. Built-in defaults & Freqtrade hyperopt Parameter defaults
@@ -125,23 +121,11 @@ class StrategyMTFSniper(IStrategy):
             if "enable_jev_decision" in strat_cfg
             else self._to_bool(os.environ.get("ENABLE_JEV_DECISION", "true"), True)
         )
-        want_hunter = (
-            self._to_bool(strat_cfg["enable_jev_hunter"], False)
-            if "enable_jev_hunter" in strat_cfg
-            else self._to_bool(os.environ.get("ENABLE_JEV_HUNTER", "false"), False)
-        )
-        want_hunter_long = (
-            self._to_bool(strat_cfg["enable_hunter_long"], False)
-            if "enable_hunter_long" in strat_cfg
-            else self._to_bool(os.environ.get("ENABLE_HUNTER_LONG", "false"), False)
-        )
 
         try:
             profile = build_runtime_profile(
                 strat_cfg,
                 enable_jev_decision_cfg=want_decision,
-                enable_jev_hunter_cfg=want_hunter,
-                enable_hunter_long_cfg=want_hunter_long,
             )
         except InvalidRuntimeModeError:
             # Fail fast at strategy init / bot_start — do not silently fall back.
@@ -153,8 +137,6 @@ class StrategyMTFSniper(IStrategy):
         self._runtime_profile = profile
         self.mtf_runtime_mode = profile.mode.value
         self.enable_jev_decision = profile.enable_jev_decision
-        self.enable_jev_hunter = profile.enable_jev_hunter
-        self.enable_hunter_long = profile.enable_hunter_long
 
         switches = resolve_strategy_switches(strat_cfg)
         self.block_macro_bull_shorts = switches.block_macro_bull_shorts
@@ -224,26 +206,16 @@ class StrategyMTFSniper(IStrategy):
             f"Decision={self.enable_jev_decision} "
             f"(jev_mode={getattr(profile, 'decision_jev_mode', 'native')}, "
             f"external_ai={getattr(profile, 'allow_external_ai', False)}) "
-            f"Hunter={self.enable_jev_hunter} (long_promote={self.enable_hunter_long}) "
             f"Waterfall={self.enable_waterfall} "
             f"block_macro_bull_shorts={self.block_macro_bull_shorts} "
             f"dynamic_sizing={self.enable_dynamic_sizing} "
             f"exchange_sync_s={self.exchange_sync_interval_secs} "
             f"telemetry={self.enable_telemetry}"
         )
-        if self.enable_jev_hunter:
-            # Config intent ≠ live wiring: EntryPipeline.live always passes hunter=None.
-            logger.warning(
-                "[Hunter] enable_jev_hunter=True in runtime profile, but live "
-                "EntryPipeline hard-disables hunter_escalation — entries stay sniper-only. "
-                "Set enable_jev_hunter=false (or use deterministic mode) to avoid confusion."
-            )
         if eff is not None:
             logger.info(f"[EffectiveConfig] {eff.to_log_dict()}")
         api_key = os.environ.get("JEV_API_KEY", "")
-        if getattr(profile, "allow_external_ai", False) and (
-            self.enable_jev_decision or self.enable_jev_hunter
-        ):
+        if getattr(profile, "allow_external_ai", False) and self.enable_jev_decision:
             if api_key:
                 masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
                 logger.info(
@@ -251,11 +223,11 @@ class StrategyMTFSniper(IStrategy):
                     f"URL: {os.environ.get('JEV_API_URL', 'https://api.typesafe.ai/v1/systemone')}"
                 )
             else:
-                logger.warning("[JEV] JEV_API_KEY unset — external Decision/Hunter unavailable.")
+                logger.warning("[JEV] JEV_API_KEY unset — external Decision unavailable.")
         elif self.enable_jev_decision:
             logger.info("[JEV] Deterministic/native Decision Gate only — no external AI inference.")
         else:
-            logger.info("[JEV] Decision and Hunter disabled — pure technical path.")
+            logger.info("[JEV] Decision disabled — pure technical path.")
 
     def _is_live_trading(self) -> bool:
         from collections.abc import Mapping

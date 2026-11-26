@@ -1,6 +1,13 @@
 # Active Context
 
 ## Current focus
+**Dormant JevHunter Stack Removed (`v4.7.0-1w-regime` cleanup, Nov 26, 2026)**:
+- **Removed unused Hunter escalation modules (`~2,533` lines code + tests):** Deleted `intelligence/jev_entry_hunter.py`, `intelligence/hunter_escalation.py`, `intelligence/hunter_adapter.py`, `intelligence/post_hunter_gates.py`, `directional/long/hunter_gates.py`, `directional/short/hunter_gates.py`, `directional/policy_escalation.py`, `scoring/`, and 4 Hunter unit test files (plus migrated `TestRealSqliteConcurrency` in `test_jev_architecture.py` onto `JevDecisionEngine`).
+- **Preserved live edge & configs:** Kept `MomentumRadar` (`signals/momentum_radar.py`) driving live `WaterfallMomentumSensor`, kept `ShortSetup.WATERFALL_COLLAPSE` (`jev_hunter_waterfall_collapse`) & `JevDecisionEngine` (`user_data/jev_hunter_cache.sqlite` default path) untouched, moved Waterfall threshold defaults (`0.285`, `0.35`, `0.035`) cleanly into `WaterfallFilterConfig` / `ShortPolicyConfig`, and removed stale `enable_jev_hunter` / `enable_hunter_long` runtime switches from Python & Docker Compose while tolerating legacy host JSON keys harmlessly.
+- **Verification (post-cleanup):**
+  - `.venv/bin/python scripts/lint_guardrails.py --verify-all`: **0 violations**, **419 passed, 0 skipped** (`Ruff` + `Pyrefly` + AST + unit tests).
+  - Exact 7Y Fixed-100 Backtest Parity (`20200101–20261124`, `JEV_MODE=native`, `MTF_RUNTIME_MODE=deterministic`, `--stake-amount 100`, `--cache none`): **435/435 identical trades** (`254L/181S`, `243W/192L`, **55.9% WR**), **+2,336.481 USDT (+233.65%)**, **PF 1.84**, **Wallet Max DD 13.13% (`185.409 USDT`)**, Sharpe `1.20`, Calmar `13.52`.
+
 **v4.7.0-1w-regime — Opt-in #2 Activated on Dry-Run (`jev_1w_bear_penalty=0.35`, Nov 26, 2026)**:
 - **Weekly MTF & Context Sensor (`market/indicators.py`, `signals/sensors/market_regime.py`)**:
   - Added `@informative("1w")` (`populate_indicators_1w`) computing core EMA/MACD/RSI/ADX/BB-width suite + weekly `market_regime` (`unknown`, `bull_trending`, `chop`, `bear_relief`, `cycle_top`, `bear_trending`).

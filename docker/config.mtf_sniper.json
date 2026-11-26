@@ -4,8 +4,6 @@
   "strategy_params": {
     "mtf_runtime_mode": "decision_external",
     "enable_jev_decision": true,
-    "enable_jev_hunter": false,
-    "enable_hunter_long": false,
     "enable_waterfall": true,
     "block_macro_bull_shorts": false,
     "enable_dynamic_sizing": true,

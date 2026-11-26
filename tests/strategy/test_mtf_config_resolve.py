@@ -52,7 +52,6 @@ class TestConfigResolve(unittest.TestCase):
         self.assertIsInstance(effective, EffectiveConfig)
         self.assertEqual(effective.runtime_mode, RuntimeMode.DETERMINISTIC.value)
         self.assertTrue(effective.enable_jev_decision)
-        self.assertFalse(effective.enable_jev_hunter)
         self.assertFalse(effective.allow_external_ai)
         self.assertEqual(effective.decision_jev_mode, "native")
         self.assertEqual(effective.long_params["long_max_dist_ema21"], 0.05)
@@ -76,8 +75,6 @@ class TestConfigResolve(unittest.TestCase):
         profile = RuntimeProfile(
             mode=RuntimeMode.DECISION_EXTERNAL,
             enable_jev_decision=True,
-            enable_jev_hunter=False,
-            enable_hunter_long=False,
             decision_jev_mode="external",
             allow_external_ai=True,
             source="unit-test",
