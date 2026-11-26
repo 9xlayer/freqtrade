@@ -80,7 +80,12 @@ class TestLookaheadIndicators(unittest.TestCase):
             self.assertFalse(np.isinf(chunk.to_numpy(dtype=float)).any(), msg=col)
 
     def test_1h_4h_1d_prefix_stable(self):
-        for fn in (ind.populate_indicators_1h, ind.populate_indicators_4h, ind.populate_indicators_1d):
+        for fn in (
+            ind.populate_indicators_1h,
+            ind.populate_indicators_4h,
+            ind.populate_indicators_1d,
+            ind.populate_indicators_1w,
+        ):
             full = _ohlcv(400)
             cut = 320
             a = fn(full.copy())
@@ -94,6 +99,17 @@ class TestLookaheadIndicators(unittest.TestCase):
                 atol=1e-9,
                 equal_nan=True,
             )
+
+    def test_1w_regime_warmup_unknown_and_classification(self):
+        df = ind.populate_indicators_1w(_ohlcv(120))
+        # Early warmup rows before ema_50/macd ready must stay 'unknown', never fake 'bull_trending'
+        self.assertTrue((df["market_regime"].iloc[:40] == "unknown").all())
+        ready = df.iloc[60:]
+        self.assertTrue(
+            set(ready["market_regime"]).issubset(
+                {"bull_trending", "chop", "bear_relief", "cycle_top", "bear_trending", "unknown"}
+            )
+        )
 
 
 if __name__ == "__main__":

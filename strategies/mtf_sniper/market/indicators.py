@@ -75,6 +75,46 @@ def populate_indicators_1d(dataframe: DataFrame) -> DataFrame:
     return dataframe
 
 
+def populate_indicators_1w(dataframe: DataFrame) -> DataFrame:
+    """Weekly macro context using the core indicator suite on 1W candles."""
+    dataframe["ema_21"] = ta.EMA(dataframe, timeperiod=21)
+    dataframe["ema_50"] = ta.EMA(dataframe, timeperiod=50)
+    dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
+    dataframe["rsi_prev"] = dataframe["rsi"].shift(1)
+    macd_1w: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
+    dataframe["macd"] = macd_1w["macd"]
+    dataframe["macdsignal"] = macd_1w["macdsignal"]
+    dataframe["macdhist"] = macd_1w["macdhist"]
+    dataframe["macdhist_prev"] = dataframe["macdhist"].shift(1)
+    dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+    dataframe["plus_di"] = ta.PLUS_DI(dataframe, timeperiod=14)
+    dataframe["minus_di"] = ta.MINUS_DI(dataframe, timeperiod=14)
+    bb_1w: Any = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+    dataframe["bb_width"] = (bb_1w["upperband"] - bb_1w["lowerband"]) / bb_1w["middleband"]
+
+    dataframe["is_bull_wave"] = (dataframe["macdhist"] > 0) & (
+        dataframe["macdhist"] > dataframe["macdhist_prev"]
+    )
+    dataframe["is_bear_wave"] = (dataframe["macdhist"] < 0) & (
+        dataframe["macdhist"] < dataframe["macdhist_prev"]
+    )
+    dataframe["is_weak_trend"] = dataframe["adx"] < 20
+
+    ready = dataframe[["macdhist", "macdhist_prev", "ema_50", "adx"]].notna().all(axis=1)
+    below_ema50 = dataframe["close"] < dataframe["ema_50"]
+    bear_wave = dataframe["is_bear_wave"].fillna(False)
+    macd_neg = (dataframe["macdhist"] < 0).fillna(False)
+    adx_weak = (dataframe["adx"] < 20).fillna(False)
+
+    regime = pd.Series("bull_trending", index=dataframe.index)
+    regime = regime.where(~adx_weak, "chop")
+    regime = regime.where(~(macd_neg & ~bear_wave), "bear_relief")
+    regime = regime.where(~(bear_wave & ~below_ema50), "cycle_top")
+    regime = regime.where(~(bear_wave & below_ema50), "bear_trending")
+    dataframe["market_regime"] = regime.where(ready, "unknown")
+    return dataframe
+
+
 def populate_indicators_4h(dataframe: DataFrame) -> DataFrame:
     macd_4h: Any = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
     dataframe["macdhist"] = macd_4h["macdhist"]

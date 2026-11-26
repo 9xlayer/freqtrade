@@ -31,6 +31,7 @@ class JevDecisionAdapter:
         force_native: bool = False,
         mode: str | None = None,
         fail_policy: str | None = None,
+        regime_1w_bear_penalty: float | None = None,
     ) -> None:
         self._extractor = CandleTrajectoryExtractor
         self._force_native = force_native
@@ -38,8 +39,11 @@ class JevDecisionAdapter:
             resolved_mode = "native"
         else:
             resolved_mode = (mode or "native").lower()
-        # Explicit constructor arg — do not write JEV_MODE into process env.
-        self._engine = JevDecisionEngine(mode=resolved_mode, fail_policy=fail_policy)
+        self._engine = JevDecisionEngine(
+            mode=resolved_mode,
+            fail_policy=fail_policy,
+            regime_1w_bear_penalty=regime_1w_bear_penalty,
+        )
         if self._force_native and getattr(self._engine, "mode", "") == "external":
             self._engine.mode = "native"
         self._status = JevStatus

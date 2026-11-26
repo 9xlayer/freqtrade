@@ -23,7 +23,7 @@ from strategies.mtf_sniper.core.contracts import (
     TradeCandidate,
     TriggerEvent,
 )
-from strategies.mtf_sniper.core.enums import TradeSide
+from strategies.mtf_sniper.core.enums import SensorType, TradeSide
 from strategies.mtf_sniper.directional.long.setups import LONG_SNIPER_PART_NAMES
 from strategies.mtf_sniper.directional.setup_recipes import (
     SETUP_SNIPER_LONG,
@@ -217,7 +217,55 @@ class SetupComposer:
                 sortable.append((recipe.priority, cand))
 
         sortable.sort(key=lambda item: (item[1].candle_index, item[1].side.value, item[0]))
-        return [item[1] for item in sortable]
+        candidates = [item[1] for item in sortable]
+        return _attach_suite_context(
+            candidates,
+            [s for s in sensors if s.sensor_type == SensorType.CONTEXT],
+            sensor_masks,
+            dataframe,
+        )
+
+
+def _attach_suite_context(
+    candidates: list[TradeCandidate],
+    context_sensors: Sequence[Any],
+    sensor_masks: dict[str, np.ndarray],
+    dataframe: pd.DataFrame,
+) -> list[TradeCandidate]:
+    if not candidates or not context_sensors:
+        return candidates
+
+    hit_idx_set = sorted({c.candle_index for c in candidates})
+    context_by_idx: dict[int, dict[str, Any]] = {}
+    ctx_names_by_idx: dict[int, list[str]] = {}
+    for sensor in context_sensors:
+        mask = sensor_masks.get(sensor.name)
+        if mask is None:
+            continue
+        active = np.asarray([i for i in hit_idx_set if mask[i]], dtype=int)
+        if len(active) == 0:
+            continue
+        feats_map = sensor.scan_mask_features(dataframe, active)
+        for i, feats in feats_map.items():
+            context_by_idx.setdefault(i, {}).update(feats)
+            names = ctx_names_by_idx.setdefault(i, [])
+            if sensor.name not in names:
+                names.append(sensor.name)
+
+    if not context_by_idx:
+        return candidates
+
+    enriched: list[TradeCandidate] = []
+    for cand in candidates:
+        ctx = context_by_idx.get(cand.candle_index)
+        if not ctx:
+            enriched.append(cand)
+            continue
+        merged = dict(cand.raw_features)
+        merged.update(ctx)
+        merged["context_sensors"] = list(ctx_names_by_idx.get(cand.candle_index, []))
+        enriched.append(replace(cand, raw_features=merged))
+    return enriched
 
 
 def _ordered_recipe_parts(recipe: SetupRecipe) -> list[str]:

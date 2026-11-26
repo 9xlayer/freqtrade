@@ -1089,6 +1089,38 @@ class TestJevDecisionEngine(unittest.TestCase):
             any("High ATR volatility aligned with waterfall vacuum breakdown" in r for r in v_missing_floor["reasons"])
         )
 
+    def test_1w_regime_penalty_scores_long_in_cycle_top(self):
+        """1W cycle_top/bear_trending penalizes LONG inside native/hybrid continuous scoring."""
+        df_1w = self.df_32.copy()
+        df_1w["long_score"] = 85.0
+        df_1w["ema_50_1h"] = 99.0
+        df_1w["rsi_1h"] = 60.0
+        df_1w["market_regime_1w"] = "cycle_top"
+        df_1w["macdhist_1w"] = -200.0
+        df_1w["adx_1w"] = 45.0
+        df_1w["rsi_1w"] = 58.0
+        df_1w["is_bear_wave_1w"] = True
+
+        payload = CandleTrajectoryExtractor.build_payload(df_1w, "BTC/USDT:USDT", "long")
+        self.assertEqual(payload["macro_context"]["regime_1w"], "cycle_top")
+
+        base_eng = JevDecisionEngine(cache_db=":memory:", mode="native", regime_1w_bear_penalty=0.0)
+        pen_eng = JevDecisionEngine(cache_db=":memory:", mode="native", regime_1w_bear_penalty=0.25)
+
+        v_base = base_eng.evaluate(payload)
+        v_pen = pen_eng.evaluate(payload)
+        self.assertEqual(v_base["decision"], "CONFIRM")
+        self.assertEqual(v_pen["decision"], "VETO")
+        self.assertLess(v_pen["confidence"], v_base["confidence"])
+        self.assertTrue(any("1W bear-wave macro penalty" in r for r in v_pen["reasons"]))
+        self.assertNotEqual(base_eng._cache_threshold_token(), pen_eng._cache_threshold_token())
+
+        # SHORT is never penalized by 1W bear wave
+        payload_short = CandleTrajectoryExtractor.build_payload(df_1w, "BTC/USDT:USDT", "short")
+        v_short_base = base_eng.evaluate(payload_short)
+        v_short_pen = pen_eng.evaluate(payload_short)
+        self.assertEqual(v_short_base["confidence"], v_short_pen["confidence"])
+
 
 class TestHunterExternalModelIdentity(unittest.TestCase):
     """Hunter cache must use immutable model identity; mutable alias + no_cache must not persist."""

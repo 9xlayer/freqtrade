@@ -25,6 +25,8 @@ class StrategySwitchConfig:
     enable_telemetry: bool = True
     default_leverage: float = 10.0
     counter_1d_stake_scale: float | None = None
+    counter_1w_stake_scale: float | None = None
+    jev_1w_bear_penalty: float = 0.0
     tag_multipliers: dict[str, float] | None = None
     risk_per_trade_pct: float | None = None
     exchange_sync_interval_secs: float = 15.0
@@ -119,6 +121,15 @@ def resolve_strategy_switches(
     counter_scale = _parse_optional_unit_float(
         cfg, env, "counter_1d_stake_scale", "COUNTER_1D_STAKE_SCALE", max_val=1.0
     )
+    counter_1w_scale = _parse_optional_unit_float(
+        cfg, env, "counter_1w_stake_scale", "COUNTER_1W_STAKE_SCALE", max_val=1.0
+    )
+    jev_1w_penalty = (
+        _parse_optional_unit_float(
+            cfg, env, "jev_1w_bear_penalty", "JEV_1W_BEAR_PENALTY", max_val=1.0
+        )
+        or 0.0
+    )
 
     raw_sync_secs = cfg.get("exchange_sync_interval_secs")
     if raw_sync_secs is None:
@@ -141,6 +152,8 @@ def resolve_strategy_switches(
         enable_telemetry=_bool_switch("enable_telemetry", "ENABLE_TELEMETRY", True),
         default_leverage=default_leverage,
         counter_1d_stake_scale=counter_scale,
+        counter_1w_stake_scale=counter_1w_scale,
+        jev_1w_bear_penalty=jev_1w_penalty,
         tag_multipliers=_parse_tag_multipliers(cfg.get("tag_multipliers")),
         risk_per_trade_pct=risk_pct,
         exchange_sync_interval_secs=sync_secs,
@@ -256,6 +269,8 @@ def build_effective_config(
             if counter_scale_override is not None
             else _pval("counter_1d_stake_scale")
         ),
+        "counter_1w_stake_scale": _pval("counter_1w_stake_scale"),
+        "jev_1w_bear_penalty": _pval("jev_1w_bear_penalty", 0.0),
         "default_leverage": _pval("default_leverage", 10.0),
         "tag_multipliers": _pval("_tag_multipliers"),
         "risk_per_trade_pct": _pval("risk_per_trade_pct"),

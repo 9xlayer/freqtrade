@@ -416,6 +416,23 @@ class TestPositionSizing(unittest.TestCase):
         )
         self.assertEqual(out_legacy, 20.0)
 
+    def test_counter_1w_scale_reduces_long_in_bear_wave_only(self):
+        from strategies.mtf_sniper.risk.position_sizing import resolve_counter_1w_scale
+
+        cycle_top_row = {"market_regime_1w": "cycle_top", "is_bear_wave_1w": 1.0}
+        bear_row = {"market_regime_1w": "bear_trending", "is_bear_wave_1w": 1.0}
+        relief_row = {"market_regime_1w": "bear_relief", "is_bear_wave_1w": 0.0}
+        bull_row = {"market_regime_1w": "bull_trending", "is_bear_wave_1w": 0.0}
+
+        # Opt-in disabled -> always 1.0
+        self.assertEqual(resolve_counter_1w_scale("long", cycle_top_row, counter_1w_scale=None), 1.0)
+        # Active -> scales LONG in cycle_top / bear_trending, preserves bull/relief/SHORT
+        self.assertEqual(resolve_counter_1w_scale("long", cycle_top_row, counter_1w_scale=0.50), 0.50)
+        self.assertEqual(resolve_counter_1w_scale("long", bear_row, counter_1w_scale=0.50), 0.50)
+        self.assertEqual(resolve_counter_1w_scale("long", relief_row, counter_1w_scale=0.50), 1.0)
+        self.assertEqual(resolve_counter_1w_scale("long", bull_row, counter_1w_scale=0.50), 1.0)
+        self.assertEqual(resolve_counter_1w_scale("short", cycle_top_row, counter_1w_scale=0.50), 1.0)
+
 
 class TestStoplossLadder(unittest.TestCase):
     def test_base_stoploss_positive_relative(self):

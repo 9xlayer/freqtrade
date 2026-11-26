@@ -15,6 +15,7 @@ class SensorType(Enum):
 
     ANOMALY = "anomaly"
     PATTERN = "pattern"
+    CONTEXT = "context"  # read-only regime/macro context providers; never trigger entry
 
 
 class MarketRegime(Enum):

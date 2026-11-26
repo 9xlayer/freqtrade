@@ -1,6 +1,13 @@
 # Progress
 
 ## What works
+- **Opt-in #2 — 1W Macro Regime Context Sensor & Continuous JEV Scoring (Nov 26, 2026)**:
+  - Added `populate_indicators_1w` + `@informative("1w")`, `SensorType.CONTEXT`, and `MarketRegimeSensor` (`signals/sensors/market_regime.py`) wired seamlessly into `SensorSuite`, vectorized `SetupComposer.compose_suite()`, and `CandidateBuilder.process()` with 100% fast/event parity.
+  - Integrated `regime_1w` into `CandleTrajectoryExtractor.extract_macro_context()` + `JevDecisionEngine._evaluate_native_sequence()` (`jev_1w_bear_penalty`, default `0.0`) and `resolve_counter_1w_scale()` (`counter_1w_stake_scale`, default `None`) in `core/config_resolve.py` & `risk/position_sizing.py`.
+  - Kept defaults off (`0.0` / `None`) for 100% parity (`5Y: 334/334`, `7Y fixed: 456/456`); verified `jev_1w_bear_penalty=0.35` lifts 7Y Fixed-100 (`435` trades, **55.9% WR**, **PF 1.84**, all 3 walk-forward windows W1/W2/W3 up) and lowers 7Y `Risk 4% + B65=0.50x` Max Rel DD from `24.77%` to **`22.82%`** (`+17,027.35 USDT`).
+  - Gate passed: **0 violations**, **466 passed, 1 skipped**.
+- **Opt-in #1 (`risk_per_trade_pct`, `61b36b2b6`) & Docker Base Fix (`23bb98502`)**:
+  - Strict equity-risk position cap (`equity * risk / |stoploss|`, enforced ahead of tag multipliers & rejecting below `min_stake`; default `None`) and switched `Dockerfile.custom` base image to `freqtradeorg/freqtrade:stable`.
 - **Single-Truth Unified Signal Pipeline (Nov 25, 2026)**:
   - Removed legacy `_candidates_from_sniper_masks` fast path from `execution/entry_pipeline.py`; unified execution through `SensorSuite.live(strat, include_waterfall=...) -> SetupComposer.compose_suite() -> SUBSYSTEM_REGISTRY Engine`.
   - Added `market/data_guards.py`, vectorized `BaseSensor.scan_mask()` / `scan_mask_features()`, and `WaterfallMomentumSensor` (`waterfall_momentum`, registered in `SETUP_WATERFALL_SHORT` -> `WaterfallShortPolicy`).

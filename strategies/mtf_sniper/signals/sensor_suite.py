@@ -12,6 +12,7 @@ from strategies.mtf_sniper.signals.base_sensor import BaseSensor
 from strategies.mtf_sniper.signals.composite_catalog import atomic_anomaly_sensors
 from strategies.mtf_sniper.signals.sensors import (
     A80PlusSensor,
+    MarketRegimeSensor,
     SwingBreakoutSensor,
     WaterfallMomentumSensor,
 )
@@ -39,6 +40,7 @@ def live_sensors(
     sensors: list[BaseSensor] = [
         *short_sniper_part_sensors(strategy),
         *long_sniper_part_sensors(strategy),
+        MarketRegimeSensor(),
     ]
     if include_waterfall:
         sensors.append(WaterfallMomentumSensor())
@@ -52,6 +54,7 @@ def full_sensors() -> list[BaseSensor]:
         WaterfallMomentumSensor(),
         A80PlusSensor(),
         SwingBreakoutSensor(),
+        MarketRegimeSensor(),
     ]
 
 

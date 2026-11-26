@@ -15,7 +15,7 @@ class TriggerEvent:
 
     sensor_name: str
     sensor_type: SensorType
-    side: TradeSide
+    side: TradeSide | None
     pair: str
     timestamp: datetime
     candle_index: int

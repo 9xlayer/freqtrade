@@ -477,6 +477,20 @@ class CandleTrajectoryExtractor:
             float(last.get("rel_vol", 1.0)) if not pd.isna(last.get("rel_vol")) else 1.0
         )
 
+        # 1W macro regime context (from MarketRegimeSensor / @informative("1w"))
+        raw_regime_1w = last.get("market_regime_1w")
+        regime_1w = (
+            raw_regime_1w
+            if isinstance(raw_regime_1w, str) and raw_regime_1w
+            else "unknown"
+        )
+        macdhist_1w = (
+            float(last.get("macdhist_1w", 0.0)) if not pd.isna(last.get("macdhist_1w")) else 0.0
+        )
+        adx_1w = float(last.get("adx_1w", 0.0)) if not pd.isna(last.get("adx_1w")) else 0.0
+        rsi_1w = float(last.get("rsi_1w", 50.0)) if not pd.isna(last.get("rsi_1w")) else 50.0
+        is_bear_wave_1w = bool(last.get("is_bear_wave_1w", False))
+
         return {
             "current_price": c,
             "ema_50_1h_dist_pct": ema_50_1h_dist,
@@ -490,6 +504,11 @@ class CandleTrajectoryExtractor:
             "short_score": short_score,
             "atr_percentile": atr_pct,
             "rel_vol": rel_vol,
+            "regime_1w": regime_1w,
+            "macdhist_1w": macdhist_1w,
+            "adx_1w": adx_1w,
+            "rsi_1w": rsi_1w,
+            "is_bear_wave_1w": is_bear_wave_1w,
         }
 
     @classmethod
@@ -575,6 +594,7 @@ class JevDecisionEngine:
         cache_db: str = "user_data/jev_hunter_cache.sqlite",
         mode: str | None = None,
         fail_policy: str | None = None,
+        regime_1w_bear_penalty: float | None = None,
     ):
         self.cache_db = cache_db
         # Parse .env into a local dict — never mutate process os.environ.
@@ -596,6 +616,14 @@ class JevDecisionEngine:
         self.fail_policy = (fail_policy or _cfg("JEV_FAIL_POLICY", "reject")).lower()
         self.api_url = api_url or _cfg("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
         self.api_key = api_key or _cfg("JEV_API_KEY", "") or None
+        raw_1w_pen = (
+            regime_1w_bear_penalty
+            if regime_1w_bear_penalty is not None
+            else _parse_unit_interval(_cfg("JEV_1W_BEAR_PENALTY", "0.0"), default=0.0)
+        )
+        self.regime_1w_bear_penalty = (
+            max(0.0, min(1.0, float(raw_1w_pen))) if raw_1w_pen is not None else 0.0
+        )
         self.engine_version = ENGINE_VERSION
         self.external_model_version = _cfg("JEV_DECISION_MODEL_VERSION", MODEL_VERSION_EXTERNAL)
         self.prompt_version = (
@@ -717,14 +745,16 @@ class JevDecisionEngine:
         return MODEL_VERSION_NATIVE
 
     def _cache_threshold_token(self) -> str:
+        w1_pen = getattr(self, "regime_1w_bear_penalty", 0.0)
+        suffix = f"_w1p{w1_pen:.2f}" if w1_pen > 0.0 else ""
         if self.mode != "external":
-            return "native"
+            return f"native{suffix}"
         threshold = _external_confirm_threshold()
         if threshold is None:
             return "invalid"
         w_ai = _external_weight_ai()
         cp = _external_choppy_penalty()
-        return f"{threshold:.4f}_w{w_ai:.2f}_cp{cp:.2f}_runway"
+        return f"{threshold:.4f}_w{w_ai:.2f}_cp{cp:.2f}_runway{suffix}"
 
     def _lookup_raw_external(self, p_hash: str) -> dict[str, Any] | None:
         """Look up previously cached raw external AI response for this payload and prompt version."""
@@ -1312,6 +1342,18 @@ class JevDecisionEngine:
             elif dist_ema50_1h < 0.0 and rsi_1h < 50.0:
                 confidence -= 0.10
                 reasons.append("Counter-trend trap on long (below 1H EMA50)")
+
+            regime_1w = macro.get("regime_1w") or ""
+            is_bear_wave_1w = bool(macro.get("is_bear_wave_1w", False)) or regime_1w in (
+                "cycle_top",
+                "bear_trending",
+            )
+            w1_penalty = getattr(self, "regime_1w_bear_penalty", 0.0)
+            if is_bear_wave_1w and w1_penalty > 0.0:
+                confidence -= w1_penalty
+                reasons.append(
+                    f"1W bear-wave macro penalty ({regime_1w or 'bear_wave'}, -{w1_penalty:.2f})"
+                )
 
         confidence = max(0.0, min(1.0, round(confidence, 2)))
 

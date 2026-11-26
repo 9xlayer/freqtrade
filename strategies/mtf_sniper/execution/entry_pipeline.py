@@ -357,6 +357,9 @@ def apply_entry_pipeline(
             "policy_score": float(pol.score),
             "quality_grade": pol.quality_grade,
             "signal_source": str((c.raw_features or {}).get("signal_source") or ""),
+            "regime_1w": str((c.raw_features or {}).get("regime_1w") or ""),
+            "is_bear_wave_1w": bool((c.raw_features or {}).get("is_bear_wave_1w", False)),
+            "context_sensors": list((c.raw_features or {}).get("context_sensors") or []),
         }
         for c, pol in surviving_accepted
     ]

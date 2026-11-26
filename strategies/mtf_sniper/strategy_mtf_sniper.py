@@ -47,6 +47,8 @@ class StrategyMTFSniper(IStrategy):
     default_leverage: float = 10.0
     _tag_multipliers: dict[str, float] | None = None
     _counter_1d_scale_override: float | None = None
+    counter_1w_stake_scale: float | None = None
+    jev_1w_bear_penalty: float = 0.0
     exchange_sync_interval_secs: float = 15.0
     _last_exchange_sync_ts: float | None = None
     jev_fail_policy: str = "allow"
@@ -163,6 +165,8 @@ class StrategyMTFSniper(IStrategy):
         self.default_leverage = switches.default_leverage
         self._tag_multipliers = switches.tag_multipliers
         self.risk_per_trade_pct = switches.risk_per_trade_pct
+        self.counter_1w_stake_scale = switches.counter_1w_stake_scale
+        self.jev_1w_bear_penalty = switches.jev_1w_bear_penalty
         self.exchange_sync_interval_secs = switches.exchange_sync_interval_secs
         self.custom_pair_params = merge_pair_overrides(
             type(self).custom_pair_params, strat_cfg
@@ -371,13 +375,20 @@ class StrategyMTFSniper(IStrategy):
         counter_scale = 1.0
         if enable_dynamic and getattr(self, "dp", None):
             from strategies.mtf_sniper.execution.exit_policy import resolve_market_row
-            from strategies.mtf_sniper.risk.position_sizing import resolve_counter_1d_scale
+            from strategies.mtf_sniper.risk.position_sizing import (
+                resolve_counter_1d_scale,
+                resolve_counter_1w_scale,
+            )
 
             df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             row = resolve_market_row(df, current_time)
-            counter_scale = resolve_counter_1d_scale(
+            scale_1d = resolve_counter_1d_scale(
                 side, row, counter_scale=self._resolve_counter_1d_stake_scale()
             )
+            scale_1w = resolve_counter_1w_scale(
+                side, row, counter_1w_scale=getattr(self, "counter_1w_stake_scale", None)
+            )
+            counter_scale = scale_1d * scale_1w
         pair_sl = float(self._get_pair_params(pair).get("stoploss", self.stoploss) or self.stoploss)
         risk_pct = getattr(self, "risk_per_trade_pct", None)
         stake = self._get_risk_engine().get_stake_amount(
@@ -501,6 +512,10 @@ class StrategyMTFSniper(IStrategy):
     )
     filter_pdh_ceiling = BooleanParameter(default=True, space="buy", optimize=False)
 
+    @informative("1w")
+    def populate_indicators_1w(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        return market_indicators.populate_indicators_1w(dataframe)
+
     @informative("1d")
     def populate_indicators_1d(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         return market_indicators.populate_indicators_1d(dataframe)
@@ -561,6 +576,7 @@ class StrategyMTFSniper(IStrategy):
                 force_native=force_native,
                 mode=mode,
                 fail_policy=fail_policy,
+                regime_1w_bear_penalty=getattr(self, "jev_1w_bear_penalty", 0.0),
             )
         elif getattr(self._decision_adapter, "fail_policy", None) != fail_policy:
             self._decision_adapter.fail_policy = fail_policy

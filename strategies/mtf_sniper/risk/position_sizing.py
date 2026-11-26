@@ -82,6 +82,28 @@ def resolve_counter_1d_scale(
     return 1.0
 
 
+def resolve_counter_1w_scale(
+    side: str,
+    row: Mapping[str, Any] | None,
+    *,
+    counter_1w_scale: float | None = None,
+) -> float:
+    """Scale down Long stake during weekly bear waves (cycle_top / bear_trending)."""
+    if counter_1w_scale is None or row is None:
+        return 1.0
+    side_l = (side or "").strip().lower()
+    if side_l != "long":
+        return 1.0
+    scale = normalize_counter_1d_scale(counter_1w_scale, default=1.0)
+    regime_1w = str(row.get("market_regime_1w") or "").strip().lower()
+    if regime_1w in ("cycle_top", "bear_trending"):
+        return scale
+    bear_wave = _finite_or_none(row, "is_bear_wave_1w")
+    if bear_wave == 1.0:
+        return scale
+    return 1.0
+
+
 def resolve_leverage(max_leverage: float | None, target: float = DEFAULT_LEVERAGE) -> float:
     if max_leverage:
         return min(target, float(max_leverage))

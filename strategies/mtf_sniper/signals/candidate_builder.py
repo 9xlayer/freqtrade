@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TradeCandidate, TriggerEvent
@@ -76,8 +77,17 @@ class CandidateBuilder:
 
         for pair, candle_index in ordered_keys:
             group = grouped[(pair, candle_index)]
-            long_events = [e for e in group if e.side == TradeSide.LONG]
-            short_events = [e for e in group if e.side == TradeSide.SHORT]
+            context_events = [
+                e for e in group if e.sensor_type == SensorType.CONTEXT or e.side is None
+            ]
+            dir_events = [
+                e for e in group if e.sensor_type != SensorType.CONTEXT and e.side is not None
+            ]
+            if not dir_events:
+                continue
+
+            long_events = [e for e in dir_events if e.side == TradeSide.LONG]
+            short_events = [e for e in dir_events if e.side == TradeSide.SHORT]
 
             side_groups = self._resolve_side_groups(
                 long_events, short_events, pair, candle_index, rejected
@@ -86,6 +96,9 @@ class CandidateBuilder:
                 candidate = self._merge_same_side(side_events)
                 if candidate is None:
                     continue
+
+                if context_events:
+                    candidate = self._attach_context_features(candidate, context_events)
 
                 cooldown_key = (candidate.pair, candidate.side)
                 cooldown_bars = self.cooldown_for(candidate.side)
@@ -162,22 +175,37 @@ class CandidateBuilder:
         """Alias for process — accepts any iterable of events."""
         return self.process(list(events), rejected=rejected)
 
+    def _attach_context_features(
+        self, candidate: TradeCandidate, context_events: Sequence[TriggerEvent]
+    ) -> TradeCandidate:
+        feats = dict(candidate.raw_features)
+        ctx_names: list[str] = list(feats.get("context_sensors") or [])
+        for ev in context_events:
+            feats.update(ev.raw_metrics)
+            if ev.sensor_name not in ctx_names:
+                ctx_names.append(ev.sensor_name)
+        feats["context_sensors"] = ctx_names
+        return replace(candidate, raw_features=feats)
+
     def _merge_same_side(self, events: Sequence[TriggerEvent]) -> TradeCandidate | None:
         if not events:
             return None
 
-        # Deduplicate by sensor_name while preserving first-seen order
         unique: dict[str, TriggerEvent] = {}
         for event in events:
-            if event.sensor_name not in unique:
+            if event.sensor_name not in unique and event.side is not None:
                 unique[event.sensor_name] = event
         ordered = list(unique.values())
+        if not ordered:
+            return None
 
         ranked = sorted(
             ordered,
             key=lambda e: (_SENSOR_PRIORITY.get(e.sensor_type, 99), e.sensor_name),
         )
         primary = ranked[0]
+        if primary.side is None:
+            return None
         secondary = [e.sensor_name for e in ranked[1:]]
 
         # Merge raw metrics (later sensors overwrite colliding keys)

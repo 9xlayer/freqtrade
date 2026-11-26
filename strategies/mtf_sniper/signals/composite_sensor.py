@@ -90,6 +90,8 @@ class CompositeSensor(BaseSensor):
 
         for child in self._children:
             for event in child.scan(dataframe, pair, candle_index=candle_index):
+                if event.side is None:
+                    continue
                 if self._side_filter is not None and event.side != self._side_filter:
                     continue
                 key = (event.candle_index, event.side)

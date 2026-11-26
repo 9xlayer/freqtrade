@@ -13,6 +13,7 @@ from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
 from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
 from strategies.mtf_sniper.signals.sensors import (
     A80PlusSensor,
+    MarketRegimeSensor,
     SwingBreakoutSensor,
     VolatilityExpansionSensor,
     VolumeSurgeSensor,
@@ -326,6 +327,48 @@ class TestWaterfallMomentumSensor(unittest.TestCase):
         self.assertEqual([e.candle_index for e in events], [110])
         self.assertEqual(events[0].side, TradeSide.SHORT)
         self.assertEqual(events[0].sensor_name, "waterfall_momentum")
+
+
+class TestMarketRegimeSensor(unittest.TestCase):
+    def test_absent_or_unknown_1w_returns_empty_and_false_mask(self):
+        df = _base_df(130)
+        sensor = MarketRegimeSensor()
+        self.assertFalse(sensor.scan_mask(df, "BTC/USDT:USDT").any())
+        self.assertEqual(sensor.scan(df, "BTC/USDT:USDT"), [])
+
+        df["market_regime_1w"] = "unknown"
+        self.assertFalse(sensor.scan_mask(df, "BTC/USDT:USDT").any())
+        self.assertEqual(sensor.scan(df, "BTC/USDT:USDT"), [])
+
+    def test_context_event_enriches_directional_without_standalone_candidate(self):
+        df = _base_df(130)
+        df["market_regime_1w"] = "cycle_top"
+        df["macdhist_1w"] = -250.0
+        df["adx_1w"] = 42.0
+        df["rsi_1w"] = 58.0
+        df["is_bear_wave_1w"] = True
+        df["is_bull_wave_1w"] = False
+
+        sensor = MarketRegimeSensor()
+        ctx_events = sensor.scan(df, "BTC/USDT:USDT", candle_index=110)
+        self.assertEqual(len(ctx_events), 1)
+        self.assertEqual(ctx_events[0].sensor_type, SensorType.CONTEXT)
+        self.assertIsNone(ctx_events[0].side)
+        self.assertEqual(ctx_events[0].raw_metrics["regime_1w"], "cycle_top")
+
+        builder = CandidateBuilder(cooldown_bars=0)
+        # Context alone produces zero trade candidates
+        self.assertEqual(builder.process(ctx_events), [])
+
+        # Context paired with directional event enriches raw_features cleanly
+        dir_event = _event("short_structure", SensorType.PATTERN, TradeSide.SHORT, 110)
+        cands = builder.process([*ctx_events, dir_event])
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0].side, TradeSide.SHORT)
+        self.assertEqual(cands[0].confluence_count, 1)
+        self.assertEqual(cands[0].raw_features["regime_1w"], "cycle_top")
+        self.assertTrue(cands[0].raw_features["is_bear_wave_1w"])
+        self.assertEqual(cands[0].raw_features["context_sensors"], ["market_regime"])
 
 
 if __name__ == "__main__":

@@ -436,6 +436,42 @@ class TestSetupComposerComposeSuiteParity(unittest.TestCase):
         self.assertEqual([e.candle_index for e in events_out], [120])
         self.assertEqual([c.candle_index for c in cands], [120])
 
+    def test_context_sensor_parity_between_vectorized_and_event_paths(self):
+        from strategies.mtf_sniper.directional.setup_composer import SetupComposer
+
+        strat = _make_strategy(enable_waterfall=False)
+        df = _full_df(160)
+        df["market_regime_1w"] = "cycle_top"
+        df["macdhist_1w"] = -310.0
+        df["adx_1w"] = 48.0
+        df["rsi_1w"] = 56.0
+        df["is_bear_wave_1w"] = True
+        df["is_bull_wave_1w"] = False
+        _force_long_sniper_bar(df, 120)
+
+        pipe = EntryPipeline.live(strat)
+        comp = [
+            c
+            for c in pipe.setup_composer.compose_suite(pipe.sensor_suite, df, "BTC/USDT:USDT")
+            if c.candle_index == 120
+        ]
+        events = pipe.sensor_suite.scan(df, "BTC/USDT:USDT")
+        pipe.candidate_builder.reset()
+        ev = [
+            c
+            for c in SetupComposer(recipes=pipe.setup_composer._recipes).compose(
+                pipe.candidate_builder.process(events)
+            )
+            if c.candle_index == 120
+        ]
+        self.assertEqual(len(comp), 1)
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(_semantic_view(comp[0]), _semantic_view(ev[0]))
+        for key in ("regime_1w", "is_bear_wave_1w", "macdhist_1w", "context_sensors"):
+            self.assertEqual(comp[0].raw_features.get(key), ev[0].raw_features.get(key))
+        self.assertEqual(comp[0].raw_features.get("regime_1w"), "cycle_top")
+        self.assertEqual(comp[0].confluence_count, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

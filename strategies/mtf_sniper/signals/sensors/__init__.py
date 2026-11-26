@@ -6,6 +6,7 @@ from strategies.mtf_sniper.signals.sensors.anomaly_waterfall import (
     WaterfallDropSensor,
     WaterfallMomentumSensor,
 )
+from strategies.mtf_sniper.signals.sensors.market_regime import MarketRegimeSensor
 from strategies.mtf_sniper.signals.sensors.pattern_a80_confluence import A80PlusSensor
 from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
     LegacySniperPartSensor,
@@ -20,6 +21,7 @@ __all__ = [
     "VolatilityExpansionSensor",
     "WaterfallDropSensor",
     "WaterfallMomentumSensor",
+    "MarketRegimeSensor",
     "LegacySniperPartSensor",
     "short_sniper_part_sensors",
     "long_sniper_part_sensors",

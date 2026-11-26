@@ -177,6 +177,23 @@ class TestConfigResolve(unittest.TestCase):
         fp_risk4 = build_effective_config(_fake_strategy(risk_per_trade_pct=0.04)).fingerprint()
         self.assertNotEqual(fp_default, fp_risk4)
 
+    def test_1w_regime_knobs_are_opt_in_and_fingerprinted(self) -> None:
+        base_sw = resolve_strategy_switches({})
+        self.assertIsNone(base_sw.counter_1w_stake_scale)
+        self.assertEqual(base_sw.jev_1w_bear_penalty, 0.0)
+
+        custom_sw = resolve_strategy_switches(
+            {"counter_1w_stake_scale": 0.50, "jev_1w_bear_penalty": 0.25}
+        )
+        self.assertEqual(custom_sw.counter_1w_stake_scale, 0.50)
+        self.assertEqual(custom_sw.jev_1w_bear_penalty, 0.25)
+
+        fp0 = build_effective_config(_fake_strategy()).fingerprint()
+        fp1 = build_effective_config(
+            _fake_strategy(counter_1w_stake_scale=0.50, jev_1w_bear_penalty=0.25)
+        ).fingerprint()
+        self.assertNotEqual(fp0, fp1)
+
 
 if __name__ == "__main__":
     unittest.main()
