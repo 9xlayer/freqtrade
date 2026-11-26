@@ -729,39 +729,6 @@ class StrategyMTFSniper(IStrategy):
 
         return None
 
-    @staticmethod
-    def _dataframe_position(df, label) -> int | None:
-        """Absolute row position in ``df`` for ``label`` — never hits-relative.
-
-        Prefer ``get_loc`` so duplicate labels resolve to the **last** occurrence
-        (matching ``hits.index[-1]``). ``get_indexer`` alone returns the first hit.
-        """
-        import numpy as np
-
-        try:
-            loc = df.index.get_loc(label)
-            if isinstance(loc, (int, np.integer)):
-                return int(loc)
-            if isinstance(loc, slice):
-                if loc.stop is None:
-                    return int(loc.start) if loc.start is not None else None
-                return int(loc.stop - 1)
-            arr = np.asarray(loc)
-            if arr.dtype == bool:
-                nz = np.flatnonzero(arr)
-                return int(nz[-1]) if len(nz) else None
-            if arr.size:
-                return int(arr.ravel()[-1])
-            return None
-        except (KeyError, TypeError, IndexError):
-            try:
-                indexer = df.index.get_indexer([label])
-                if len(indexer) and int(indexer[0]) >= 0:
-                    return int(indexer[0])
-            except (KeyError, TypeError, IndexError) as err:
-                logger.debug(f"Label indexing fallback failed for {label}: {err}")
-        return None
-
     def _persist_candidate_id(self, trade: Trade, candidate_id: str | None) -> bool:
         """Write + re-read verify. Returns True only when restart-safe persist succeeded."""
         from strategies.mtf_sniper.core.candidate_id import (

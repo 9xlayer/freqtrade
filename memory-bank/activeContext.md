@@ -1,6 +1,19 @@
 # Active Context
 
 ## Current focus
+**Hot-Path Optimizations & Dead-Sensor Cleanup (`v4.7.0-1w-regime`, Nov 26, 2026)**:
+- **Hot-path performance optimizations (zero strategy/backtest parity drift):**
+  - `signals/sensors/anomaly_waterfall.py`: Cached `WaterfallMomentumSensor._compute_triggers()` on `dataframe.attrs["_mtf_waterfall_triggers_v1"]` so `SetupComposer.compose_suite` avoids running `MomentumRadar.find_candidates()` twice per DataFrame; replaced per-hit `dataframe.iloc[i]` lookups with direct `short_score` NumPy array indexing.
+  - `signals/sensors/market_regime.py`: Vectorized column slicing in `MarketRegimeSensor.scan_mask_features()` (`.to_numpy()` once per DataFrame) instead of per-hit `dataframe.iloc[i]`.
+  - `intelligence/jev_decision.py`: Sliced only needed trajectory columns in `CandleTrajectoryExtractor.extract_sequence()` before `.copy().ffill().bfill()` and iterated NumPy arrays via `zip(..., strict=True)` instead of `iterrows()`; skipped SQLite initialization and disk I/O in `JevDecisionEngine` when `mode in ("native", "backtest")` unless `use_disk_cache=True` (`mode="external"` keeps SQLite cache active by default).
+  - `execution/entry_pipeline.py`: Filled `long_arr` / `short_arr` / `tag_arr` directly in NumPy in `EntryPipeline.run()` instead of per-hit `Series.iloc[pos]` mutations; switched `__init__` default fallback from `SensorSuite.hunter()` to `SensorSuite.full()`.
+- **Dead sensor cleanup & Docker context reduction:**
+  - Deleted unused experimental modules (`anomaly_volume_surge.py`, `anomaly_volatility.py`, `pattern_a80_confluence.py`, `pattern_swing_breakout.py`, `composite_catalog.py`), removed `WaterfallDropSensor` + `SensorSuite.hunter()` / `experimental()`, cleaned `signals/sensors/__init__.py` & unused `StrategyMTFSniper._dataframe_position()`, and updated unit tests (preserving `CompositeSensor` & SQLite concurrency suite with `use_disk_cache=True`).
+  - Excluded `.gitnexus/` (232 MB), `reports/`, `.agents/`, `.claude/`, `.cursor/`, and `memory-bank/` in `.dockerignore`.
+- **Verification (post-optimization):**
+  - `.venv/bin/python scripts/lint_guardrails.py --verify-all`: **0 violations**, **402 passed, 0 skipped** (`4.23s`).
+  - Exact 7Y Fixed-100 Backtest Parity (`20200101–20261124`, `JEV_MODE=native`, `MTF_RUNTIME_MODE=deterministic`, `--stake-amount 100`, `--cache none`, `4:29.27 total` wall / `~11.4s` data+entry signal generation): **435/435 identical trades** (`254L/181S`, `243W/192L`, **55.9% WR**), **+2,336.481 USDT (+233.65%)**, **PF 1.84**, **Wallet Max DD 13.13% (`185.409 USDT`)**, Sharpe `1.20`, Calmar `13.52`.
+
 **Dormant JevHunter Stack Removed (`v4.7.0-1w-regime` cleanup, Nov 26, 2026)**:
 - **Removed unused Hunter escalation modules (`~2,533` lines code + tests):** Deleted `intelligence/jev_entry_hunter.py`, `intelligence/hunter_escalation.py`, `intelligence/hunter_adapter.py`, `intelligence/post_hunter_gates.py`, `directional/long/hunter_gates.py`, `directional/short/hunter_gates.py`, `directional/policy_escalation.py`, `scoring/`, and 4 Hunter unit test files (plus migrated `TestRealSqliteConcurrency` in `test_jev_architecture.py` onto `JevDecisionEngine`).
 - **Preserved live edge & configs:** Kept `MomentumRadar` (`signals/momentum_radar.py`) driving live `WaterfallMomentumSensor`, kept `ShortSetup.WATERFALL_COLLAPSE` (`jev_hunter_waterfall_collapse`) & `JevDecisionEngine` (`user_data/jev_hunter_cache.sqlite` default path) untouched, moved Waterfall threshold defaults (`0.285`, `0.35`, `0.035`) cleanly into `WaterfallFilterConfig` / `ShortPolicyConfig`, and removed stale `enable_jev_hunter` / `enable_hunter_long` runtime switches from Python & Docker Compose while tolerating legacy host JSON keys harmlessly.

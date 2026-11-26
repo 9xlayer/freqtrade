@@ -45,34 +45,42 @@ class MarketRegimeSensor(BaseSensor):
         return self._ready_mask(dataframe)
 
     @staticmethod
-    def _row_metrics(row: pd.Series) -> dict[str, Any]:
-        raw_regime = row.get("market_regime_1w")
-        regime = (
-            REGIME_UNKNOWN
-            if raw_regime is None or pd.isna(raw_regime)
-            else raw_regime if isinstance(raw_regime, str) else f"{raw_regime}"
-        )
-        raw_mh = row.get("macdhist_1w")
-        raw_adx = row.get("adx_1w")
-        raw_rsi = row.get("rsi_1w")
-        return {
-            "regime_1w": regime,
-            "macdhist_1w": float(raw_mh) if raw_mh is not None and pd.notna(raw_mh) else 0.0,
-            "adx_1w": float(raw_adx) if raw_adx is not None and pd.notna(raw_adx) else 0.0,
-            "rsi_1w": float(raw_rsi) if raw_rsi is not None and pd.notna(raw_rsi) else 50.0,
-            "is_bear_wave_1w": bool(row.get("is_bear_wave_1w", False)),
-            "is_bull_wave_1w": bool(row.get("is_bull_wave_1w", False)),
-        }
+    def _scalar_float(arr: np.ndarray | None, idx: int, default: float) -> float:
+        if arr is None:
+            return default
+        val = arr[idx]
+        return float(val) if val is not None and pd.notna(val) else default
 
     def scan_mask_features(
         self, dataframe: pd.DataFrame, indices: np.ndarray
     ) -> dict[int, dict[str, Any]]:
-        if "market_regime_1w" not in dataframe.columns:
+        if "market_regime_1w" not in dataframe.columns or len(indices) == 0:
             return {}
+        cols = dataframe.columns
+        reg_arr = dataframe["market_regime_1w"].to_numpy()
+        mh_arr = dataframe["macdhist_1w"].to_numpy() if "macdhist_1w" in cols else None
+        adx_arr = dataframe["adx_1w"].to_numpy() if "adx_1w" in cols else None
+        rsi_arr = dataframe["rsi_1w"].to_numpy() if "rsi_1w" in cols else None
+        bear_arr = dataframe["is_bear_wave_1w"].to_numpy() if "is_bear_wave_1w" in cols else None
+        bull_arr = dataframe["is_bull_wave_1w"].to_numpy() if "is_bull_wave_1w" in cols else None
+
         out: dict[int, dict[str, Any]] = {}
         for idx in indices:
             i = int(idx)
-            out[i] = self._row_metrics(dataframe.iloc[i])
+            raw_regime = reg_arr[i]
+            regime = (
+                REGIME_UNKNOWN
+                if raw_regime is None or pd.isna(raw_regime)
+                else raw_regime if isinstance(raw_regime, str) else f"{raw_regime}"
+            )
+            out[i] = {
+                "regime_1w": regime,
+                "macdhist_1w": self._scalar_float(mh_arr, i, 0.0),
+                "adx_1w": self._scalar_float(adx_arr, i, 0.0),
+                "rsi_1w": self._scalar_float(rsi_arr, i, 50.0),
+                "is_bear_wave_1w": bool(bear_arr[i]) if bear_arr is not None else False,
+                "is_bull_wave_1w": bool(bull_arr[i]) if bull_arr is not None else False,
+            }
         return out
 
     def scan(

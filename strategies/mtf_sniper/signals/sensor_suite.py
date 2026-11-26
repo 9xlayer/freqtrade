@@ -9,22 +9,14 @@ import pandas as pd
 
 from strategies.mtf_sniper.core.contracts import TriggerEvent
 from strategies.mtf_sniper.signals.base_sensor import BaseSensor
-from strategies.mtf_sniper.signals.composite_catalog import atomic_anomaly_sensors
 from strategies.mtf_sniper.signals.sensors import (
-    A80PlusSensor,
     MarketRegimeSensor,
-    SwingBreakoutSensor,
     WaterfallMomentumSensor,
 )
 from strategies.mtf_sniper.signals.sensors.pattern_sniper_parts import (
     long_sniper_part_sensors,
     short_sniper_part_sensors,
 )
-
-
-def hunter_sensors() -> list[BaseSensor]:
-    """Anomaly wakeups only (atomic)."""
-    return atomic_anomaly_sensors()
 
 
 def live_sensors(
@@ -48,13 +40,10 @@ def live_sensors(
 
 
 def full_sensors() -> list[BaseSensor]:
-    """Diagnostics + registry sensor catalog."""
+    """Registry/diagnostic sensor catalog paired with live sniper parts."""
     return [
-        *atomic_anomaly_sensors(),
-        WaterfallMomentumSensor(),
-        A80PlusSensor(),
-        SwingBreakoutSensor(),
         MarketRegimeSensor(),
+        WaterfallMomentumSensor(),
     ]
 
 
@@ -66,25 +55,15 @@ class SensorSuite:
     """
 
     def __init__(self, sensors: Sequence[BaseSensor] | None = None) -> None:
-        self._sensors: list[BaseSensor] = list(sensors) if sensors is not None else hunter_sensors()
+        self._sensors: list[BaseSensor] = list(sensors) if sensors is not None else full_sensors()
 
     @classmethod
     def live(cls, strategy: Any, *, include_waterfall: bool = False) -> SensorSuite:
         return cls(live_sensors(strategy, include_waterfall=include_waterfall))
 
     @classmethod
-    def hunter(cls) -> SensorSuite:
-        return cls(hunter_sensors())
-
-    @classmethod
     def full(cls) -> SensorSuite:
         return cls(full_sensors())
-
-    @classmethod
-    def experimental(cls, strategy: Any | None = None) -> SensorSuite:
-        if strategy is not None:
-            return cls.live(strategy)
-        return cls.hunter()
 
     @classmethod
     def from_sensors(cls, *sensors: BaseSensor) -> SensorSuite:

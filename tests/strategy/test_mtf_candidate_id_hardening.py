@@ -197,32 +197,6 @@ class TestDataFrameFallbackDuplicateIndex(unittest.TestCase):
         self.assertFalse(cid.endswith("_3"), cid)
 
 
-class TestDataframePosition(unittest.TestCase):
-    def test_range_index(self):
-        df = pd.DataFrame({"v": [10, 20, 30]})  # RangeIndex 0,1,2
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, 1), 1)
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, 2), 2)
-
-    def test_datetime_index(self):
-        idx = pd.date_range("2024-01-01", periods=5, freq="15min", tz="UTC")
-        df = pd.DataFrame({"v": range(5)}, index=idx)
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, idx[3]), 3)
-
-    def test_non_contiguous_index(self):
-        df = pd.DataFrame({"v": [1, 2, 3, 4]}, index=[0, 2, 5, 9])
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, 5), 2)
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, 9), 3)
-
-    def test_duplicate_labels_returns_last(self):
-        df = pd.DataFrame({"v": [1, 2, 3, 4]}, index=[1, 2, 2, 3])
-        # Last occurrence of label 2 is row position 2
-        self.assertEqual(StrategyMTFSniper._dataframe_position(df, 2), 2)
-
-    def test_missing_label_returns_none(self):
-        df = pd.DataFrame({"v": [1, 2]}, index=[10, 20])
-        self.assertIsNone(StrategyMTFSniper._dataframe_position(df, 99))
-
-
 class TestFreqtradePersistenceCorrelation(unittest.TestCase):
     """Use LocalTrade + CustomDataWrapper (Freqtrade in-memory persistence)."""
 

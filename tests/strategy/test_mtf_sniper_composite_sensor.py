@@ -8,7 +8,6 @@ import pandas as pd
 
 from strategies.mtf_sniper.core.enums import SensorType, TradeSide
 from strategies.mtf_sniper.signals.base_sensor import BaseSensor
-from strategies.mtf_sniper.signals.composite_catalog import example_hunter_strict_short
 from strategies.mtf_sniper.signals.composite_sensor import (
     CombineMode,
     CompositeSensor,
@@ -131,7 +130,11 @@ class TestCompositeSensor(unittest.TestCase):
         self.assertTrue(
             is_legacy_sniper_pass(
                 "setup:sniper_short",
-                {"setup_complete": True, "setup_name": "setup:sniper_short", "legacy_sniper": "short"},
+                {
+                    "setup_complete": True,
+                    "setup_name": "setup:sniper_short",
+                    "legacy_sniper": "short",
+                },
                 "short",
             )
         )
@@ -157,11 +160,6 @@ class TestCompositeSensor(unittest.TestCase):
                 "short",
             )
         )
-
-    def test_example_catalog_builds_without_editing_atomics(self):
-        sensor = example_hunter_strict_short()
-        self.assertEqual(sensor.name, "composite_hunter_strict_short")
-        self.assertEqual(len(sensor.children), 2)
 
 
 if __name__ == "__main__":

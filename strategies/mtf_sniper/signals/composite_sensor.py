@@ -33,8 +33,8 @@ class CompositeSensor(BaseSensor):
     Example::
 
         CompositeSensor(
-            name="hunter_strict_short",
-            children=[VolumeSurgeSensor(), WaterfallDropSensor()],
+            name="strict_waterfall",
+            children=[MarketRegimeSensor(), WaterfallMomentumSensor()],
             mode=CombineMode.ALL,
             side=TradeSide.SHORT,
         )

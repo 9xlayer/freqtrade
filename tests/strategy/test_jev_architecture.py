@@ -236,7 +236,9 @@ class TestJevDecisionEngine(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = str(Path(self.temp_dir) / "test_decision.sqlite")
-        self.engine = JevDecisionEngine(cache_db=self.db_path, mode="native")
+        self.engine = JevDecisionEngine(
+            cache_db=self.db_path, mode="native", use_disk_cache=True
+        )
 
         dates = pd.date_range("2026-01-01", periods=32, freq="15min")
         self.df_32 = pd.DataFrame({
@@ -314,7 +316,9 @@ class TestJevDecisionEngine(unittest.TestCase):
         self.assertEqual(v1["status"], "SUCCESS")
 
         # Now query with a different engine version
-        engine_v9 = JevDecisionEngine(cache_db=self.db_path, mode="native")
+        engine_v9 = JevDecisionEngine(
+            cache_db=self.db_path, mode="native", use_disk_cache=True
+        )
         engine_v9.engine_version = "9.9.9"
         # Must not load cache from 2.6.0
         v2 = engine_v9.evaluate(payload)
@@ -1155,7 +1159,9 @@ class TestRealSqliteConcurrency(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = str(Path(self.temp_dir) / "test_concurrency.sqlite")
-        self.engine = JevDecisionEngine(cache_db=self.db_path, mode="native")
+        self.engine = JevDecisionEngine(
+            cache_db=self.db_path, mode="native", use_disk_cache=True
+        )
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -1186,7 +1192,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
 
         def worker(thread_id):
             try:
-                eng = JevDecisionEngine(cache_db=self.db_path, mode="native")
+                eng = JevDecisionEngine(cache_db=self.db_path, mode="native", use_disk_cache=True)
                 payload = self._sample_payload(pair, ts, f"thread_payload_hash_{thread_id}")
                 v = eng.evaluate(payload)
                 assert v["status"] == JevStatus.SUCCESS.value
@@ -1215,7 +1221,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
         num_procs = 4
 
         def proc_worker(proc_id, db_path):
-            eng = JevDecisionEngine(cache_db=db_path, mode="native")
+            eng = JevDecisionEngine(cache_db=db_path, mode="native", use_disk_cache=True)
             for j in range(5):
                 ts = f"2026-01-01 {proc_id:02d}:{j:02d}:00"
                 h = f"proc_{proc_id}_hash_{j}"
@@ -1249,7 +1255,7 @@ class TestRealSqliteConcurrency(unittest.TestCase):
 
         def init_worker():
             try:
-                eng = JevDecisionEngine(cache_db=new_db, mode="native")
+                eng = JevDecisionEngine(cache_db=new_db, mode="native", use_disk_cache=True)
                 payload = self._sample_payload("BTC/USDT:USDT", "2026-01-01", "init_h")
                 eng.evaluate(payload)
             except Exception as e:
@@ -1265,6 +1271,16 @@ class TestRealSqliteConcurrency(unittest.TestCase):
         with sqlite3.connect(new_db) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             self.assertEqual(integrity, "ok")
+
+    def test_native_mode_skips_disk_sqlite_by_default(self):
+        """Native and backtest modes evaluate in RAM without creating/touching SQLite by default."""
+        skipped_db = Path(self.temp_dir) / "should_not_exist.sqlite"
+        native_eng = JevDecisionEngine(cache_db=str(skipped_db), mode="native")
+        self.assertFalse(native_eng.use_disk_cache)
+        payload = self._sample_payload("BTC/USDT:USDT", "2026-01-01", "native_no_sqlite")
+        verdict = native_eng.evaluate(payload)
+        self.assertEqual(verdict["status"], JevStatus.SUCCESS.value)
+        self.assertFalse(skipped_db.exists())
 
 
 class TestShortSniperCooldownConsistency(unittest.TestCase):

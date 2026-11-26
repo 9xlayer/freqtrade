@@ -354,13 +354,12 @@ class CandleTrajectoryExtractor:
             logger.warning(f"CandleTrajectoryExtractor: Missing required columns: {missing}")
             return []
 
-        if len(df) < lookback:
-            recent = df.copy()
-        else:
-            recent = df.iloc[-lookback:].copy()
+        has_rsi = "rsi" in df.columns
+        cols = [*cls.REQUIRED_COLS, *(["rsi"] if has_rsi else [])]
+        tail = df[cols] if len(df) < lookback else df[cols].iloc[-lookback:]
 
-        # Clean NaN/Inf via ffill and bfill
-        recent = recent.ffill().bfill()
+        # Clean NaN/Inf via ffill and bfill on only the selected trajectory columns
+        recent = tail.copy().ffill().bfill()
 
         # Normalize volume via rolling 20 SMA or recent mean
         vol_col = recent["volume"].fillna(0.0)
@@ -372,14 +371,22 @@ class CandleTrajectoryExtractor:
 
         sequence = []
         n_candles = len(recent)
+        close_arr = recent["close"].to_numpy()
+        open_arr = recent["open"].to_numpy()
+        high_arr = recent["high"].to_numpy()
+        low_arr = recent["low"].to_numpy()
+        vol_arr = recent["volume"].to_numpy()
+        rsi_arr = recent["rsi"].to_numpy() if has_rsi else [50.0] * n_candles
 
-        for i, (_, row) in enumerate(recent.iterrows()):
+        for i, (raw_c, raw_o, raw_h, raw_l, raw_v, raw_rsi) in enumerate(
+            zip(close_arr, open_arr, high_arr, low_arr, vol_arr, rsi_arr, strict=True)
+        ):
             try:
-                c = float(row["close"])
-                o = float(row["open"])
-                h = float(row["high"])
-                low_val = float(row["low"])
-                v = float(row["volume"])
+                c = float(raw_c)
+                o = float(raw_o)
+                h = float(raw_h)
+                low_val = float(raw_l)
+                v = float(raw_v)
             except (ValueError, TypeError):
                 continue
 
@@ -398,9 +405,8 @@ class CandleTrajectoryExtractor:
             close_pos = round((c - low_val) / total_range, 3)
             vol_ratio = round(v / vol_mean, 2) if vol_mean > 0 else 1.0
 
-            rsi_val = row.get("rsi", 50.0)
             try:
-                rsi = round(float(rsi_val), 1)
+                rsi = round(float(raw_rsi), 1)
                 if math.isnan(rsi):
                     rsi = 50.0
             except (ValueError, TypeError):
@@ -595,11 +601,11 @@ class JevDecisionEngine:
         mode: str | None = None,
         fail_policy: str | None = None,
         regime_1w_bear_penalty: float | None = None,
+        use_disk_cache: bool | None = None,
     ):
         self.cache_db = cache_db
         # Parse .env into a local dict — never mutate process os.environ.
         dotenv_cfg = self._read_dotenv()
-        self._init_cache()
 
         def _cfg(key: str, default: str = "") -> str:
             val = os.environ.get(key, "").strip()
@@ -612,6 +618,9 @@ class JevDecisionEngine:
         self.mode = (
             configured_mode if configured_mode in ("native", "external", "backtest") else "native"
         )
+        self.use_disk_cache = self.mode == "external" if use_disk_cache is None else use_disk_cache
+        if self.use_disk_cache and self.cache_db:
+            self._init_cache()
 
         self.fail_policy = (fail_policy or _cfg("JEV_FAIL_POLICY", "reject")).lower()
         self.api_url = api_url or _cfg("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
@@ -830,9 +839,13 @@ class JevDecisionEngine:
                 source="validator",
             )
 
-        # 1. Lookup SQLite cache with full identity token
-        cache_key = self._build_cache_key(p_hash) if p_hash else ""
-        if self.cache_db and cache_key:
+        # Skip disk SQLite cache in deterministic/native modes (<1ms in-RAM).
+        use_cache = (
+            bool(getattr(self, "use_disk_cache", self.mode == "external"))
+            and bool(self.cache_db)
+        )
+        cache_key = self._build_cache_key(p_hash) if (use_cache and p_hash) else ""
+        if use_cache and cache_key:
             try:
                 with sqlite3.connect(self.cache_db, timeout=5.0) as conn:
                     cursor = conn.cursor()
@@ -942,13 +955,12 @@ class JevDecisionEngine:
             verdict = self._evaluate_native_sequence(payload)
 
         # 3. Write to SQLite cache on SUCCESS
-        threshold_token = self._cache_threshold_token()
         if (
-            self.cache_db
+            use_cache
             and verdict.get("status") == JevStatus.SUCCESS.value
             and p_hash
             and cache_key
-            and threshold_token != "invalid"
+            and (threshold_token := self._cache_threshold_token()) != "invalid"
         ):
             try:
                 with sqlite3.connect(self.cache_db, timeout=5.0) as conn:

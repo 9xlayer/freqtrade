@@ -417,15 +417,32 @@ class TestSetupComposerComposeSuiteParity(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_compose_suite_falls_back_to_events_when_sensor_has_no_mask(self):
+        from strategies.mtf_sniper.core.enums import SensorType, TradeSide
         from strategies.mtf_sniper.directional.setup_composer import SetupComposer
+        from strategies.mtf_sniper.signals.base_sensor import BaseSensor
         from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
-        from strategies.mtf_sniper.signals.sensors import WaterfallDropSensor
+
+        class _EventOnlyShortSensor(BaseSensor):
+            name = "waterfall_drop"
+            sensor_type = SensorType.ANOMALY
+            min_history = 100
+
+            def scan(self, dataframe, pair, *, candle_index=None):
+                idx = 120 if candle_index is None else candle_index
+                if idx != 120 or len(dataframe) <= 120:
+                    return []
+                return [
+                    self._make_event(
+                        side=TradeSide.SHORT,
+                        pair=pair,
+                        timestamp=self._timestamp_at(dataframe, 120),
+                        candle_index=120,
+                        raw_metrics={"close": float(dataframe.iloc[120]["close"])},
+                    )
+                ]
 
         df = _full_df(140)
-        df.loc[120, ["open", "high", "low", "close", "volume"]] = [
-            100.0, 100.0, 95.0, 95.5, 600.0,
-        ]
-        suite = SensorSuite.from_sensors(WaterfallDropSensor())
+        suite = SensorSuite.from_sensors(_EventOnlyShortSensor())
         composer = SetupComposer(drop_anomalies=False)
         events_out: list = []
         cands = composer.compose_suite(

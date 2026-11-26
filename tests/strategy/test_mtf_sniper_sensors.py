@@ -1,23 +1,19 @@
 """Unit tests for MTF Sniper P1 Market Sensor Suite & CandidateBuilder."""
+
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 
-from strategies.mtf_sniper.core.enums import RejectionReasonCode, SensorType, TradeSide
 from strategies.mtf_sniper.core.contracts import TriggerEvent
+from strategies.mtf_sniper.core.enums import RejectionReasonCode, SensorType, TradeSide
 from strategies.mtf_sniper.signals.candidate_builder import CandidateBuilder
 from strategies.mtf_sniper.signals.sensor_suite import SensorSuite
 from strategies.mtf_sniper.signals.sensors import (
-    A80PlusSensor,
     MarketRegimeSensor,
-    SwingBreakoutSensor,
-    VolatilityExpansionSensor,
-    VolumeSurgeSensor,
-    WaterfallDropSensor,
     WaterfallMomentumSensor,
 )
 
@@ -57,117 +53,33 @@ def _event(
     )
 
 
-class TestVolumeSurgeSensor(unittest.TestCase):
-    def test_insufficient_history(self):
-        df = _base_df(50)
-        events = VolumeSurgeSensor().scan(df, "BTC/USDT:USDT")
-        self.assertEqual(events, [])
-
-    def test_short_mega_surge(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 500.0]
-        events = VolumeSurgeSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.SHORT)
-        self.assertEqual(events[0].sensor_name, "volume_surge")
-        self.assertGreaterEqual(events[0].raw_metrics["vol_ratio"], 4.0)
-
-    def test_long_mega_surge(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [97.0, 100.0, 100.0, 97.0, 500.0]
-        events = VolumeSurgeSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.LONG)
-
-    def test_zero_atr_safe(self):
-        df = _base_df()
-        df["atr"] = 0.0
-        df["volume"] = 0.0
-        events = VolumeSurgeSensor().scan(df, "BTC/USDT:USDT")
-        self.assertEqual(events, [])
-
-
-class TestVolatilityExpansionSensor(unittest.TestCase):
-    def test_range_expansion_with_breakout_volume_floor(self):
-        df = _base_df()
-        # Range = 3.0×ATR; vol ~2.5x SMA20 (BREAKOUT floor) but below MEGA_SURGE 4x
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 280.0]
-        events = VolatilityExpansionSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.SHORT)
-        self.assertGreaterEqual(events[0].raw_metrics["range_atr_ratio"], 2.2)
-
-    def test_range_expansion_rejects_low_volume(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 200.0]
-        events = VolatilityExpansionSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(events, [])
-
-
-class TestSwingBreakoutSensor(unittest.TestCase):
-    def test_breakout_24h_short(self):
-        df = _base_df()
-        # Prior 96-bar low is 99.0; break below with 3x volume
-        df.loc[105, "close"] = 98.0
-        df.loc[105, "volume"] = 300.0
-        events = SwingBreakoutSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.SHORT)
-        self.assertEqual(events[0].sensor_type, SensorType.PATTERN)
-
-    def test_breakout_24h_long(self):
-        df = _base_df()
-        df.loc[105, "close"] = 102.0
-        df.loc[105, "high"] = 102.5
-        df.loc[105, "volume"] = 300.0
-        events = SwingBreakoutSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.LONG)
-
-
-class TestWaterfallDropSensor(unittest.TestCase):
-    def test_waterfall_through_swing_low(self):
-        df = _base_df()
-        # Flat history then decisive dump through swing_low_12
-        # vol must clear MEGA_SURGE floor vs SMA20 (incl. current bar)
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 96.0, 100.0, 95.5, 520.0]
-        events = WaterfallDropSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.SHORT)
-        self.assertEqual(events[0].sensor_name, "waterfall_drop")
-
-    def test_no_waterfall_on_green(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [96.0, 100.0, 100.5, 95.5, 400.0]
-        events = WaterfallDropSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(events, [])
-
-
-class TestA80PlusSensor(unittest.TestCase):
-    def test_long_a80(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "long_score"]] = [99.0, 101.0, 101.2, 98.8, 85.0]
-        events = A80PlusSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].side, TradeSide.LONG)
-        self.assertEqual(events[0].sensor_type, SensorType.PATTERN)
-
-    def test_score_below_threshold(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "long_score"]] = [99.0, 101.0, 101.2, 98.8, 70.0]
-        events = A80PlusSensor().scan(df, "BTC/USDT:USDT", candle_index=105)
-        self.assertEqual(events, [])
-
-
 class TestSensorSuite(unittest.TestCase):
     def test_suite_aggregates_sensors(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume"]] = [100.0, 97.0, 100.0, 97.0, 500.0]
+        from strategies.mtf_sniper.market.data_guards import REQUIRED_INFORMATIVE_COLS
+
+        df = _base_df(140)
+        for col in REQUIRED_INFORMATIVE_COLS:
+            df[col] = 100.0
+        for col in (
+            "swing_low_20d_1d",
+            "ema_50_4h",
+            "bb_width_4h",
+            "ema_200_1d",
+            "rsi",
+            "ema_21",
+            "lower_wick_ratio",
+            "close_pos_ratio",
+            "rel_vol",
+        ):
+            df[col] = 1.0
+        df["market_regime_1w"] = "bear_trending"
+        df.loc[110, ["open", "close", "high", "low", "volume"]] = [100.0, 96.0, 100.0, 95.5, 520.0]
+
         suite = SensorSuite()
-        events = suite.scan(df, "BTC/USDT:USDT", candle_index=105)
+        events = suite.scan(df, "BTC/USDT:USDT", candle_index=110)
         names = {e.sensor_name for e in events}
-        self.assertIn("volume_surge", names)
-        self.assertIn("volatility_expansion", names)
+        self.assertIn("waterfall_momentum", names)
+        self.assertIn("market_regime", names)
 
 
 class TestCandidateBuilder(unittest.TestCase):
@@ -210,13 +122,17 @@ class TestCandidateBuilder(unittest.TestCase):
         events = [
             _event("volume_surge", SensorType.ANOMALY, TradeSide.LONG, 100),
             _event("volume_surge", SensorType.ANOMALY, TradeSide.LONG, 105),  # within 12 bars
-            _event("volume_surge", SensorType.ANOMALY, TradeSide.LONG, 113),  # exactly 13 bars later OK
+            _event(
+                "volume_surge", SensorType.ANOMALY, TradeSide.LONG, 113
+            ),  # exactly 13 bars later OK
         ]
         rejected: list = []
         builder = CandidateBuilder(cooldown_bars=12)
         candidates = builder.process(events, rejected=rejected)
         self.assertEqual([c.candle_index for c in candidates], [100, 113])
-        self.assertTrue(any(r["reason"] == RejectionReasonCode.COOLDOWN_ACTIVE.value for r in rejected))
+        self.assertTrue(
+            any(r["reason"] == RejectionReasonCode.COOLDOWN_ACTIVE.value for r in rejected)
+        )
 
     def test_directional_cooldown_isolation(self):
         """Long and Short cooldowns are independent."""
@@ -231,21 +147,35 @@ class TestCandidateBuilder(unittest.TestCase):
         self.assertEqual(sides, {TradeSide.LONG, TradeSide.SHORT})
 
     def test_end_to_end_suite_to_builder(self):
-        df = _base_df()
-        df.loc[105, ["open", "close", "high", "low", "volume", "long_score"]] = [
-            97.0, 100.0, 100.5, 96.5, 500.0, 85.0
-        ]
+        from strategies.mtf_sniper.market.data_guards import REQUIRED_INFORMATIVE_COLS
+
+        df = _base_df(140)
+        for col in REQUIRED_INFORMATIVE_COLS:
+            df[col] = 100.0
+        for col in (
+            "swing_low_20d_1d",
+            "ema_50_4h",
+            "bb_width_4h",
+            "ema_200_1d",
+            "rsi",
+            "ema_21",
+            "lower_wick_ratio",
+            "close_pos_ratio",
+            "rel_vol",
+        ):
+            df[col] = 1.0
+        df["market_regime_1w"] = "bear_trending"
+        df.loc[110, ["open", "close", "high", "low", "volume"]] = [100.0, 96.0, 100.0, 95.5, 520.0]
+
         suite = SensorSuite()
-        events = suite.scan(df, "ETH/USDT:USDT", candle_index=105)
-        # Should include at least volume_surge + a80_plus on long
-        long_events = [e for e in events if e.side == TradeSide.LONG]
-        self.assertGreaterEqual(len(long_events), 2)
+        events = suite.scan(df, "ETH/USDT:USDT", candle_index=110)
+        self.assertTrue(any(e.sensor_name == "waterfall_momentum" for e in events))
 
         builder = CandidateBuilder(cooldown_bars=12)
         candidates = builder.process(events)
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].side, TradeSide.LONG)
-        self.assertGreaterEqual(candidates[0].confluence_count, 2)
+        self.assertEqual(candidates[0].side, TradeSide.SHORT)
+        self.assertEqual(candidates[0].raw_features["context_sensors"], ["market_regime"])
 
 
 class TestWaterfallMomentumSensor(unittest.TestCase):
@@ -281,16 +211,32 @@ class TestWaterfallMomentumSensor(unittest.TestCase):
 
         df = self._ready_df(180)
         df.loc[110, ["open", "close", "high", "low", "volume"]] = [
-            100.0, 96.0, 100.0, 95.5, 520.0,
+            100.0,
+            96.0,
+            100.0,
+            95.5,
+            520.0,
         ]
         df.loc[115, ["open", "close", "high", "low", "volume"]] = [
-            100.0, 95.0, 100.0, 94.5, 550.0,
+            100.0,
+            95.0,
+            100.0,
+            94.5,
+            550.0,
         ]
         df.loc[130, ["open", "close", "high", "low", "volume"]] = [
-            99.0, 94.0, 99.0, 93.5, 450.0,
+            99.0,
+            94.0,
+            99.0,
+            93.5,
+            450.0,
         ]
         df.loc[150, ["open", "close", "high", "low", "volume"]] = [
-            99.0, 93.0, 99.0, 92.5, 450.0,
+            99.0,
+            93.0,
+            99.0,
+            92.5,
+            450.0,
         ]
         df.loc[150, "ema_50_4h"] = float("nan")
 
@@ -321,7 +267,11 @@ class TestWaterfallMomentumSensor(unittest.TestCase):
     def test_waterfall_sensor_emits_events(self):
         df = self._ready_df(140)
         df.loc[110, ["open", "close", "high", "low", "volume"]] = [
-            100.0, 96.0, 100.0, 95.5, 520.0,
+            100.0,
+            96.0,
+            100.0,
+            95.5,
+            520.0,
         ]
         events = WaterfallMomentumSensor().scan(df, "BTC/USDT:USDT")
         self.assertEqual([e.candle_index for e in events], [110])

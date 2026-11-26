@@ -67,7 +67,7 @@ class EntryPipeline:
     ) -> None:
         # Builder cooldown off — strategy apply_cooldown owns spacing; avoids
         # incomplete part bars burning cooldown before a full setup arrives.
-        self.sensor_suite = sensor_suite or SensorSuite.hunter()
+        self.sensor_suite = sensor_suite or SensorSuite.full()
         self.candidate_builder = candidate_builder or CandidateBuilder(
             cooldown_bars=builder_cooldown_bars
         )
@@ -149,11 +149,13 @@ class EntryPipeline:
 
         evaluated = self.engine.evaluate_many(candidates, rows_by_index)
 
-        enter_long = pd.Series(False, index=dataframe.index)
-        enter_short = pd.Series(False, index=dataframe.index)
-        enter_tag = pd.Series("", index=dataframe.index)
+        n = len(dataframe)
+        long_arr = np.zeros(n, dtype=bool)
+        short_arr = np.zeros(n, dtype=bool)
+        tag_arr = np.full(n, "", dtype=object)
         accepted: list[tuple[TradeCandidate, PolicyEvaluationResult]] = []
 
+        # Populate entry masks directly in NumPy (no per-hit Series.iloc overhead).
         for candidate, result in evaluated:
             if not result.is_valid:
                 rejected.append(
@@ -170,28 +172,22 @@ class EntryPipeline:
             pos = candidate.candle_index
             tag = str(result.metadata.get("entry_tag") or result.metadata.get("setup") or "")
             if candidate.side == TradeSide.LONG:
-                if not enter_long.iloc[pos]:
-                    enter_long.iloc[pos] = True
-                    enter_tag.iloc[pos] = tag
+                if not long_arr[pos]:
+                    long_arr[pos] = True
+                    tag_arr[pos] = tag
                     accepted.append((candidate, result))
             else:
-                if not enter_short.iloc[pos]:
-                    enter_short.iloc[pos] = True
-                    enter_tag.iloc[pos] = tag
+                if not short_arr[pos]:
+                    short_arr[pos] = True
+                    tag_arr[pos] = tag
                     accepted.append((candidate, result))
 
         # Element-wise via numpy so duplicate index labels cannot realign/explode.
-        long_arr = enter_long.to_numpy(dtype=bool, copy=True)
-        short_arr = enter_short.to_numpy(dtype=bool, copy=True)
         both_arr = long_arr & short_arr
         if both_arr.any():
             long_arr &= ~both_arr
             short_arr &= ~both_arr
-            tag_arr = enter_tag.to_numpy(copy=True)
             tag_arr[both_arr] = ""
-            enter_long = pd.Series(long_arr, index=dataframe.index)
-            enter_short = pd.Series(short_arr, index=dataframe.index)
-            enter_tag = pd.Series(tag_arr, index=dataframe.index)
             rejected.append(
                 {
                     "pair": pair,
@@ -201,9 +197,9 @@ class EntryPipeline:
             )
 
         return EntryPipelineResult(
-            enter_long=enter_long,
-            enter_short=enter_short,
-            enter_tag=enter_tag,
+            enter_long=pd.Series(long_arr, index=dataframe.index),
+            enter_short=pd.Series(short_arr, index=dataframe.index),
+            enter_tag=pd.Series(tag_arr, index=dataframe.index),
             candidates=list(candidates),
             accepted=accepted,
             rejected=rejected,

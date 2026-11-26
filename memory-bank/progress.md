@@ -1,6 +1,10 @@
 # Progress
 
 ## What works
+- **Hot-Path Optimizations, Sensor Cleanup & Docker Context Diet (`v4.7.0-1w-regime`, Nov 26, 2026)**:
+  - Cached `WaterfallMomentumSensor._compute_triggers` per DF, vectorized `MarketRegimeSensor.scan_mask_features` + `EntryPipeline.run` NumPy mask population, converted `CandleTrajectoryExtractor.extract_sequence` to 6-column slice + NumPy `zip` (no `iterrows`), and skipped SQLite I/O by default in `native`/`backtest` `JevDecisionEngine` (`use_disk_cache=None -> mode=="external"`).
+  - Removed 5 unused legacy sensors (`VolumeSurgeSensor`, `VolatilityExpansionSensor`, `WaterfallDropSensor`, `A80PlusSensor`, `SwingBreakoutSensor`), `composite_catalog.py`, `SensorSuite.hunter()`/`experimental()`, and dead `_dataframe_position()` helper; excluded `.gitnexus/` (232 MB), `reports/`, and agent metadata folders from `.dockerignore`.
+  - Gate passed: **0 violations**, **402 passed, 0 skipped** (`4.23s`); 7Y Fixed-100 BT (`--cache none`, `4:29.27 total`) confirmed **435/435 exact trade parity** (**+2,336.481 USDT**, **55.9% WR**, **PF 1.84**, **13.13% DD**).
 - **Dormant JevHunter Escalation Stack Removed (`v4.7.0-1w-regime`, Nov 26, 2026)**:
   - Deleted unused `intelligence/jev_entry_hunter.py`, `intelligence/hunter_escalation.py`, `intelligence/hunter_adapter.py`, `intelligence/post_hunter_gates.py`, `directional/*/hunter_gates.py`, `directional/policy_escalation.py`, `scoring/`, and 4 Hunter test files; cleaned runtime flags in `strategy_mtf_sniper.py`, `core/runtime_mode.py`, `core/config_resolve.py`, `execution/entry_pipeline.py`, `directional/common_gates.py`, `directional/*/policy.py`, `docker-compose.yml`, and `docker/config.mtf_sniper.json`.
   - Preserved `MomentumRadar` -> `WaterfallMomentumSensor`, `ShortSetup.WATERFALL_COLLAPSE`, and `JevDecisionEngine` SQLite cache concurrency tests (`TestRealSqliteConcurrency`).

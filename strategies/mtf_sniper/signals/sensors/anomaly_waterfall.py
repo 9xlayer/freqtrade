@@ -1,4 +1,4 @@
-"""Waterfall drop anomaly sensor (acute breakdown through swing support)."""
+"""Waterfall momentum anomaly sensor (MomentumRadar collapse)."""
 
 from __future__ import annotations
 
@@ -18,82 +18,7 @@ from strategies.mtf_sniper.signals.base_sensor import BaseSensor
 from strategies.mtf_sniper.signals.momentum_radar import MomentumRadar
 
 
-class WaterfallDropSensor(BaseSensor):
-    """
-    Detect sudden dump through recent swing low with elevated volume pressure.
-
-    Short-only sensor. Wakeups aligned to MomentumRadar MEGA_SURGE_SHORT
-    (vol>=4x, range>=2.2x ATR) plus decisive red breakdown through swing low.
-    """
-
-    name = "waterfall_drop"
-    sensor_type = SensorType.ANOMALY
-    min_history = 100
-
-    swing_lookback: int = 12
-    vol_ratio_min: float = 4.0
-    range_atr_min: float = 2.2
-    body_ratio_min: float = 0.50
-
-    def scan(
-        self,
-        dataframe: pd.DataFrame,
-        pair: str,
-        *,
-        candle_index: int | None = None,
-    ) -> list[TriggerEvent]:
-        indices = self._resolve_indices(dataframe, candle_index)
-        if not indices:
-            return []
-
-        vol_sma = dataframe["volume"].rolling(20, min_periods=1).mean().replace(0, np.nan)
-        vol_ratio = (dataframe["volume"] / vol_sma).fillna(0.0)
-
-        atr_safe = (
-            dataframe["atr"].replace(0, np.nan)
-            if "atr" in dataframe.columns
-            else pd.Series(np.nan, index=dataframe.index)
-        )
-        total_range = (dataframe["high"] - dataframe["low"]).clip(lower=1e-12)
-        body = (dataframe["close"] - dataframe["open"]).abs()
-        body_ratio = body / total_range
-        range_ratio = (total_range / atr_safe).fillna(0.0)
-
-        swing_low = dataframe["low"].shift(1).rolling(self.swing_lookback).min()
-        is_red = dataframe["close"] < dataframe["open"]
-        is_breakdown = (dataframe["close"] < swing_low) & (dataframe["close"].shift(1) >= swing_low)
-
-        mask = (
-            is_red
-            & is_breakdown
-            & (vol_ratio >= self.vol_ratio_min)
-            & (range_ratio >= self.range_atr_min)
-            & (body_ratio >= self.body_ratio_min)
-        )
-
-        events: list[TriggerEvent] = []
-        for i in indices:
-            if not bool(mask.iloc[i]):
-                continue
-            events.append(
-                self._make_event(
-                    side=TradeSide.SHORT,
-                    pair=pair,
-                    timestamp=self._timestamp_at(dataframe, i),
-                    candle_index=i,
-                    raw_metrics={
-                        "vol_ratio": float(vol_ratio.iloc[i]),
-                        "range_atr_ratio": float(range_ratio.iloc[i]),
-                        "body_ratio": float(body_ratio.iloc[i]),
-                        "swing_low": float(swing_low.iloc[i])
-                        if pd.notna(swing_low.iloc[i])
-                        else None,
-                        "close": float(dataframe.iloc[i]["close"]),
-                    },
-                )
-            )
-        return events
-
+_WATERFALL_TRIGGER_CACHE_ATTR = "_mtf_waterfall_triggers_v1"
 
 _WATERFALL_FINITE_COLS = (
     "swing_low_20d_1d",
@@ -122,9 +47,23 @@ class WaterfallMomentumSensor(BaseSensor):
     min_history = 100
     cooldown_bars: int = 12
 
+    def _df_cache_token(self, dataframe: pd.DataFrame) -> tuple[Any, ...]:
+        n = len(dataframe)
+        if n and "date" in dataframe.columns:
+            return (self.cooldown_bars, n, dataframe["date"].iloc[-1], dataframe["date"].iloc[0])
+        return (self.cooldown_bars, n, id(dataframe))
+
     def _compute_triggers(self, dataframe: pd.DataFrame) -> dict[int, str]:
         if len(dataframe) < self.min_history:
             return {}
+        token = self._df_cache_token(dataframe)
+        store: dict[tuple[Any, ...], dict[int, str]] = dataframe.attrs.setdefault(
+            _WATERFALL_TRIGGER_CACHE_ATTR, {}
+        )
+        cached = store.get(token)
+        if cached is not None:
+            return cached
+
         radar_cands = MomentumRadar.find_candidates(
             dataframe, cooldown_bars=self.cooldown_bars, directional_cooldown=True
         )
@@ -137,11 +76,13 @@ class WaterfallMomentumSensor(BaseSensor):
             ready = finite_series_mask(dataframe, _WATERFALL_FINITE_COLS).to_numpy(
                 dtype=bool, na_value=False
             )
-        return {
+        triggers = {
             pos: event_type
             for pos, event_type in radar_cands
             if "SHORT" in event_type and pos < len(ready) and ready[pos]
         }
+        store[token] = triggers
+        return triggers
 
     def scan_mask(self, dataframe: pd.DataFrame, pair: str) -> np.ndarray:
         _ = pair
@@ -150,23 +91,31 @@ class WaterfallMomentumSensor(BaseSensor):
             mask[pos] = True
         return mask
 
+    @staticmethod
+    def _waterfall_features(
+        event_type: str, scores: np.ndarray | None, pos: int
+    ) -> dict[str, Any]:
+        raw_score = scores[pos] if scores is not None else 0.0
+        return {
+            "setup_name": "waterfall_collapse",
+            "signal_source": "momentum_radar",
+            "event_trigger": event_type,
+            "short_score": float(raw_score or 0.0),
+        }
+
     def scan_mask_features(
         self, dataframe: pd.DataFrame, indices: np.ndarray
     ) -> dict[int, dict[str, Any]]:
         triggers = self._compute_triggers(dataframe)
+        if not triggers or len(indices) == 0:
+            return {}
+        scores = dataframe["short_score"].to_numpy() if "short_score" in dataframe.columns else None
         out: dict[int, dict[str, Any]] = {}
         for idx in indices:
             i = int(idx)
             event_type = triggers.get(i)
-            if event_type is None:
-                continue
-            row = dataframe.iloc[i]
-            out[i] = {
-                "setup_name": "waterfall_collapse",
-                "signal_source": "momentum_radar",
-                "event_trigger": event_type,
-                "short_score": float(row.get("short_score", 0.0) or 0.0),
-            }
+            if event_type is not None:
+                out[i] = self._waterfall_features(event_type, scores, i)
         return out
 
     def scan(
@@ -183,21 +132,16 @@ class WaterfallMomentumSensor(BaseSensor):
             positions = [candle_index] if candle_index in triggers else []
         else:
             positions = sorted(triggers)
+        scores = dataframe["short_score"].to_numpy() if "short_score" in dataframe.columns else None
         events: list[TriggerEvent] = []
         for i in positions:
-            row = dataframe.iloc[i]
             events.append(
                 self._make_event(
                     side=TradeSide.SHORT,
                     pair=pair,
                     timestamp=self._timestamp_at(dataframe, i),
                     candle_index=i,
-                    raw_metrics={
-                        "setup_name": "waterfall_collapse",
-                        "signal_source": "momentum_radar",
-                        "event_trigger": triggers[i],
-                        "short_score": float(row.get("short_score", 0.0) or 0.0),
-                    },
+                    raw_metrics=self._waterfall_features(triggers[i], scores, i),
                 )
             )
         return events

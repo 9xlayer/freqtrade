@@ -40,3 +40,9 @@ strategies/archive/
 .vscode
 .*_cache/
 .ipynb_checkpoints
+.gitnexus/
+reports/
+.agents/
+.claude/
+.cursor/
+memory-bank/
