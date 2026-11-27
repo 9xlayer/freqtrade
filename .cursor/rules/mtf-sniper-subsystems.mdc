@@ -1,35 +1,42 @@
 ---
-description: Enforce MTF Sniper Sensor -> Builder -> Directional Sub-System Architecture & Guardrails
+description: Enforce MTF Sniper Architecture-as-Code Manifest & Anti-AI-Slop Guardrails (LINT001-LINT036)
 globs:
   - "strategies/mtf_sniper/**/*.py"
+  - "strategies/mtf_sniper/**/*.md"
+  - "scripts/guardrails/**/*.py"
+  - "scripts/lint_guardrails.py"
   - "tests/strategy/**/*.py"
 alwaysApply: false
 ---
 
-# MTF Sniper Event-Driven Sub-System Architecture
+# MTF Sniper Architecture-as-Code & Anti-AI-Slop Protocol
 
-All future strategy changes MUST follow the layered **Atomic Sensor -> CandidateBuilder -> Directional Sub-System** architecture and pass `scripts/lint_guardrails.py`.
+All changes touching `strategies/mtf_sniper/` are locked by the declarative `ArchitectureManifest` (`scripts/guardrails/manifest.py`) and enforced in real time via Cursor `postToolUse` hooks, Git `pre-commit`, and `docker/Dockerfile.custom`.
 
-## Architectural Contract
+## 1. Strict Topological Layer DAG (`LINT003`, `LINT007–009`, `LINT020`, `LINT023`, `LINT030`)
 
-1. **Sensors (`signals/sensors/`, `signals/`) emit single `TriggerEvent` facts only:**
-   - Every `*Sensor` in `signals/sensors/` MUST inherit `BaseSensor` (`LINT018`).
-   - Sensors NEVER reference `"enter_long"`, `"enter_short"`, `"exit_long"`, or `"exit_short"` (`LINT021`).
-   - `signals/` modules NEVER import `execution`, `risk`, `intelligence`, or `strategy_mtf_sniper` (`LINT020`). New concrete sensors NEVER import `directional/`.
-2. **Directional Sub-Systems (`directional/`) own recipe matching & evaluation:**
-   - Register every sub-system (`short_sniper`, `long_sniper`, `waterfall`, or new sub-systems) in `directional/setup_recipes.py` via `SetupRecipe` + `SubSystemSpec` inside `SUBSYSTEM_REGISTRY`.
-   - Every sub-system MUST have its own unique `policy_module` (1 Sub-System = 1 dedicated Policy class, e.g., `LongPolicy`, `ShortPolicy`, `WaterfallShortPolicy`) verified dynamically (`LINT025`).
-   - `DirectionalTradingEngine` MUST dispatch through `subsystem_policies` (`LINT026`).
-   - Never map recipes 1-to-1 by side (`{r.side: r}`); always support multiple sub-systems per side via `recipes_grouped_by_side` (`LINT022`).
-   - All policies must satisfy `DirectionalPolicyProtocol` (checked statically by Pyrefly + runtime `LINT024`–`LINT026`).
-   - `directional/` modules NEVER import `execution`, `risk`, `intelligence`, or `strategy_mtf_sniper` (`LINT023`), and `long` / `short` paths stay isolated (`LINT003`).
-3. **Single-Truth Pipeline (`LINT029`):**
-   - `EntryPipeline.run()` MUST compose all signals via `SetupComposer.compose_suite(...)` — never reconstruct `_candidates_from_sniper_masks`, bypass sensors with direct `MomentumRadar`/`cached_sniper_parts`, or instantiate `TradeCandidate` in `execution/` (`LINT029`).
-   - Optimize speed inside individual `BaseSensor.scan_mask()` / `scan_mask_features()` implementations while maintaining 100% parity with event `scan()`.
+Every layer may ONLY import from its explicit allowlist in `ArchitectureManifest.layer_allowed_imports` (applies to top-level, relative, and lazy function-level imports — **zero carve-outs**):
 
-## Mandatory Verification CLI
+- `core/` → `{__root__, core}`
+- `market/` → `{market}` (100% stateless indicators & numeric/safety masks)
+- `signals/` → `{core, market, signals}` (**NEVER** imports `directional`, `execution`, `risk`, `intelligence`, `telemetry`, or `strategy_mtf_sniper`; concrete `*Sensor` classes inherit `BaseSensor` `LINT018` and never touch `enter_*`/`exit_*` `LINT021`)
+- `directional/` → `{core, market, signals, directional}` (`long/` and `short/` stay strictly isolated `LINT003`; 1 Sub-System = 1 dedicated `DirectionalPolicyProtocol` class `LINT025` with distinct same-side `SetupRecipe.priority` `LINT024`)
+- `telemetry/` → `{core, telemetry}`
+- `risk/` → `{core, risk}`
+- `intelligence/` → `{__root__, core, directional, intelligence}`
+- `execution/` → `{core, market, signals, directional, execution}` (`EntryPipeline` MUST route all signals through `SetupComposer.compose_suite(...)` `LINT026`/`LINT029`)
+- `strategy_mtf_sniper.py` (Facade) → `{__root__, core, market, execution, intelligence, risk, telemetry}` (**NEVER** imports `signals`, `directional`, `talib`, or `technical` directly `LINT017`/`LINT030`)
 
-Run before committing or proposing any architecture change (also baked into `docker/Dockerfile.custom`):
+## 2. Anti-AI-Slop Code Hygiene (`LINT001–002`, `LINT011–016`, `LINT031–036`)
+
+- **`LINT031` (Topology & Anti-Sprawl):** Never create unapproved subdirectories (`utils/`, `helpers/`, `common/`, `v2/`, `tmp/`), duplicate/slop filenames (`*_v2.py`, `*_new.py`, `*_old.py`, `*_tmp.py`, `*helper*.py`, `*util*.py`), or `.md` files outside `docs/`.
+- **`LINT032` (No Placeholders or Stubs):** No `TODO`/`TBD`/`XXX`/`PLACEHOLDER` comments (`LINT001` also bans `workaround`/`hack`/`fixme`), and no concrete `pass` / `...` / `NotImplementedError` method bodies outside `ABC`/`Protocol`.
+- **`LINT033` (No Blanket Suppressions):** Never write bare `# type: ignore` (must specify `[error-code]`), bare `# noqa` (must specify `: RULE_ID`), `eval()`, or `exec()`.
+- **`LINT034` (Hot-Path & Logging Hygiene):** Never call `print()` in strategy code (use `logger.*`), and never iterate DataFrames row-by-row with `.iterrows()`, `.itertuples()`, or `.apply(..., axis=1)`.
+- **`LINT035` (Size & Mutability Budgets):** Subsystem modules `<= 550` LOC, functions `<= 165` LOC, McCabe complexity `<= 12` (`LINT019`), comment density `<= 5.0%` (`LINT002`), 100% English in Python (`LINT012`), no mutable default arguments (`=[]`, `={}`).
+- **`LINT036` (Docs-to-Code Sync):** Keep `docs/{ARCHITECTURE,DATA_CONTRACTS,PHILOSOPHY}.md` synced with `STRATEGY_VERSION`, `SensorType` values, and active class names.
+
+## 3. Mandatory Verification CLI
 
 ```bash
 .venv/bin/python scripts/lint_guardrails.py --verify-all

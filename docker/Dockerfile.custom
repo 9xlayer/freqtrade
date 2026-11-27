@@ -6,13 +6,15 @@ RUN pip install --no-cache-dir socksio
 # Coolify/CI: bake strategies from git into the image so every rebuild
 # picks up strategies/mtf_sniper without relying on the user_data volume.
 COPY --chown=ftuser:ftuser strategies/ /freqtrade/strategies/
-COPY --chown=ftuser:ftuser scripts/lint_guardrails.py /tmp/lint_guardrails.py
+COPY --chown=ftuser:ftuser scripts/lint_guardrails.py /tmp/scripts/lint_guardrails.py
+COPY --chown=ftuser:ftuser scripts/guardrails/ /tmp/scripts/guardrails/
 
 # Fail image build immediately if MTF Sniper architectural guardrails fail.
-ENV PYTHONPATH=/freqtrade
+ENV PYTHONPATH=/freqtrade:/tmp
 WORKDIR /freqtrade
-RUN python3 /tmp/lint_guardrails.py --subsystems /freqtrade/strategies/mtf_sniper \
-    && rm -f /tmp/lint_guardrails.py
+RUN python3 /tmp/scripts/lint_guardrails.py --subsystems /freqtrade/strategies/mtf_sniper \
+    && rm -rf /tmp/scripts
+ENV PYTHONPATH=/freqtrade
 
 # Overlay config forces strategy_path (mounted user_data/config.json may still
 # point at the removed strategies/active path).

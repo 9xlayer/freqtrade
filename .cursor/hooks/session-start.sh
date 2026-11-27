@@ -24,7 +24,7 @@ ctx = f"""[freqtrade agent bootstrap]
 3) GitNexus status snapshot: {status}
 4) If index is stale/missing, run: gitnexus analyze
 5) Before editing symbols: impact analysis. Before commit: detect_changes. After commit: gitnexus analyze. Update Memory Bank only at milestone boundaries.
-6) Before finishing strategy edits: run `.venv/bin/python scripts/lint_guardrails.py --verify-all` (AST LINT001-029 + Pyrefly + Ruff + strategy pytest)."""
+6) Before finishing strategy edits: run `.venv/bin/python scripts/lint_guardrails.py --verify-all` (AST/DAG/Anti-Slop LINT001-036 + Pyrefly + Ruff + strategy pytest)."""
 print(json.dumps({"additional_context": ctx}))
 PY
 exit 0

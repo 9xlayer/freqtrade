@@ -7,6 +7,13 @@
         "timeout": 20
       }
     ],
+    "postToolUse": [
+      {
+        "command": "bash .cursor/hooks/post-edit-guardrails.sh",
+        "matcher": "Write|StrReplace|Delete",
+        "timeout": 15
+      }
+    ],
     "afterShellExecution": [
       {
         "command": ".cursor/hooks/after-git-commit.sh",
