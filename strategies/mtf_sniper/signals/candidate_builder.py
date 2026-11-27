@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 
 from strategies.mtf_sniper.core.candidate_id import make_candidate_id, normalize_utc
 from strategies.mtf_sniper.core.contracts import TradeCandidate, TriggerEvent
 from strategies.mtf_sniper.core.enums import RejectionReasonCode, SensorType, TradeSide
+from strategies.mtf_sniper.signals.sniper_part_masks import (
+    LONG_SNIPER_PART_NAMES,
+    SHORT_SNIPER_PART_NAMES,
+)
 
 
 # Pattern sensors outrank anomaly sensors when choosing primary_sensor.
 _SENSOR_PRIORITY = {
     SensorType.PATTERN: 0,
     SensorType.ANOMALY: 1,
+}
+
+_DEFAULT_COMPLETE_SETS: dict[str, tuple[frozenset[str], ...]] = {
+    "long": (frozenset(LONG_SNIPER_PART_NAMES),),
+    "short": (frozenset(SHORT_SNIPER_PART_NAMES),),
 }
 
 
@@ -38,10 +47,16 @@ class CandidateBuilder:
         cooldown_bars: int = 12,
         *,
         side_cooldowns: dict[TradeSide, int] | None = None,
+        complete_sensor_sets: Mapping[str, Sequence[frozenset[str]]] | None = None,
     ) -> None:
         self.cooldown_bars = cooldown_bars
         # Optional per-side overrides (parity: long=18, short=96)
         self.side_cooldowns: dict[TradeSide, int] = dict(side_cooldowns or {})
+        self._complete_sets: dict[str, tuple[frozenset[str], ...]] = (
+            {k.lower(): tuple(v) for k, v in complete_sensor_sets.items()}
+            if complete_sensor_sets is not None
+            else dict(_DEFAULT_COMPLETE_SETS)
+        )
         # (pair, side) -> last accepted candle_index
         self._last_accepted: dict[tuple[str, TradeSide], int] = {}
 
@@ -138,13 +153,14 @@ class CandidateBuilder:
         if not long_events and not short_events:
             return []
 
-        from strategies.mtf_sniper.directional.setup_recipes import recipes_grouped_by_side
-
-        grouped = recipes_grouped_by_side()
         long_names = {e.sensor_name for e in long_events}
         short_names = {e.sensor_name for e in short_events}
-        long_complete = any(r.is_satisfied(long_names) for r in grouped.get("long", ()))
-        short_complete = any(r.is_satisfied(short_names) for r in grouped.get("short", ()))
+        long_complete = any(
+            req.issubset(long_names) for req in self._complete_sets.get("long", ())
+        )
+        short_complete = any(
+            req.issubset(short_names) for req in self._complete_sets.get("short", ())
+        )
 
         if long_complete and short_complete:
             if rejected is not None:

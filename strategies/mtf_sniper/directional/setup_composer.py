@@ -146,10 +146,14 @@ class SetupComposer:
         events = sensor_suite.scan(dataframe, pair)
         if trigger_events_out is not None:
             trigger_events_out.extend(events)
+        complete_sets = {
+            side: tuple(r.required_sensors for r in recs if not r.is_anomaly)
+            for side, recs in self._recipes_by_side.items()
+        }
         builder = (
             candidate_builder
             if candidate_builder is not None
-            else CandidateBuilder(cooldown_bars=0)
+            else CandidateBuilder(cooldown_bars=0, complete_sensor_sets=complete_sets)
         )
         builder.reset()
         raw_candidates = builder.process(events, rejected=dropped)

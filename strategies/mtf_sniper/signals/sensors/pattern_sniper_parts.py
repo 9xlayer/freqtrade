@@ -16,20 +16,18 @@ import numpy as np
 import pandas as pd
 
 from strategies.mtf_sniper.core.enums import SensorType, TradeSide
-from strategies.mtf_sniper.directional.common_gates import (
+from strategies.mtf_sniper.market.data_guards import (
     data_ready_mask,
     sideway_safe_mask,
     volatility_safe_mask,
 )
-from strategies.mtf_sniper.directional.long.setups import (
+from strategies.mtf_sniper.signals.base_sensor import BaseSensor
+from strategies.mtf_sniper.signals.sniper_part_masks import (
     LONG_SNIPER_PART_NAMES,
-    build_long_sniper_parts,
-)
-from strategies.mtf_sniper.directional.short.setups import (
     SHORT_SNIPER_PART_NAMES,
+    build_long_sniper_parts,
     build_short_sniper_parts,
 )
-from strategies.mtf_sniper.signals.base_sensor import BaseSensor
 
 
 # Stored on dataframe.attrs for the lifetime of one populate_entry / suite scan

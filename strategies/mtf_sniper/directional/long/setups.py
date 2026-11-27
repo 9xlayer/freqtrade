@@ -9,6 +9,22 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from strategies.mtf_sniper.signals.sniper_part_masks import (
+    LONG_SNIPER_PART_NAMES,
+    build_long_sniper_parts,
+)
+
+
+__all__ = [
+    "LONG_SNIPER_PART_NAMES",
+    "LongSetup",
+    "build_long_sniper_parts",
+    "build_raw_sniper_long_mask",
+    "quality_grade_from_score",
+    "resolve_long_setup",
+    "tag_long_sniper",
+]
+
 
 class LongSetup(str, Enum):
     A80_PLUS = "long_A80_plus"
@@ -56,143 +72,6 @@ def quality_grade_from_score(score: float) -> str:
     if score >= 0.65:
         return "B"
     return "REJECT"
-
-
-# Stable part ids — SetupComposer recipe sniper_long = ALL of these
-LONG_SNIPER_PART_NAMES = (
-    "long_structure",
-    "long_mtf",
-    "long_macro",
-    "long_safety",
-)
-
-
-def build_long_sniper_parts(
-    strategy: Any,
-    dataframe: DataFrame,
-    pair_cfg: dict,
-    *,
-    data_ready: pd.Series,
-    cond_volatility_safe: pd.Series,
-    cond_sideway_safe: pd.Series,
-) -> tuple[dict[str, pd.Series], pd.Series]:
-    """
-    Legacy long AND-mask split into named parts (old StrategyMTFSniper parity).
-
-    Full mask == AND of every part. Returns (parts, pdh_safe_mask).
-    """
-    l_max_dist = pair_cfg.get("long_max_dist_ema21", strategy.long_max_dist_ema21.value)
-    l_body_ratio = pair_cfg.get(
-        "long_candle_body_ratio_min", strategy.long_candle_body_ratio_min.value
-    )
-
-    is_green = dataframe["close"] > dataframe["open"]
-    is_decisive_green = (
-        is_green
-        & ((dataframe["body"] / dataframe["total_range"]) >= l_body_ratio)
-        & (dataframe["body"] >= dataframe["atr"] * 0.5)
-    )
-    l_lookback = strategy.long_lookback_resistance.value
-    swing_high = dataframe["high"].shift(1).rolling(l_lookback).max()
-    is_breakout_major = (dataframe["close"] > swing_high) & (
-        dataframe["close"].shift(1) <= swing_high
-    )
-    is_above_emas = (dataframe["close"] > dataframe["ema_10"]) & (
-        dataframe["close"] > dataframe["ema_21"]
-    )
-
-    cond_candle_shape_long = (
-        (dataframe["upper_wick_ratio"] <= strategy.max_rejection_wick_ratio.value)
-        & (dataframe["close_pos_ratio"] >= strategy.min_close_pos_ratio_long.value)
-        if (
-            strategy.filter_wick_rejection.value
-            and "upper_wick_ratio" in dataframe.columns
-            and "close_pos_ratio" in dataframe.columns
-        )
-        else pd.Series(True, index=dataframe.index)
-    )
-
-    cond_1h_long_pos = dataframe["close_1h"] >= (
-        dataframe["ema_50_1h"] * strategy.long_loc_tolerance_1h.value
-    )
-    cond_1h_long_exhaustion = (
-        dataframe["rsi_min_24_1h"] <= strategy.long_max_1h_rsi_exhaustion.value
-    )
-    cond_1h_long = cond_1h_long_pos & cond_1h_long_exhaustion
-
-    cond_4h_long = (
-        (dataframe["macdhist_4h"] > 0)
-        if "macdhist_4h" in dataframe.columns
-        else pd.Series(False, index=dataframe.index)
-    )
-
-    cond_1d_long = (
-        (
-            (dataframe["close"] > dataframe["ema_50_1d"])
-            & ((dataframe["macdhist_1d"] > 0) if strategy.long_block_1d_macd.value else True)
-        )
-        if ("ema_50_1d" in dataframe.columns and "macdhist_1d" in dataframe.columns)
-        else pd.Series(False, index=dataframe.index)
-    )
-
-    is_in_macro_bear = (
-        (dataframe["close"] < dataframe["ema_200_1d"])
-        | (dataframe["close"] < dataframe["ema_50_1d"])
-        if ("ema_50_1d" in dataframe.columns and "ema_200_1d" in dataframe.columns)
-        else pd.Series(False, index=dataframe.index)
-    )
-    cond_macro_safe_long = ~is_in_macro_bear & (
-        (dataframe["is_macro_bear_market_1d"].fillna(0) == 0)
-        if "is_macro_bear_market_1d" in dataframe.columns
-        else pd.Series(False, index=dataframe.index)
-    )
-
-    cond_overextended_safe = (
-        dataframe["dist_from_ema_200_1d"] <= strategy.long_overextended_dist_max.value
-        if "dist_from_ema_200_1d" in dataframe.columns
-        else pd.Series(False, index=dataframe.index)
-    )
-
-    cond_not_chasing_long = (
-        (dataframe["close"] - dataframe["ema_21"]) / dataframe["ema_21"] <= (l_max_dist / 100.0)
-    ) & (dataframe["rsi"] <= strategy.long_max_rsi_entry.value)
-
-    if "pdh_1d" in dataframe.columns and strategy.filter_pdh_ceiling.value:
-        cond_pdh_safe_long = ~(
-            (dataframe["close"] < dataframe["pdh_1d"])
-            & (dataframe["close"] >= dataframe["pdh_1d"] * 0.997)
-        )
-    elif not strategy.filter_pdh_ceiling.value:
-        cond_pdh_safe_long = pd.Series(True, index=dataframe.index)
-    else:
-        cond_pdh_safe_long = pd.Series(False, index=dataframe.index)
-
-    cond_score_long = (
-        (dataframe["long_score"] >= 80)
-        if "long_score" in dataframe.columns
-        else pd.Series(False, index=dataframe.index)
-    )
-
-    parts = {
-        "long_structure": (
-            is_decisive_green
-            & is_breakout_major
-            & is_above_emas
-            & cond_candle_shape_long
-            & (dataframe["volume"] > 0)
-        ),
-        "long_mtf": cond_1h_long & cond_4h_long & cond_1d_long,
-        "long_macro": cond_macro_safe_long & cond_overextended_safe,
-        "long_safety": (
-            cond_sideway_safe
-            & cond_volatility_safe
-            & cond_not_chasing_long
-            & cond_pdh_safe_long
-            & cond_score_long
-            & data_ready
-        ),
-    }
-    return parts, cond_pdh_safe_long
 
 
 def build_raw_sniper_long_mask(
