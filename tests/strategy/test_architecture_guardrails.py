@@ -223,6 +223,213 @@ class TestArchitectureGuardrails(unittest.TestCase):
         self.assertTrue(any("LINT015" in v for v in linter.violations))
         self.assertTrue(any("LINT019" in v for v in linter.violations))
 
+    def test_signals_layer_blocks_all_directional_imports_zero_carveouts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sensor_dir = Path(tmpdir) / "signals" / "sensors"
+            sensor_dir.mkdir(parents=True)
+            (sensor_dir / "pattern_sniper_parts.py").write_text(
+                "from strategies.mtf_sniper.directional.short.setups import (\n"
+                "    SHORT_SNIPER_PART_NAMES,\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            (Path(tmpdir) / "signals" / "candidate_builder.py").write_text(
+                "def load():\n"
+                "    from ..directional import setup_recipes\n"
+                "    return setup_recipes\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir, skip_external_tools=True)
+            linter.run()
+            self.assertTrue(any("LINT020" in v for v in linter.violations))
+            self.assertGreaterEqual(sum("LINT030" in v for v in linter.violations), 2)
+
+    def test_layer_manifest_blocks_horizontal_and_facade_bypass_lint030(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "risk").mkdir()
+            (root / "telemetry").mkdir()
+            (root / "risk" / "bad_risk.py").write_text(
+                "from strategies.mtf_sniper.execution.entry_pipeline import EntryPipeline\n",
+                encoding="utf-8",
+            )
+            (root / "telemetry" / "bad_ledger.py").write_text(
+                "from strategies.mtf_sniper.risk.risk_engine import RiskEngine\n",
+                encoding="utf-8",
+            )
+            (root / "strategy_mtf_sniper.py").write_text(
+                "from strategies.mtf_sniper.directional.engine import DirectionalTradingEngine\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir, skip_external_tools=True)
+            linter.run()
+            self.assertEqual(sum("LINT030" in v for v in linter.violations), 3)
+
+    def test_topology_blocks_unapproved_dirs_slop_filenames_and_stray_docs_lint031(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg = Path(tmpdir) / "mtf_sniper"
+            (pkg / "utils").mkdir(parents=True)
+            (pkg / "signals").mkdir(parents=True)
+            (pkg / "docs").mkdir(parents=True)
+            (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+            (pkg / "rogue_root.py").write_text("x = 1\n", encoding="utf-8")
+            (pkg / "signals" / "policy_v2.py").write_text("x = 1\n", encoding="utf-8")
+            (pkg / "signals" / "NOTES.md").write_text("# stray doc\n", encoding="utf-8")
+            codes = " ".join(f"LINT{i:03d}" for i in range(1, 37))
+            for doc in (
+                "README.md",
+                "ARCHITECTURE.md",
+                "DATA_CONTRACTS.md",
+                "PHILOSOPHY.md",
+                "GUARDRAILS.md",
+            ):
+                (pkg / "docs" / doc).write_text(
+                    f"4.7.0-1w-regime `anomaly` `pattern` `context` {codes}\n",
+                    encoding="utf-8",
+                )
+            linter = ArchitectureGuardrailLinter(str(pkg), skip_external_tools=True)
+            linter._check_subsystem_registry = lambda: None  # type: ignore[method-assign]
+            linter.run()
+            self.assertGreaterEqual(sum("LINT031" in v for v in linter.violations), 4)
+
+    def test_anti_placeholder_and_stub_guard_lint032_allows_abc_and_protocol(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "core"
+            root.mkdir()
+            (root / "clean_contracts.py").write_text(
+                "from abc import ABC, abstractmethod\n"
+                "from typing import Protocol\n\n"
+                "class Port(Protocol):\n"
+                "    def run(self) -> int: ...\n\n"
+                "class Base(ABC):\n"
+                "    @abstractmethod\n"
+                "    def compute(self) -> int:\n"
+                "        raise NotImplementedError\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir, skip_external_tools=True)
+            linter.run()
+            self.assertFalse(any("LINT032" in v for v in linter.violations))
+
+            (root / "slop_stub.py").write_text(
+                "# TODO: implement later\n"
+                "def unfinished() -> None:\n"
+                "    pass\n\n"
+                "class Concrete:\n"
+                "    def missing(self) -> int:\n"
+                "        raise NotImplementedError('stub')\n",
+                encoding="utf-8",
+            )
+            linter.run()
+            self.assertEqual(sum("LINT032" in v for v in linter.violations), 3)
+
+    def test_suppression_and_dynamic_exec_guard_lint033(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "core"
+            root.mkdir()
+            (root / "specific_ok.py").write_text(
+                "x: int = 1  # type: ignore[assignment]\n"
+                "y: int = 2  # noqa: F841\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir, skip_external_tools=True)
+            linter.run()
+            self.assertFalse(any("LINT033" in v for v in linter.violations))
+
+            (root / "blanket_bad.py").write_text(
+                "a = 1  # type: ignore\n"
+                "b = 2  # noqa\n"
+                "c = eval('1 + 1')\n",
+                encoding="utf-8",
+            )
+            linter.run()
+            self.assertEqual(sum("LINT033" in v for v in linter.violations), 3)
+
+    def test_hot_path_print_and_dataframe_row_iteration_guard_lint034(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "market"
+            root.mkdir()
+            (root / "slow_slop.py").write_text(
+                "def scan(df):\n"
+                "    print('debug')\n"
+                "    for _ in df.iterrows():\n"
+                "        return 1\n"
+                "    return df.apply(lambda r: r['close'], axis=1)\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(tmpdir, skip_external_tools=True)
+            linter.run()
+            self.assertEqual(sum("LINT034" in v for v in linter.violations), 3)
+
+    def test_size_budget_and_mutable_defaults_lint035(self):
+        from scripts.guardrails.manifest import ArchitectureManifest
+
+        tight_manifest = ArchitectureManifest(max_subsystem_file_lines=10, max_function_lines=5)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "core"
+            root.mkdir()
+            body_lines = "\n".join(f"    v{i} = {i}" for i in range(10))
+            (root / "bloated.py").write_text(
+                f"def bloated(items=[]):\n{body_lines}\n    return v0\n",
+                encoding="utf-8",
+            )
+            linter = ArchitectureGuardrailLinter(
+                tmpdir,
+                skip_external_tools=True,
+                manifest=tight_manifest,
+            )
+            linter.run()
+            self.assertEqual(sum("LINT035" in v for v in linter.violations), 3)
+
+    def test_docs_contract_sync_and_recipe_priority_guards_lint024_lint036(self):
+        from dataclasses import dataclass
+
+        from scripts.guardrails.anti_slop_rules import check_docs_contract_sync
+        from scripts.guardrails.registry_rules import validate_recipe_and_specs
+
+        @dataclass(frozen=True)
+        class _Rec:
+            name: str
+            required_sensors: frozenset[str]
+            side: str
+            subsystem: str
+            priority: int
+
+        @dataclass(frozen=True)
+        class _Spec:
+            subsystem_id: str
+            side: str
+            recipe_name: str
+
+        violations: list[str] = []
+        validate_recipe_and_specs(
+            (
+                _Rec("r1", frozenset({"s1"}), "short", "sub1", 10),
+                _Rec("r2", frozenset({"s2"}), "short", "sub2", 10),
+            ),
+            (_Spec("sub1", "short", "r1"), _Spec("sub2", "short", "r2")),
+            violations,
+        )
+        self.assertTrue(any("LINT024" in v and "priority=10" in v for v in violations))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg = Path(tmpdir) / "mtf_sniper"
+            (pkg / "docs").mkdir(parents=True)
+            (pkg / "docs" / "README.md").write_text("4.7.0-1w-regime\n", encoding="utf-8")
+            (pkg / "docs" / "ARCHITECTURE.md").write_text(
+                "4.7.0-1w-regime HunterEscalationGateway\n", encoding="utf-8"
+            )
+            (pkg / "docs" / "DATA_CONTRACTS.md").write_text(
+                "4.7.0-1w-regime `anomaly` `pattern`\n", encoding="utf-8"
+            )
+            (pkg / "docs" / "PHILOSOPHY.md").write_text("4.6.0-stale\n", encoding="utf-8")
+            (pkg / "docs" / "GUARDRAILS.md").write_text(
+                "4.7.0-1w-regime LINT001\n", encoding="utf-8"
+            )
+            doc_violations: list[str] = []
+            check_docs_contract_sync(pkg, doc_violations)
+            self.assertEqual(sum("LINT036" in v for v in doc_violations), 4)
+
 
 if __name__ == "__main__":
     unittest.main()
