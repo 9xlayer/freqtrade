@@ -44,12 +44,12 @@ P0 Kiểm toán → P1 Sensors → P2 Parity Engine → P3 Risk/Telemetry → P4
 
 | Hạng mục | Thực tế đang chạy |
 |---|---|
-| Vào lệnh | Hai đường đồng nhất: Fast Path (vector hóa) **hoặc** Event Path (`SensorSuite -> Builder -> Composer`) → dùng chung Policy |
+| Vào lệnh | Luồng Single-Truth duy nhất qua `SetupComposer.compose_suite()` (Vectorized Mask hoặc Event Fallback) → `DirectionalTradingEngine` (`SUBSYSTEM_REGISTRY`) |
 | Hunter | Đã gỡ bỏ hoàn toàn (`JevHunter*`, `hunter_escalation`, `scoring/`) |
-| Decision Gate | Tuỳ chọn `native` ở `deterministic`; Hybrid `external` ở `decision_external` |
+| Decision Gate | Tuỳ chọn `native` ở `deterministic`; Hybrid `external` (`jev_1w_bear_penalty=0.35`) ở `decision_external` |
 | Candidate ID | Chuẩn `{pair}_{side}_{epoch}_{candle_index}`; registry + fallback DF (tối đa 6h); lưu bền vững ở custom data của `Trade` |
-| Risk & Sizing | Cổng duyệt + thang SL ROE + giảm `0.50x` ngược 1D (`counter_1d_stake_scale`) + tự làm mới ví sàn live mỗi 15s |
-| Baseline mới nhất | `20220101–20261124` (`v4.6.0-counter1d`, `JEV_MODE=native`): `334` lệnh, `+184,121.66 USDT`, `14.42%` Max DD, PF `2.56`, Calmar `1365.48` |
+| Risk & Sizing | Cổng duyệt + thang SL ROE + giảm `0.50x` ngược 1D + trần `risk_per_trade_pct` opt-in + tự làm mới ví sàn live mỗi 15s |
+| Baseline mới nhất | `20220101–20261124` (`JEV_MODE=native`): `334` lệnh, `+184,121.66 USDT`, `14.42%` Max DD, PF `2.56`; 7Y Fixed-100 (`jev_1w_bear_penalty=0.35`): `435` lệnh, `55.9%` WR, `+2,336.48 USDT`, PF `1.84` |
 
 ---
 
@@ -57,6 +57,6 @@ P0 Kiểm toán → P1 Sensors → P2 Parity Engine → P3 Risk/Telemetry → P4
 
 | Kiểm tra | Yêu cầu |
 |---|---|
-| 1. Unit / contract tests | Toàn bộ `tests/strategy/` xanh (`444 passed, 1 skipped`) + `scripts/lint_guardrails.py` (`0 violations`) |
+| 1. Guardrails & Unit tests | `.venv/bin/python scripts/lint_guardrails.py --verify-all` (`0 violations` trên `LINT001`–`LINT036` + Pyrefly + Ruff + toàn bộ `tests/strategy/` xanh) |
 | 2. Full BT 5Y | Đối chiếu số lệnh / PnL / Max DD / PF với baseline mới nhất mỗi khi chạm luồng tín hiệu hoặc sizing |
 | 3. Docker | `--strategy-path strategies/mtf_sniper` + overlay `mtf_runtime_mode=decision_external` (`fallback_native`, `exchange_sync_interval_secs=15`) |

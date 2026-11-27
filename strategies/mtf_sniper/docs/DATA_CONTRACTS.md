@@ -14,7 +14,7 @@ Tất cả dataclass liên tầng đều dùng `frozen=True` (**bất biến nô
 | Enum | Giá trị |
 |---|---|
 | `TradeSide` | `long`, `short` |
-| `SensorType` | `anomaly`, `pattern` |
+| `SensorType` | `anomaly`, `pattern`, `context` |
 | `MarketRegime` | `bull_expansion`, `bull_pullback`, `bear_capitulation`, `bear_relief`, `choppy_ranging`, `volatility_squeeze` |
 | `DecisionAction` | `confirm`, `veto`, `hold` |
 | `RejectionReasonCode` | Mã từ chối của Sensor/Builder, Directional, JEV AI, Risk (xem trực tiếp `core/enums.py`) |
@@ -54,9 +54,9 @@ Cửa sổ đối chiếu tối đa: `DEFAULT_LOOKUP_MAX_AGE` = **6 giờ** (dù
 
 | Trường | Kiểu | Ghi chú |
 |---|---|---|
-| `sensor_name` | `str` | Ví dụ: `short_structure` |
-| `sensor_type` | `SensorType` | |
-| `side` | `TradeSide` | |
+| `sensor_name` | `str` | Ví dụ: `short_structure`, `market_regime` |
+| `sensor_type` | `SensorType` | `pattern`, `anomaly`, hoặc `context` |
+| `side` | `TradeSide \| None` | `None` đối với sensor ngữ cảnh không định hướng (`SensorType.CONTEXT`, ví dụ `MarketRegimeSensor`) |
 | `pair` | `str` | |
 | `timestamp` | `datetime` | Thời điểm đóng/mở nến |
 | `candle_index` | `int` | Vị trí hàng tuyệt đối (`iloc`) trong DataFrame đã phân tích |
@@ -121,9 +121,9 @@ return bool(auth.is_approved)
 | `stake_amount` | Giá trị ước tính để ghi log (`amount * rate / lev`, luôn truyền `enable_dynamic_sizing=False` vào `authorize_entry` để tránh nhân đôi với `custom_stake_amount`); bằng `0.0` nếu thiếu `amount`/`rate` |
 | `leverage` | Đòn bẩy mục tiêu (`get_leverage(None)` -> `10.0`) dùng ghi nhận exposure, **không** trực tiếp đặt vào lệnh sàn |
 | `stoploss_rate` | Stoploss cặp/mặc định truyền vào để ghi ngữ cảnh |
-| `risk_budget_used_pct` / `risk_per_trade_pct` | **`None`** — **chưa** triển khai tính ngân sách rủi ro theo khoảng cách stoploss |
+| `risk_per_trade_pct` / `risk_budget_used_pct` | Bằng **`None`** khi tắt Opt-in #1 (`risk_per_trade_pct=None`); khi bật `risk_per_trade_pct > 0`, ghi nhận trần cấu hình và tỷ lệ rủi ro thực tế `(stake_amount * abs(default_stoploss)) / wallet_equity` |
 | `wallet_equity` / `total_exposure_pct` | Lấy từ `self.wallets.get_total(stake_currency)` khi có sẵn; bằng **`None`** nếu không có |
-| `sizing_method` | Nhãn `"freqtrade_proposed"`; không phải bằng chứng authorize tự phân bổ vốn |
+| `sizing_method` | `"freqtrade_proposed"` khi tắt trần rủi ro; `"equity_risk_capped"` khi bật `risk_per_trade_pct` (vẫn chỉ là nhãn ngữ cảnh tại bước confirm) |
 | các trường khác | Thông tin portfolio / fingerprint / exposure — xem `core/contracts.py` |
 
 **Tuyệt đối không mô tả `RiskAuthorization` là bộ phân bổ vốn thật cho lệnh.**
@@ -133,9 +133,9 @@ return bool(auth.is_approved)
 | Callback | Strategy → RiskEngine | Hành vi (`risk/position_sizing.py`) |
 |---|---|---|
 | `leverage()` | `RiskEngine.get_leverage(max_leverage)` | `min(default_leverage, max_leverage)`; mặc định **`10x`** |
-| `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Nhận `proposed_stake` từ Freqtrade, chặn trần `max_stake` |
+| `custom_stake_amount()` | `RiskEngine.get_stake_amount(...)` | Nhận `proposed_stake` từ Freqtrade, chặn trần `max_stake` (và trần rủi ro `resolve_risk_cap_stake` theo `wallet_equity * risk_per_trade_pct / abs(stoploss_pct)` khi bật Opt-in #1) |
 | | | `enable_dynamic_sizing=False` (mặc định Python) → hệ số **1.0** |
-| | | Khi `enable_dynamic_sizing=True` (mặc định config Docker/local) → nhân hệ số tag (`_TAG_MULTIPLIERS` / `tag_multipliers`) $\times$ `resolve_counter_1d_scale(..., counter_1d_stake_scale)` (mặc định **`0.50x`** khi ngược 1D), rồi chặn `min(..., max_stake)` |
+| | | Khi `enable_dynamic_sizing=True` (mặc định config Docker/local) → nhân hệ số tag (`_TAG_MULTIPLIERS` / `tag_multipliers`) $\times$ `resolve_counter_1d_scale(..., counter_1d_stake_scale)` (**`0.50x`** khi ngược 1D) $\times$ `resolve_counter_1w_scale(..., counter_1w_stake_scale)`, rồi chặn `min(..., effective_cap)` |
 
 Thang stoploss vẫn đi riêng qua `custom_stoploss()` → `RiskEngine.get_stoploss()` (`risk/stoploss_ladder.py`).
 

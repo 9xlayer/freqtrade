@@ -74,7 +74,7 @@ Chỉ kích hoạt khi cả **4 nhóm điều kiện** (`*_structure`, `*_mtf`, 
 - **Vị thế 1H chuẩn xác:** SHORT nằm trong dải `[0.991x, 1.025x]` của `ema_50_1h` (chờ nhịp hồi kiệt sức Bò `rsi_max_24_1h >= 55.1` rồi mới đánh xuống); LONG bám `>= 0.988x` của `ema_50_1h` sau nhịp rũ (`rsi_min_24_1h <= 57.1`).
 - **Bảo vệ vĩ mô 1D:** LONG đòi hỏi không rơi vào bear market 1D (`close > ema_50_1d` & `ema_200_1d`) và không dãn quá `+53%` trên EMA200 1D; SHORT đứng cách đáy 20 ngày ít nhất `3.5%` và tránh cao điểm capitulation.
 
-### B. Dual-Regime Waterfall Momentum (`jev_hunter_waterfall_collapse`)
+### B. Dual-Regime Waterfall Momentum (`waterfall_collapse`)
 Sinh ra để bắt các cú sập tháo chạy nhanh (như `12/11/2026` và `20/11/2026` trên BTC) mà bộ lọc Sniper chuẩn bỏ qua vì giá đã đi xa `ema_50_1h` hoặc xuyên thẳng đáy 20D:
 - **Regime A — Vacuum Breakdown (`floor_dist <= 0` hoặc `<= 0.5%` kèm `rel_vol >= 3.0x`):** Khi giá thủng hỗ trợ 20 ngày, cho phép Short theo động lượng vùng chân không (bỏ qua trần ATR thông thường), vẫn giữ trần quá bán climax (`dist_ema50_4h >= -10%`, `dist_ema50_1d >= -20%`).
 - **Regime B — In-Range Collapse (`floor_dist > 0`):** Đánh gãy trước đáy khi biến động 4H mở rộng (`bb_width_4h >= 0.035`), chưa dãn sâu (`dist_ema50_4h >= -3.5%`, `dist_ema50_1d >= -12%`); riêng ETH bắt buộc dưới `ema_50_4h`.

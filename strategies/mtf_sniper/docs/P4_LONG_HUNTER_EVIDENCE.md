@@ -1,6 +1,6 @@
 # P4 Long Hunter — Hồ Sơ Thực Nghiệm & Lý Do Đóng Cổng (2026-11-18)
 
-> **Lưu ý ngữ cảnh phiên bản:** Thí nghiệm này được thực hiện trên tag chiến lược cũ **`v3.2.0-p4-hunter-gates`**. Package hiện hành đã là **`4.6.0-counter1d`** (xem `__init__.py`), trong đó đường Hunter vẫn **TẮT** khỏi `EntryPipeline.live`. Đây là tài liệu lưu trữ kết quả thử nghiệm tối ưu, **không** mô tả hành vi vào lệnh hiện tại.
+> **Lưu ý ngữ cảnh phiên bản:** Thí nghiệm này được thực hiện trên tag chiến lược cũ **`v3.2.0-p4-hunter-gates`**. Package hiện hành đã là **`4.7.0-1w-regime`** (xem `__init__.py`), trong đó toàn bộ nhánh `JevHunter` đã được **gỡ bỏ hoàn toàn** khỏi codebase. Đây là tài liệu lưu trữ kết quả thử nghiệm lịch sử giải thích lý do đóng cổng, **không** mô tả hành vi vào lệnh hiện tại.
 
 ## Thiết Lập Thí Nghiệm
 - Phiên bản lúc thử nghiệm: `strategies/mtf_sniper` `v3.2.0-p4-hunter-gates` (module gộp cũ `execution/hunter_merge.py`)
@@ -50,6 +50,5 @@ Bộ lọc P4 đã loại sạch 100% các tín hiệu breakout-expansion lịch
 - Giữ mặc định production `enable_hunter_long=false` (và ở bản hiện tại `EntryPipeline.live` đã tắt cứng nhánh Hunter escalation).
 - Chỉ mở lại khi có bộ phát hiện tín hiệu mới hoặc thiết kế khác chứng minh được kỳ vọng OOS dương rõ rệt mà không ăn vào edge của `long_A80_plus` / `waterfall`.
 
-## File Liên Quan Còn Lưu
-- `strategies/mtf_sniper/directional/long/hunter_gates.py`
-- `tests/strategy/test_mtf_sniper_long_hunter_gates.py`
+## Tra Cứu Mã Nguồn Lịch Sử
+- Hai tệp `strategies/mtf_sniper/directional/long/hunter_gates.py` và `tests/strategy/test_mtf_sniper_long_hunter_gates.py` đã được dọn bỏ ở bản `v4.7.0-1w-regime` (có thể tra cứu lại nguyên trạng tại git tag `v3.2.0-p4-hunter-gates`).

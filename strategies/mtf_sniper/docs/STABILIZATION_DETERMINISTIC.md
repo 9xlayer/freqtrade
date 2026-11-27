@@ -23,11 +23,13 @@ Hai đường **cài đặt** dùng chung một hợp đồng Policy (chi tiết
 
 ```text
 populate_entry_trend
-  → EntryPipeline.live
-      Fast:  cached Sniper Parts → vectorized AND → TradeCandidate
-      Event: SensorSuite → CandidateBuilder → SetupComposer → TradeCandidate
-      → Long/Short Policy (hợp lệ setup ≠ nhãn chất lượng quality_grade)
-      → strategy cooldown → enter_*
+  → EntryPipeline.live (Single-Truth LINT029)
+      → SensorSuite.live (8 Sniper parts + MarketRegimeSensor 1W + WaterfallMomentumSensor)
+      → SetupComposer.compose_suite()
+           • Vectorized Mask Mode: scan_mask() / scan_mask_features() → _compose_from_masks()
+           • Event Fallback Mode:  scan() → CandidateBuilder → compose()
+      → DirectionalTradingEngine.subsystem_policies (LongPolicy / ShortPolicy / WaterfallShortPolicy)
+      → apply_cooldown (40 long / 96 short) + khử xung đột Long/Short → enter_*
       → CandidateRegistry.remember(canonical candidate_id)
 confirm_trade_entry
   → truy xuất candidate_id:
@@ -36,7 +38,7 @@ confirm_trade_entry
        → nếu vẫn thiếu: gắn candidate_id_missing
   → RiskEngine.authorize_entry
       → portfolio guards (circuit breaker / directional lock / distress / max open)
-      → JevDecisionAdapter(force_native=True) nếu bật enable_jev_decision
+      → JevDecisionAdapter(force_native=True ở chế độ deterministic) nếu bật enable_jev_decision
       → RiskAuthorization (chỉ cổng duyệt lệnh; stake/leverage thật nằm ở callback riêng)
 ```
 
@@ -75,7 +77,7 @@ confirm_trade_entry
 
 ## Rủi Ro / Giới Hạn Còn Tồn Tại
 
-- **Chưa tính size theo khoảng cách Stoploss (Stop-distance risk budgeting):** hiện sizing mới theo tỷ lệ vốn đề xuất $\times$ tag $\times$ hệ số ngược 1D `0.50x`.
+- **Đã có trần rủi ro theo `stoploss` cặp (`risk_per_trade_pct` Opt-in #1), nhưng chưa định cỡ động theo ATR từng cây nến:** hiện sizing hỗ trợ hệ số tag $\times$ ngược pha 1D (`0.50x`) $\times$ ngược sóng 1W (`counter_1w_stake_scale`) kèm trần `(wallet_equity * risk_per_trade_pct) / |pair_stoploss|`.
 - **Kiểm tra ngưỡng thanh lý / margin trực tiếp:** mới có enum, chưa đấu nối trực tiếp với margin real-time của sàn.
 - **Test restart container Docker thực tế khi đang có lệnh mở:** đã test bền vững dữ liệu qua SQLite ORM nhưng vẫn nên test thao tác restart container thật trên Pi.
 - **Telegram / `stoploss_on_exchange`:** hiện đang tắt trong `user_data/config.json` và cấu hình mặc định (cắt lỗ dựa vào `custom_stoploss` phần mềm).

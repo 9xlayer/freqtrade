@@ -8,7 +8,7 @@
 - **Local / Backtest (`deterministic`):** Dùng bộ chấm điểm tất định `JEV_MODE=native`, `enable_waterfall=true` (JevHunter đã gỡ hoàn toàn).
 - **Docker Production (`decision_external`):** Dùng `JEV_MODE=external` Hybrid AI score (`w_ai=0.10`, `JEV_FAIL_POLICY=fallback_native`, timeout `4s`), `enable_waterfall=true`, `enable_dynamic_sizing=true`, `exchange_sync_interval_secs=15`. Xem thêm `STABILIZATION_DETERMINISTIC.md`.
 
-**Tài liệu gốc chuẩn:** File này + `PHILOSOPHY.md` (triết lý chiến lược & lý do thiết kế) + `DATA_CONTRACTS.md` (hợp đồng dữ liệu) mô tả đúng hành vi đang chạy thực tế. Ghi chú lịch sử chuyển đổi nằm ở `MIGRATION_PLAN.md`.
+**Tài liệu gốc chuẩn:** Đọc mục lục tại [`README.md`](./README.md) · File này + [`PHILOSOPHY.md`](./PHILOSOPHY.md) (triết lý chiến lược & lý do thiết kế) + [`DATA_CONTRACTS.md`](./DATA_CONTRACTS.md) (hợp đồng dữ liệu) + [`GUARDRAILS.md`](./GUARDRAILS.md) (ma trận DAG & 36 luật chống AI slop) mô tả đúng hành vi đang chạy thực tế. Ghi chú lịch sử nằm ở [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md).
 
 ---
 
@@ -18,10 +18,11 @@ Freqtrade gọi trực tiếp vào `StrategyMTFSniper`; lớp này đóng vai tr
 
 | Hook Freqtrade | Vai trò chiến lược | Module xử lý |
 |---|---|---|
+| `bot_start` | Phân giải cấu hình 3 tầng (`EffectiveConfig`), kiểm tra `RuntimeMode` fail-fast & băm SHA-256 `fingerprint()` | `core/runtime_mode.py`, `core/config_resolve.py` |
 | `bot_loop_start` | Tự làm mới vị thế live mỗi `15s` khi đang có lệnh mở (phát hiện đóng tay trên sàn) | `strategy_mtf_sniper.py` |
-| `populate_indicators_*` | Tính chỉ báo đa khung (`1D`, `4H`, `1H`, `15m`) | `market/indicators.py` |
+| `populate_indicators_*` | Tính chỉ báo đa khung (`1W`, `1D`, `4H`, `1H`, `15m`) | `market/indicators.py` |
 | `populate_entry_trend` | Sinh tín hiệu vào lệnh + cooldown + ghi danh `CandidateRegistry` | `execution/entry_pipeline.py` |
-| `leverage` / `custom_stake_amount` | Đòn bẩy (tối đa `10x`) + stake theo tag & ngược pha 1D (`0.50x`) | `risk/position_sizing.py` |
+| `leverage` / `custom_stake_amount` | Đòn bẩy (tối đa `10x`) + stake theo tag, ngược pha 1D (`0.50x`), 1W opt-in & trần `risk_per_trade_pct` | `risk/position_sizing.py` |
 | `confirm_trade_entry` | Kiểm tra bảo vệ danh mục + JEV Decision + ghi `DecisionLedger` | `intelligence/` + `risk/` |
 | `custom_stoploss` | Thang khoá lãi theo bậc ROE + cắt lỗ kẹt 24h | `risk/stoploss_ladder.py` |
 | `confirm_trade_exit` | Hoãn chốt ROI `>= 50%` khi xu hướng 1H vẫn giữ | `execution/exit_policy.py` |
@@ -42,7 +43,8 @@ Freqtrade gọi trực tiếp vào `StrategyMTFSniper`; lớp này đóng vai tr
 
 ```mermaid
 flowchart TB
-  subgraph L1 ["1. Market Layer - market/indicators.py"]
+  subgraph L1 ["1. Market Layer - market/indicators.py & market/data_guards.py"]
+    ind1w["1W Informative: EMA21/50, MACD wave, macro bull/bear 1W"]
     ind1d["1D Informative: EMA50/200, swing_low_20d, PDH, macro bull/bear"]
     ind4h["4H Informative: MACD wave, EMA50, ADX, DI, BB width"]
     ind1h["1H Informative: EMA21/50, MACD, RSI 24h min/max"]
@@ -50,32 +52,31 @@ flowchart TB
   end
 
   subgraph L2 ["2. Signal & Setup Composition (Single Truth) - signals/ & directional/setup_composer.py"]
-    suite["SensorSuite.live: 8 LegacySniperPartSensor + WaterfallMomentumSensor"]
-    scanMask["BaseSensor.scan_mask() (vector hoa, khong tao object rac) hoac Event fallback"]
-    composer["SetupComposer.compose_suite() ghep SetupRecipe trong SUBSYSTEM_REGISTRY"]
-    candOut["Chuan hoa TradeCandidate (subsystem tag + canonical candidate_id)"]
+    suite["SensorSuite.live: 8 LegacySniperPartSensor + MarketRegimeSensor (CONTEXT) + WaterfallMomentumSensor"]
+    scanMask["BaseSensor.scan_mask() (vector hoa NumPy) hoac Event fallback (CandidateBuilder)"]
+    composer["SetupComposer.compose_suite() ghep SetupRecipe trong SUBSYSTEM_REGISTRY (uu tien priority)"]
+    candOut["Chuan hoa TradeCandidate (subsystem tag + context features + canonical candidate_id)"]
     suite --> scanMask --> composer --> candOut
   end
 
   subgraph L3 ["3. Directional Policy & Registry - directional/"]
-    shortPol["ShortPolicy (short_sniper)"]
-    wfPol["WaterfallShortPolicy (waterfall Dual-Regime)"]
-    longPol["LongPolicy (long_sniper)"]
-    hunterOff["HunterEscalationGateway (tat tren live)"]
+    shortPol["ShortPolicy (short_sniper, priority=10)"]
+    wfPol["WaterfallShortPolicy (waterfall Dual-Regime, priority=20)"]
+    longPol["LongPolicy (long_sniper, priority=10)"]
   end
 
-  subgraph L4 ["4. Post-Policy & Identity - core/"]
-    cooldown["apply_cooldown (40 long / 96 short) + huy xung dot Long/Short"]
+  subgraph L4 ["4. Post-Policy & Identity - execution/ & core/"]
+    cooldown["apply_cooldown (40 long / 96 short) + huy xung dot Long/Short + chon candidate hop le dau tien moi nen"]
     enterCols["Ghi enter_long / enter_short / enter_tag theo vi tri iloc"]
     regMem["CandidateRegistry.remember (chi luu tin hieu song sot sau cooldown)"]
     cooldown --> enterCols --> regMem
   end
 
   subgraph L5 ["5. Sizing & Confirm Gate - risk/ & intelligence/"]
-    sizing["leverage() & custom_stake_amount() -> position_sizing.py (0.50x counter-1D)"]
+    sizing["leverage() & custom_stake_amount() -> position_sizing.py (0.50x counter-1D, opt-in 1W & risk_per_trade_pct)"]
     confirm["confirm_trade_entry() -> _resolve_candidate_id"]
     portGuard["portfolio_protection: MaxOpen, CB (reset + cross-pair dedup), DirLock, Distress"]
-    jevGate["JevDecisionAdapter (native HOẶC external Hybrid + fallback_native)"]
+    jevGate["JevDecisionAdapter (native + jev_1w_bear_penalty HOẶC external Hybrid + fallback_native)"]
     riskAuth["RiskEngine.authorize_entry -> RiskAuthorization + DecisionLedger (15m dedup)"]
     confirm --> portGuard --> jevGate --> riskAuth
   end
@@ -91,7 +92,6 @@ flowchart TB
 
   L1 --> L2
   candOut --> L3
-  hunterOff -.->|"disabled on live"| L3
   shortPol -->|"is_valid=True"| L4
   wfPol -->|"is_valid=True"| L4
   longPol -->|"is_valid=True"| L4
@@ -99,12 +99,24 @@ flowchart TB
   riskAuth -->|"is_approved=True"| L6
 ```
 
-| Đường chạy | Khi nào dùng | Các tầng thực thi |
+| Chế độ ghép tín hiệu trong `SetupComposer.compose_suite()` | Khi nào dùng | Luồng thực thi chuẩn (Single Truth `LINT029`) |
 |---|---|---|
-| **Fast Path** | Mặc định khi sensor khớp bộ live | Parts → Vectorized AND (+ `MomentumRadar` nếu `enable_waterfall`) → `TradeCandidate` → Policy |
-| **Event Path** | Fallback hoặc khi dùng `SensorSuite` tuỳ biến | SensorSuite → Builder → SetupComposer → Policy |
+| **Vectorized Mask Mode** | Mặc định khi mọi sensor trong `SensorSuite` hỗ trợ `scan_mask()` | `SensorSuite` → `scan_mask()` / `scan_mask_features()` → `SetupComposer._compose_from_masks()` → `DirectionalTradingEngine` |
+| **Event Fallback Mode** | Tự động kích hoạt khi có bất kỳ sensor nào trả `scan_mask() is None` | `SensorSuite.scan()` → `CandidateBuilder` → `SetupComposer.compose()` → `DirectionalTradingEngine` |
 
-Fast Path cố tình bỏ qua `CandidateBuilder` / `SetupComposer` để backtest 5 năm nhanh, nhưng hợp đồng đầu ra giống hệt nhau (được khoá bằng `tests/strategy/test_mtf_candidate_parity.py`).
+**Thứ tự ưu tiên tất định khi nhiều Sub-System cùng khớp trên 1 cây nến (`SetupRecipe.priority`):**
+- `SetupComposer` sắp xếp ứng viên theo `(candle_index, side, recipe.priority, recipe.name)`.
+- Ở nhánh `short`, `short_sniper` (`priority=10`) luôn được đánh giá trước `waterfall` (`priority=20`). `EntryPipeline.run()` giữ ứng viên đầu tiên đạt `PolicyEvaluationResult.is_valid=True` tại mỗi `(side, candle_index)`; nếu `short_sniper` hợp lệ trên cùng cây nến, nhãn `short_A80_plus`/`short_B65_plus` được ưu tiên trước `waterfall_collapse` (nếu `short_sniper` bị từ chối thì `waterfall` vẫn được đánh giá bình thường).
+- Hợp đồng đầu ra giữa Vectorized Mask Mode và Event Fallback Mode giống hệt nhau 100% (được khoá bằng `tests/strategy/test_mtf_candidate_parity.py`).
+
+### Danh Mục Sub-Systems & Cảm Biến Ngữ Cảnh (`SUBSYSTEM_REGISTRY` & `SensorSuite.live`)
+
+| Sub-System / Sensor | Chiều | Công thức & Độ ưu tiên | Tập cảm biến nguyên tử bắt buộc | Bộ đánh giá chuyên biệt & Nhãn vào lệnh |
+|---|---|---|---|---|
+| `long_sniper` | `LONG` | `setup:sniper_long` (`priority=10`) | `long_structure & long_mtf & long_macro & long_safety` | `LongPolicy` $\rightarrow$ `long_A80_plus` (`long_score >= 80`, cooldown `40` nến) |
+| `short_sniper` | `SHORT` | `setup:sniper_short` (`priority=10`) | `short_structure & short_mtf & short_macro_floor & short_safety` | `ShortPolicy` $\rightarrow$ `short_A80_plus` \| `short_B65_plus` \| `short_C_sub65` (cooldown `96` nến) |
+| `waterfall` | `SHORT` | `setup:waterfall_short` (`priority=20`) | `waterfall_momentum` (`MomentumRadar`, cooldown nội bộ `12` nến) | `WaterfallShortPolicy` $\rightarrow$ `waterfall_collapse` (2 chế độ Chân không / Trong biên) |
+| `market_regime` | Phi hướng (`side=None`) | `SensorType.CONTEXT` | `market_regime_1w != "unknown"` | Đính kèm qua `_attach_suite_context()`; không tăng `confluence_count` và không tự mở lệnh |
 
 ---
 
@@ -144,9 +156,18 @@ flowchart LR
 | `custom_stoploss()` | Điều chỉnh SL theo thang ROE (`+18/+30/+50/+80/+120%`) & cắt sau 24h âm | Không đặt SL cứng trên sàn ngoài callback Freqtrade |
 
 **Phân tầng cấu hình (`config_resolve.py`):**
-- Mặc định Python: `enable_dynamic_sizing=False` (`1.0x`).
-- Khi bật `enable_dynamic_sizing=true` (trong `user_data/config.json` & `docker/config.mtf_sniper.json`): áp dụng `tag_multipliers` (`_TAG_MULTIPLIERS`) $\times$ `resolve_counter_1d_scale(..., counter_1d_stake_scale)` (mặc định **`0.50`**, có thể tối ưu bằng Hyperopt hoặc env `COUNTER_1D_STAKE_SCALE`), chặn trên bởi `max_stake`; đòn bẩy `min(default_leverage, max_leverage)` (mặc định `10.0`).
+- Mặc định Python: `enable_dynamic_sizing=False` (`1.0x`), `risk_per_trade_pct=None`, `counter_1w_stake_scale=1.0`, `jev_1w_bear_penalty=0.0`.
+- Khi bật `enable_dynamic_sizing=true` (trong `user_data/config.json` & `docker/config.mtf_sniper.json`): áp dụng `tag_multipliers` (`_TAG_MULTIPLIERS`) $\times$ `resolve_counter_1d_scale(..., counter_1d_stake_scale)` (`0.50x`) $\times$ `resolve_counter_1w_scale(..., counter_1w_stake_scale)`, chặn trên bởi `max_stake` và trần rủi ro SL theo vốn ví `resolve_risk_cap_stake` nếu `risk_per_trade_pct` được cấu hình (`> 0`). Trên Docker production (`docker/config.mtf_sniper.json`), `jev_1w_bear_penalty=0.35` giúp siết chặt Long ngược sóng giảm khung Tuần (`1W`).
 - Các tham số vào/lọc/sizing và runtime đều được chụp thành `EffectiveConfig` và băm ra `fingerprint()` khi khởi động.
+
+### Ma Trận Chế Độ Vận Hành (`RuntimeMode`) & Công Thức Cổng JEV Decision
+
+| `mtf_runtime_mode` | Cổng JEV Decision | Kết nối API ngoài | Cơ chế chấm điểm & Lưu đệm |
+|---|---|---|---|
+| `pure_deterministic` | Buộc **TẮT** | Khoá cứng (`force_native=True`) | Cô lập thuần tuý bộ luật kỹ thuật Sniper + Waterfall + Quản trị danh mục |
+| `deterministic` | Tuỳ chọn `native` | Khoá cứng (`force_native=True`) | Mặc định cho Backtest: chạy `_evaluate_native_sequence()` `<1ms` trong RAM (`>= 0.70` duyệt), bỏ qua I/O SQLite |
+| `decision_native` | Tuỳ chọn `native` | Khoá cứng (`force_native=True`) | Chạy tường minh bộ chấm điểm nội tại kèm mức phạt `jev_1w_bear_penalty` |
+| `decision_external` | Điểm lai `Hybrid` | Typesafe `jev-latest` (timeout `4s`) | Mặc định Docker: `hybrid = native_conf + w_ai * (noul - 0.5) * 2 - choppy_penalty` (`w_ai=0.10`, `choppy_penalty=0.05`, ngưỡng `0.70`, `fallback_native`, lưu đệm SQLite WAL tách biệt theo token ngưỡng) |
 
 ---
 
@@ -170,8 +191,8 @@ Tuyệt đối không tự chế ID giả sai định dạng. ID đọc từ DB 
 | Tầng | Vai trò | Đường dẫn |
 |---|---|---|
 | Triết lý | Bản chất edge, phễu 4 khung, lý do thiết kế từng lớp | `docs/PHILOSOPHY.md` |
-| Market | Chỉ báo đa khung (`1D`/`4H`/`1H`/`15m`) & data readiness guards | `market/indicators.py`, `market/data_guards.py` |
-| Sensors | Tín hiệu thành phần + `WaterfallMomentumSensor` (`scan_mask` / `scan`) | `signals/sensor_suite.py`, `signals/sensors/` |
+| Market | Chỉ báo đa khung (`1W`/`1D`/`4H`/`1H`/`15m`), safety masks & data readiness guards | `market/indicators.py`, `market/data_guards.py` |
+| Sensors | Part masks chuẩn + concrete sensors (`MarketRegimeSensor`, `WaterfallMomentumSensor`, `LegacySniperPartSensor`) | `signals/sniper_part_masks.py`, `signals/sensor_suite.py`, `signals/sensors/` |
 | Builder | Gom / khử xung đột cho sensor sự kiện thuần (`scan_mask() is None`) | `signals/candidate_builder.py` |
 | Composer | Single-Truth recipe matcher (`compose_suite` mask + event fallback) | `directional/setup_composer.py`, `setup_recipes.py` |
 | Policy | Hợp lệ `short_sniper` / `long_sniper` + tách riêng `WaterfallShortPolicy` | `directional/*/policy.py`, `directional/short/waterfall_policy.py` |
@@ -188,27 +209,15 @@ Tuyệt đối không tự chế ID giả sai định dạng. ID đọc từ DB 
 
 ## 6. Nguyên Tắc Bất Di Bất Dịch & Ràng Buộc Kiến Trúc Bằng Code
 
-### 6.1 Ràng buộc tự động (CLI + AST Lint + Typecheck + Docker Build)
-Kiến trúc **Sensor đơn lẻ → CandidateBuilder → Đa Sub-system trong `directional/`** được khoá cứng bằng code & kiểm tra tự động qua `.git/hooks/pre-commit`, `docker/Dockerfile.custom`, và CLI:
+### 6.1 Ràng buộc tự động 5 lớp (`GUARDRAILS.md`)
+Toàn bộ kiến trúc 8 tầng được khoá cứng bằng code thông qua gói `scripts/guardrails/` (`ArchitectureManifest` + `LINT001`–`LINT036` + Pyrefly + Ruff) và thực thi tự động qua 5 vòng: Manifest $\rightarrow$ Cursor `postToolUse` Hook `<150ms` (`.cursor/hooks/post-edit-guardrails.sh`) $\rightarrow$ Cursor Rule $\rightarrow$ Git `pre-commit` $\rightarrow$ `docker/Dockerfile.custom`.
+
+Xem bảng **Ma trận Allowlist DAG 8 tầng** và **danh mục đầy đủ 36 quy tắc `LINT001`–`LINT036`** tại [`GUARDRAILS.md`](./GUARDRAILS.md).
 
 ```bash
-# Kiểm tra toàn bộ ranh giới tầng + liệt kê registry các sub-system + chạy luôn pytest:
+# Kiểm tra toàn bộ ranh giới tầng + chống AI slop + liệt kê registry sub-system + chạy pytest:
 .venv/bin/python scripts/lint_guardrails.py --verify-all
 ```
-
-| Mã kiểm tra | Ràng buộc được khoá cứng trong code |
-|---|---|
-| `LINT018` | Mọi concrete `*Sensor` trong `signals/sensors/` bắt buộc kế thừa `BaseSensor` |
-| `LINT020` | `signals/` không được import ngược lên `execution/`, `risk/`, `intelligence/`, `strategy_mtf_sniper` |
-| `LINT021` | Sensor không bao giờ được ghi/đụng chuỗi tín hiệu Freqtrade (`enter_long`, `enter_short`, `exit_*`) |
-| `LINT022` | Cấm bóp `SetupComposer` về map 1-1 theo chiều (`_by_side` / `{r.side: r}`); phải dùng `recipes_grouped_by_side` |
-| `LINT023` | `directional/` giữ tách biệt `long` ↔ `short` (`LINT003`) và cấm import `execution/` / `risk/` / `intelligence/` |
-| `LINT024` + Pyrefly | Kiểm tra `SUBSYSTEM_REGISTRY`, `all_live_recipes`, và `DirectionalPolicyProtocol` |
-| `LINT025` | 1 Sub-system = 1 Policy class riêng (`LongPolicy`, `ShortPolicy`, `WaterfallShortPolicy`); tự import & kiểm tra `DirectionalPolicyProtocol` |
-| `LINT026` | Bắt buộc `DirectionalTradingEngine.subsystem_policies` điều phối theo registry & `EntryPipeline` gọi `SetupComposer.compose_suite()` |
-| `LINT027` | Cấm `EntryPipeline` gắn `"subsystem"` lậu không có trong `SUBSYSTEM_REGISTRY` |
-| `LINT028` | Bắt buộc mọi `sensor_name` trong `SetupRecipe.required_sensors` phải tồn tại dưới dạng `BaseSensor` thật trong `signals/sensors/` |
-| `LINT029` | Cấm tái lập Fast Path (`_candidates_from_sniper_masks`, `MomentumRadar`, `cached_sniper_parts`, `TradeCandidate()`) trong `execution/entry_pipeline.py` |
 
 ### 6.2 Quy trình chuẩn khi bổ sung 1 Sub-System mới (Plug-and-Play)
 1. **Tạo Sensor đơn lẻ (`signals/sensors/`):** kế thừa `BaseSensor`, bắn `TriggerEvent` cho tín hiệu nguyên tử (tuyệt đối không viết rule portfolio hay `enter_*`).
