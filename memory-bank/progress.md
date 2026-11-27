@@ -1,6 +1,14 @@
 # Progress
 
 ## What works
+- **Live Readiness Checklist & Legacy `jev_hunter_*` Naming Purge (`v4.7.0-1w-regime`, Nov 27, 2026)**:
+  - Added `strategies/mtf_sniper/docs/LIVE_READINESS_CHECKLIST.md` (`docs/README.md` indexed) for switching `dry_run: true -> false` safely.
+  - Standardized `ShortSetup.WATERFALL_COLLAPSE = "waterfall_collapse"`, `LongSetup.BREAKOUT_EXPANSION = "long_breakout_expansion"`, `_TAG_MULTIPLIERS` `"waterfall": 1.00`, and `JevDecisionEngine(cache_db="user_data/jev_decision_cache.sqlite")`; locked legacy names out of core docs via `LINT036`.
+- **Architecture Gap Closure & 5-Stage Anti-AI-Slop Guardrail Engine (`v4.7.0-1w-regime`, Nov 27, 2026)**:
+  - Eliminated all `signals/ -> directional/` upward imports (`market/data_guards.py` + `signals/sniper_part_masks.py` + DI `complete_sensor_sets` in `CandidateBuilder`, full backward-compatible re-exports in `directional/`, `is_legacy_parts` exemption removed).
+  - Synced `RiskEngine.authorize_entry()` (`RiskAuthorization.risk_per_trade_pct`, `risk_budget_used_pct`, `sizing_method="equity_risk_capped"` when Opt-in #1 is enabled) and completed 100% Canvas-equivalent Git-tracked documentation suite in `strategies/mtf_sniper/docs/` (`README.md`, `PHILOSOPHY.md`, `ARCHITECTURE.md`, `DATA_CONTRACTS.md`, `GUARDRAILS.md` + cleaned archive docs, all verified automatically by `LINT036`).
+  - Built modular `scripts/guardrails/` (`manifest.py`, `layer_rules.py`, `anti_slop_rules.py`, `registry_rules.py`) + `scripts/lint_guardrails.py` (`LINT001`–`LINT036`), wired real-time Cursor `postToolUse` hook (`.cursor/hooks/post-edit-guardrails.sh`, `--fast`), `.cursor/rules/mtf-sniper-subsystems.mdc`, Git `pre-commit`, and `docker/Dockerfile.custom`.
+  - Gate passed: **0 violations**, **411 passed, 0 skipped** (`5.75s`).
 - **Hot-Path Optimizations, Sensor Cleanup & Docker Context Diet (`v4.7.0-1w-regime`, Nov 26, 2026)**:
   - Cached `WaterfallMomentumSensor._compute_triggers` per DF, vectorized `MarketRegimeSensor.scan_mask_features` + `EntryPipeline.run` NumPy mask population, converted `CandleTrajectoryExtractor.extract_sequence` to 6-column slice + NumPy `zip` (no `iterrows`), and skipped SQLite I/O by default in `native`/`backtest` `JevDecisionEngine` (`use_disk_cache=None -> mode=="external"`).
   - Removed 5 unused legacy sensors (`VolumeSurgeSensor`, `VolatilityExpansionSensor`, `WaterfallDropSensor`, `A80PlusSensor`, `SwingBreakoutSensor`), `composite_catalog.py`, `SensorSuite.hunter()`/`experimental()`, and dead `_dataframe_position()` helper; excluded `.gitnexus/` (232 MB), `reports/`, and agent metadata folders from `.dockerignore`.

@@ -1,6 +1,23 @@
 # Active Context
 
 ## Current focus
+**Live Readiness Checklist & Complete Removal of Legacy `jev_hunter_*` Naming (`v4.7.0-1w-regime`, Nov 27, 2026)**:
+- **Added `strategies/mtf_sniper/docs/LIVE_READINESS_CHECKLIST.md` (indexed in `docs/README.md`):** 5-phase pre-flight & go-live checklist covering Binance Futures account prerequisites (`One-way Mode`, `Single-Asset Mode`, `>= 500 USDT` wallet floor for BTC `MIN_NOTIONAL` under `0.25x` dual-scaled `risk_per_trade_pct=0.025`), archiving Dry-Run `tradesv3.sqlite` / JSONL ledgers (`--db-url` separation), rotating `api_server` default secrets, NTP sync (`-1021` guard), enabling `stoploss_on_exchange: true`, switching `entry_pricing`/`exit_pricing` to `"other"`, and first-trade / Kill-Switch verification.
+- **Standardized Waterfall & Decision Cache Naming (zero `jev_hunter_*` remnants in active code/docs):**
+  - Renamed `ShortSetup.WATERFALL_COLLAPSE` & `SubSystemSpec(waterfall).entry_tag_prefix` from `"jev_hunter_waterfall_collapse"` to `"waterfall_collapse"`, `LongSetup.BREAKOUT_EXPANSION` to `"long_breakout_expansion"`, `_TAG_MULTIPLIERS` key from `"jev_hunter"` to `"waterfall"`, and `JevDecisionEngine` default `cache_db` to `"user_data/jev_decision_cache.sqlite"`.
+  - Added `"jev_hunter_waterfall_collapse"`, `"jev_hunter_breakout_expansion"`, and `"jev_hunter_cache"` to `ArchitectureManifest.banned_legacy_doc_symbols` (`LINT036`), and synced `docs/{ARCHITECTURE,PHILOSOPHY,LIVE_READINESS_CHECKLIST}.md`, `strategies/README.md`, Canvas, and unit tests.
+
+**Architecture Gap Closure & 5-Stage Anti-AI-Slop Guardrail Engine (`v4.7.0-1w-regime`, Nov 27, 2026)**:
+- **Closed all 4 architectural & contract-doc gaps (zero trade/parity drift):**
+  1. *Pure 1-Way Layer DAG (`market -> signals -> directional`, 0 carve-outs)*: Moved `MarketSafetyConfig`, `DEFAULT_MARKET_SAFETY`, `volatility_safe_mask`, `sideway_safe_mask` into `market/data_guards.py` (re-exported in `directional/common_gates.py`); extracted `SHORT_SNIPER_PART_NAMES`, `LONG_SNIPER_PART_NAMES`, `build_short_sniper_parts`, `build_long_sniper_parts` into `signals/sniper_part_masks.py` (re-exported in `directional/{short,long}/setups.py`); injected `complete_sensor_sets` into `CandidateBuilder` from `SetupComposer._compose_suite_via_events()`; deleted the `is_legacy_parts` carve-out in `LINT020`.
+  2. *`RiskAuthorization` Opt-in #1 Telemetry Alignment (`risk/risk_engine.py`)*: `RiskEngine.authorize_entry()` now populates `risk_per_trade_pct = self.risk_per_trade_pct`, `risk_budget_used_pct = (stake * abs(default_stoploss)) / equity` (when approved with known equity), and `sizing_method = "equity_risk_capped"` when configured, while keeping `None` / `"freqtrade_proposed"` when unset.
+  3. *Authoritative Docs Suite Completed & Locked (`strategies/mtf_sniper/docs/`)*: Added `docs/README.md` (index) and `docs/GUARDRAILS.md` (5-stage defense-in-depth, 8-layer DAG allowlist matrix, full `LINT001`–`LINT036` reference), enriched `PHILOSOPHY.md` (5-timeframe funnel `1W->1D->4H->1H->15m`, `MarketRegimeSensor`, BTC vs ETH `custom_pair_params` table) & `ARCHITECTURE.md` (`bot_start`, `SUBSYSTEM_REGISTRY` table, `RuntimeMode` & Hybrid JEV formula + SQLite WAL cache), and cleaned historical notes in `STABILIZATION_DETERMINISTIC.md`, `MIGRATION_PLAN.md`, and `P4_LONG_HUNTER_EVIDENCE.md`. Locked all 5 core docs + `LINT001`–`LINT036` rule-code presence in `LINT036`.
+  4. *Same-Bar Multi-Subsystem Priority Locked (`LINT024`)*: Documented `(candle_index, side, recipe.priority)` precedence (`short_sniper` prio `10` ahead of `waterfall` prio `20`) and enforced distinct same-side priorities in `scripts/guardrails/registry_rules.py`.
+- **Built 5-Stage Anti-AI-Slop Guardrail Architecture (`scripts/guardrails/` + `scripts/lint_guardrails.py` + Hooks + Docker):**
+  - Declarative `ArchitectureManifest` (`scripts/guardrails/manifest.py`) + modular rule packs (`layer_rules.py`, `anti_slop_rules.py`, `registry_rules.py`) adding `LINT030` (8-layer DAG allowlist matrix covering relative & lazy function imports, blocking horizontal spaghetti and direct Facade -> `signals`/`directional` bypasses), `LINT031` (directory/root allowlist, slop filename ban `*_v2.py`/`*helper*.py`/`*util*.py`, stray `.md` ban), `LINT032` (anti-`TODO`/stub guard allowing only `ABC`/`Protocol`), `LINT033` (ban bare `# type: ignore` / bare `# noqa` / `eval` / `exec`), `LINT034` (ban `print()` & DataFrame `.iterrows()`/`.itertuples()`/`.apply(axis=1)`), `LINT035` (module `<=550` LOC & function `<=165` LOC budgets + mutable default ban), and `LINT036` (live Docs-to-Code `STRATEGY_VERSION`, `SensorType`, and dead-symbol sync).
+  - Wired `--fast` (`<150ms`) into Cursor `.cursor/hooks/post-edit-guardrails.sh` (`postToolUse` on `Write|StrReplace|Delete`), updated `.cursor/rules/mtf-sniper-subsystems.mdc`, and updated `docker/Dockerfile.custom` to copy & verify `scripts/guardrails/` at image build time.
+- **Verification (Nov 27, 2026):** `.venv/bin/python scripts/lint_guardrails.py --verify-all` → **0 violations**, **411 passed, 0 skipped** (`5.75s`).
+
 **Hot-Path Optimizations & Dead-Sensor Cleanup (`v4.7.0-1w-regime`, Nov 26, 2026)**:
 - **Hot-path performance optimizations (zero strategy/backtest parity drift):**
   - `signals/sensors/anomaly_waterfall.py`: Cached `WaterfallMomentumSensor._compute_triggers()` on `dataframe.attrs["_mtf_waterfall_triggers_v1"]` so `SetupComposer.compose_suite` avoids running `MomentumRadar.find_candidates()` twice per DataFrame; replaced per-hit `dataframe.iloc[i]` lookups with direct `short_score` NumPy array indexing.
@@ -155,7 +172,7 @@ Hunter/anomaly OFF on live; Decision Gate optional on confirm.
 
 ## Versions
 - Single hub: `strategies/mtf_sniper/__init__.py`
-- `STRATEGY_VERSION` `4.6.0-counter1d` / Decision engine `2.7.2` / Hunter `2.7.0`
+- `STRATEGY_VERSION` `4.7.0-1w-regime` / Decision engine `2.7.2`
 - External prompt A/B via `JEV_DECISION_PROMPT_VARIANT` (default `richctx`); cache identity per suffix
 
 ## External Decision prompt A/B (2026-11-19, 5Y `20220101-20261116`)
@@ -230,7 +247,8 @@ Feedback batch (tag multipliers / early BE ladder / ETH tighten) vs **wrong base
 - Regression: `test_mtf_entry_pipeline_duplicate_index.py`
 
 ## Next
-- Coolify redeploy when ready (`decision_external` + Hybrid Decision Score with `fallback_native`, `enable_waterfall=true`, `enable_dynamic_sizing=true`)
+- **Before flipping `dry_run: false` (Real Money Go-Live):** Walk through every `[ ]` item in [`strategies/mtf_sniper/docs/LIVE_READINESS_CHECKLIST.md`](../strategies/mtf_sniper/docs/LIVE_READINESS_CHECKLIST.md) (Binance `One-way` + `Single-Asset` mode, archive Dry-Run `tradesv3.sqlite`, rotate `api_server` secrets, enable `stoploss_on_exchange: true`, switch `entry_pricing`/`exit_pricing` to `"other"`, set `risk_per_trade_pct: 0.025` + `short_B65_plus: 0.50`, enable Telegram).
+- Coolify redeploy when ready (`decision_native` or `decision_external` + Hybrid Decision Score with `fallback_native`, `enable_waterfall=true`, `enable_dynamic_sizing=true`)
 - Ops gap remains: live/Docker restart with open trade
 - Keep local backtests on `JEV_MODE=native` / `MTF_RUNTIME_MODE=deterministic` for reproducibility
 - Hunter / Momentum Radar / AI-as-score-feature still deferred on live entry pipeline
