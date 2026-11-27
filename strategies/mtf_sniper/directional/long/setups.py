@@ -28,7 +28,7 @@ __all__ = [
 
 class LongSetup(str, Enum):
     A80_PLUS = "long_A80_plus"
-    BREAKOUT_EXPANSION = "jev_hunter_breakout_expansion"
+    BREAKOUT_EXPANSION = "long_breakout_expansion"
     SWING_BREAKOUT = "long_swing_breakout"
     UNKNOWN = "long_unknown"
 

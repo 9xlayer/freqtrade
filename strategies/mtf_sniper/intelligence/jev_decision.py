@@ -597,7 +597,7 @@ class JevDecisionEngine:
         self,
         api_url: str | None = None,
         api_key: str | None = None,
-        cache_db: str = "user_data/jev_hunter_cache.sqlite",
+        cache_db: str = "user_data/jev_decision_cache.sqlite",
         mode: str | None = None,
         fail_policy: str | None = None,
         regime_1w_bear_penalty: float | None = None,

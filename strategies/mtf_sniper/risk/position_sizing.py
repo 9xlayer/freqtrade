@@ -18,7 +18,7 @@ _TAG_MULTIPLIERS = (
     ("short_B65_plus", 1.00),
     ("short_B65plus", 1.00),
     ("short_C_sub65", 0.85),
-    ("jev_hunter", 1.00),
+    ("waterfall", 1.00),
 )
 DEFAULT_TAG_MULTIPLIERS: dict[str, float] = dict(_TAG_MULTIPLIERS)
 

@@ -170,7 +170,7 @@ class TestShortPolicy(unittest.TestCase):
         }
         result = policy.evaluate(cand, row)
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+        self.assertEqual(result.metadata.get("setup"), "waterfall_collapse")
 
     def test_waterfall_climax_overextended_rejected(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
@@ -217,7 +217,7 @@ class TestShortPolicy(unittest.TestCase):
         }
         result = policy.evaluate(cand, row)
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+        self.assertEqual(result.metadata.get("setup"), "waterfall_collapse")
 
     def test_waterfall_near_floor_without_surge_rejected(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
@@ -265,7 +265,7 @@ class TestShortPolicy(unittest.TestCase):
         }
         result = policy.evaluate(cand, row)
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+        self.assertEqual(result.metadata.get("setup"), "waterfall_collapse")
 
     def test_waterfall_eth_rejected_above_ema50_4h(self):
         policy = ShortPolicy(ShortPolicyConfig(allow_anomaly_entries=True))
@@ -333,7 +333,7 @@ class TestShortPolicy(unittest.TestCase):
         }
         result = policy.evaluate(cand, row)
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.metadata.get("setup"), "jev_hunter_waterfall_collapse")
+        self.assertEqual(result.metadata.get("setup"), "waterfall_collapse")
 
     def test_waterfall_eth_in_vacuum_rejected_if_above_ema50_4h(self):
         """ETH in vacuum breakdown must STILL be rejected if price is above 4H EMA50."""

@@ -79,7 +79,7 @@ SUBSYSTEM_REGISTRY: tuple[SubSystemSpec, ...] = (
         subsystem_id="waterfall",
         side="short",
         recipe_name=SETUP_WATERFALL_SHORT,
-        entry_tag_prefix="jev_hunter_waterfall_collapse",
+        entry_tag_prefix="waterfall_collapse",
         policy_module=(
             "strategies.mtf_sniper.directional.short.waterfall_policy.WaterfallShortPolicy"
         ),

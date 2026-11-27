@@ -828,7 +828,7 @@ class TestJevDecisionEngine(unittest.TestCase):
             df_missing_floor,
             "BTC/USDT:USDT",
             "short",
-            setup="jev_hunter_waterfall_collapse",
+            setup="waterfall_collapse",
         )
         self.assertFalse(payload_missing_floor["macro_context"]["floor_20d_valid"])
         v_missing_floor = native_engine.evaluate(payload_missing_floor)

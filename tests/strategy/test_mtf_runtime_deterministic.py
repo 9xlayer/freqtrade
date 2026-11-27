@@ -151,7 +151,7 @@ class TestDeterministicDecisionNoExternalAI(unittest.TestCase):
         payload = {
             "pair": "ETHFI/USDT:USDT",
             "side": "SHORT",
-            "setup": "jev_hunter_waterfall_collapse",
+            "setup": "waterfall_collapse",
             "trajectory_sequence": [
                 {
                     "body_ratio": 0.7,
