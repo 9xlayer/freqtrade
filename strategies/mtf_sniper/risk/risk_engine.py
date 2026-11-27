@@ -272,8 +272,16 @@ class RiskEngine:
             lev=lev,
             wallet_equity=wallet_equity,
         )
-        # Stop-distance risk budget is not implemented — leave None (unavailable).
-        risk_per_trade: float | None = None
+        risk_per_trade = self.risk_per_trade_pct
+        risk_budget_used: float | None = None
+        if (
+            approved
+            and risk_per_trade is not None
+            and equity is not None
+            and abs(default_stoploss) > 0.0
+        ):
+            risk_budget_used = (stake * abs(default_stoploss)) / equity
+        sizing_method = "equity_risk_capped" if risk_per_trade is not None else "freqtrade_proposed"
 
         auth = RiskAuthorization(
             is_approved=approved,
@@ -281,7 +289,7 @@ class RiskEngine:
             leverage=float(lev) if approved else 0.0,
             stoploss_rate=default_stoploss if approved else 0.0,
             rejection_reasons=list(reasons),
-            risk_budget_used_pct=None,
+            risk_budget_used_pct=risk_budget_used,
             risk_per_trade_pct=risk_per_trade,
             stop_distance_pct=float(stop_distance_pct or 0.0),
             max_open_positions=self.max_open_trades,
@@ -290,7 +298,7 @@ class RiskEngine:
             total_exposure_notional=float(total_exposure),
             total_exposure_pct=exposure_pct,
             wallet_equity=equity,
-            sizing_method="freqtrade_proposed",
+            sizing_method=sizing_method,
             config_fingerprint=self.config_fingerprint,
             stage_rejected="" if approved else (stage or "portfolio"),
         )

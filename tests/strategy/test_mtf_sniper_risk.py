@@ -660,6 +660,47 @@ class TestRiskEngine(unittest.TestCase):
         self.assertAlmostEqual(auth.total_exposure_notional, 1000.0, places=6)
         self.assertAlmostEqual(auth.total_exposure_pct or 0.0, 0.5, places=6)
 
+    def test_authorize_populates_risk_per_trade_and_budget_when_configured(self):
+        engine = RiskEngine(risk_per_trade_pct=0.04)
+        now = datetime(2024, 1, 10, tzinfo=UTC)
+        auth = engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="long",
+            current_time=now,
+            closed_trades=[],
+            open_trades=[],
+            get_price=lambda p, t: 100.0,
+            jev_confirm=lambda: True,
+            proposed_stake=320.0,
+            max_stake=320.0,
+            max_leverage=10.0,
+            default_stoploss=-0.25,
+            wallet_equity=2000.0,
+        )
+        self.assertTrue(auth.is_approved)
+        self.assertEqual(auth.sizing_method, "equity_risk_capped")
+        self.assertAlmostEqual(auth.risk_per_trade_pct or 0.0, 0.04, places=6)
+        self.assertAlmostEqual(auth.risk_budget_used_pct or 0.0, 0.04, places=6)
+
+        rejected_auth = engine.authorize_entry(
+            strategy_name="StrategyMTFSniper",
+            pair="BTC/USDT:USDT",
+            side="long",
+            current_time=now,
+            closed_trades=[],
+            open_trades=[_trade(is_short=True)],
+            get_price=lambda p, t: 100.0,
+            jev_confirm=lambda: True,
+            proposed_stake=320.0,
+            max_stake=320.0,
+            default_stoploss=-0.25,
+            wallet_equity=2000.0,
+        )
+        self.assertFalse(rejected_auth.is_approved)
+        self.assertAlmostEqual(rejected_auth.risk_per_trade_pct or 0.0, 0.04, places=6)
+        self.assertIsNone(rejected_auth.risk_budget_used_pct)
+
 
 class TestPortfolioNullAndNanGuards(unittest.TestCase):
     def test_circuit_breaker_ignores_none_or_nan_close_profit_without_resetting_streak(self):
